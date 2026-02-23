@@ -1,0 +1,6 @@
+id: no-dot-then
+language: TypeScript
+severity: error
+message: Prefer Effect combinators or await at public boundary, not .then chains.
+rule:
+  pattern: "$A.then($B)"

@@ -1,0 +1,11 @@
+id: no-try-catch
+language: TypeScript
+severity: error
+message: Avoid try/catch control flow; use Effect error channels.
+rule:
+  pattern: |
+    try {
+      $$$A
+    } catch ($$$B) {
+      $$$C
+    }

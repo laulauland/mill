@@ -1,0 +1,6 @@
+id: no-throw
+language: TypeScript
+severity: error
+message: Use typed Effect errors instead of throw.
+rule:
+  pattern: "throw $E"

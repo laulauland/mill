@@ -1,0 +1,11 @@
+id: no-process-env-outside-config
+language: TypeScript
+severity: error
+message: process.env access is allowed only in config/bootstrap modules.
+ignores:
+  - "**/*config*.ts"
+  - "**/*bootstrap*.ts"
+rule:
+  any:
+    - pattern: "process.env.$A"
+    - pattern: "process.env[$A]"

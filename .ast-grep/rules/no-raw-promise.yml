@@ -1,0 +1,6 @@
+id: no-raw-promise
+language: TypeScript
+severity: error
+message: Raw Promise construction is disallowed; use Effect abstractions.
+rule:
+  pattern: "new Promise($A)"

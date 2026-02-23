@@ -1,0 +1,10 @@
+id: no-shell-string-command
+language: TypeScript
+severity: error
+message: Shell-eval command patterns are disallowed; use argument vectors with Command.make.
+rule:
+  any:
+    - pattern: "Command.make('sh', '-lc', $CMD)"
+    - pattern: 'Command.make("sh", "-lc", $CMD)'
+    - pattern: "Command.make('bash', '-lc', $CMD)"
+    - pattern: 'Command.make("bash", "-lc", $CMD)'

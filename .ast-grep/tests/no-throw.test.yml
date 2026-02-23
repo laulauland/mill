@@ -1,0 +1,7 @@
+id: no-throw
+valid:
+  - |
+    export const safe = 1;
+invalid:
+  - |
+    throw new Error("boom");

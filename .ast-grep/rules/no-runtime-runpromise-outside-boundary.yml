@@ -1,0 +1,12 @@
+id: no-runtime-runpromise-outside-boundary
+language: TypeScript
+severity: error
+message: Runtime.runPromise bridge is allowed only in public boundary and CLI entry adapters.
+ignores:
+  - "**/src/public/**"
+  - "**/src/bin/**"
+  - "**/*.api.ts"
+rule:
+  any:
+    - pattern: "Runtime.runPromise($A)"
+    - pattern: "Runtime.runPromiseExit($A)"

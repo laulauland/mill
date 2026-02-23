@@ -1,0 +1,12 @@
+id: no-promise-outside-public
+language: TypeScript
+severity: error
+message: Promise contracts are allowed only in boundary APIs.
+ignores:
+  - "**/src/public/**"
+  - "**/*.api.ts"
+  - "**/*.d.ts"
+rule:
+  any:
+    - pattern: "Promise<$T>"
+    - pattern: "new Promise($A)"

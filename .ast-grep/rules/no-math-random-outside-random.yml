@@ -1,0 +1,6 @@
+id: no-math-random-outside-random
+language: TypeScript
+severity: error
+message: Use injected Random service instead of Math.random in internal runtime.
+rule:
+  pattern: "Math.random()"

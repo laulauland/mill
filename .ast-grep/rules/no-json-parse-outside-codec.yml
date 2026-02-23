@@ -1,0 +1,9 @@
+id: no-json-parse-outside-codec
+language: TypeScript
+severity: error
+message: JSON.parse is restricted to codec/schema decoding modules.
+ignores:
+  - "**/*.codec.ts"
+  - "**/*.schema.ts"
+rule:
+  pattern: "JSON.parse($A)"

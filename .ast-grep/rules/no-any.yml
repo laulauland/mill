@@ -1,0 +1,8 @@
+id: no-any
+language: TypeScript
+severity: error
+message: Avoid `any`; use precise types.
+rule:
+  any:
+    - pattern: "$A: any"
+    - pattern: "<any>$A"

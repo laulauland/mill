@@ -1,0 +1,8 @@
+id: no-interface-for-domain-models
+language: TypeScript
+severity: error
+message: Domain models must be Schema-based; interfaces are disallowed in domain modules.
+files:
+  - "**/src/domain/**/*.ts"
+rule:
+  pattern: "interface $NAME { $$$BODY }"

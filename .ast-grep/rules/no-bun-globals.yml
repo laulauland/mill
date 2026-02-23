@@ -1,0 +1,8 @@
+id: no-bun-globals
+language: TypeScript
+severity: error
+message: Use Effect platform services instead of Bun globals in runtime modules.
+rule:
+  any:
+    - pattern: "Bun.$X"
+    - pattern: "Bun[$X]"

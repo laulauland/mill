@@ -1,0 +1,11 @@
+id: no-interface-outside-public
+language: TypeScript
+severity: error
+message: Interfaces are allowed only in public boundary modules and declaration files.
+ignores:
+  - "**/src/public/**"
+  - "**/*.d.ts"
+  - "**/*.effect.ts"
+  - "**/*.service.ts"
+rule:
+  pattern: "interface $NAME { $$$BODY }"

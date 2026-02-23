@@ -1,0 +1,14 @@
+id: no-public-import-internal
+language: TypeScript
+severity: error
+message: Public modules must not import private internal/runtime/domain modules directly.
+files:
+  - "**/src/public/**/*.ts"
+rule:
+  any:
+    - pattern: "import $A from '../internal/$B'"
+    - pattern: "import $A from '../runtime/$B'"
+    - pattern: "import $A from '../domain/$B'"
+    - pattern: "import { $$$A } from '../internal/$B'"
+    - pattern: "import { $$$A } from '../runtime/$B'"
+    - pattern: "import { $$$A } from '../domain/$B'"

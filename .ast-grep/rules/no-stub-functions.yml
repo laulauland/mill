@@ -1,0 +1,10 @@
+id: no-stub-functions
+language: TypeScript
+severity: error
+message: Stub placeholders are disallowed in committed code.
+rule:
+  any:
+    - pattern: "TODO"
+    - pattern: "FIXME"
+    - pattern: "throw new Error('Not implemented')"
+    - pattern: 'throw new Error("Not implemented")'

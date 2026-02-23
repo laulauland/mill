@@ -1,0 +1,12 @@
+id: no-node-imports
+language: TypeScript
+severity: error
+message: "Direct node: imports are disallowed in application source modules."
+files:
+  - "**/src/**/*.ts"
+rule:
+  any:
+    - pattern: "import $A from 'node:$B'"
+    - pattern: 'import $A from "node:$B"'
+    - pattern: "import { $$$A } from 'node:$B'"
+    - pattern: 'import { $$$A } from "node:$B"'

@@ -1,0 +1,6 @@
+id: no-dynamic-import
+language: TypeScript
+severity: error
+message: Dynamic import is disallowed in core runtime modules.
+rule:
+  pattern: "import($A)"

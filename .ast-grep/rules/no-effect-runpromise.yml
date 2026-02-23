@@ -1,0 +1,8 @@
+id: no-effect-runpromise
+language: TypeScript
+severity: error
+message: Effect.runPromise* is disallowed; use Runtime.runPromise at boundaries only.
+rule:
+  any:
+    - pattern: "Effect.runPromise($A)"
+    - pattern: "Effect.runPromiseExit($A)"

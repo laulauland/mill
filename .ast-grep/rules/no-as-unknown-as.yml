@@ -1,0 +1,6 @@
+id: no-as-unknown-as
+language: TypeScript
+severity: error
+message: Avoid `as unknown as` double assertions.
+rule:
+  pattern: "$A as unknown as $B"
