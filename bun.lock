@@ -25,6 +25,7 @@
       },
       "dependencies": {
         "@mill/core": "workspace:*",
+        "@mill/driver-pi": "workspace:*",
       },
     },
     "packages/core": {

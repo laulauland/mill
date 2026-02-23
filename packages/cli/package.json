@@ -9,6 +9,7 @@
     ".": "./src/public/index.api.ts"
   },
   "dependencies": {
-    "@mill/core": "workspace:*"
+    "@mill/core": "workspace:*",
+    "@mill/driver-pi": "workspace:*"
   }
 }

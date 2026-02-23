@@ -1,0 +1,160 @@
+{
+  "slices": [
+    {
+      "id": "S1",
+      "title": "Discovery + Config Resolution + Driver Catalog",
+      "goal": "Ship a reliable authoring/discovery entrypoint so humans and agents can self-serve usage via `mill --help --json`.",
+      "acceptanceCriteria": [
+        "Test intent: unit (payload/config), integration (cli↔core), e2e (`mill --help --json`).",
+        "`mill --help --json` returns `discoveryVersion: 1` and required fields from SPEC §7 (`programApi`, `drivers`, `authoring`, `async`).",
+        "Config resolution order follows SPEC §6.1 (cwd, upward walk, `~/.mill/config.ts`, defaults) and is covered by tests.",
+        "`--json` mode writes machine payload to stdout only; human diagnostics stay on stderr.",
+        "Driver model list in discovery is sourced via driver codec catalog path, not hardcoded in CLI."
+      ],
+      "deliverables": [
+        "`packages/core/src/public/discovery.api.ts` plus config loader internals.",
+        "`packages/cli/src/public/index.api.ts` routing for discovery/help modes.",
+        "`packages/driver-pi/src/public/index.api.ts` catalog-backed registration surface."
+      ],
+      "testCommands": [
+        "bun test packages/core/src/public/discovery.api.test.ts",
+        "bun test packages/cli/src/public/index.api.test.ts",
+        "bun test packages/driver-pi/src"
+      ]
+    },
+    {
+      "id": "S2",
+      "title": "Sync Run Vertical Path (`run --sync`) with Persisted Tier-1 Events",
+      "goal": "Enable one complete deterministic execution path from CLI to engine to driver with persisted run artifacts.",
+      "acceptanceCriteria": [
+        "Test intent: unit (schema/decode/store), integration (engine↔driver), e2e (`run --sync`).",
+        "`mill run <program.ts> --sync --json` executes a program with injected `mill.spawn` and returns structured result.",
+        "Run directory includes `run.json`, `events.ndjson` (append-only), and `result.json` per SPEC §5.3.",
+        "Persisted events decode through Schema discriminated union and include `schemaVersion`, `runId`, sequence, and timestamp.",
+        "`spawn:complete` payload includes non-empty `sessionRef` (SPEC invariant #2)."
+      ],
+      "deliverables": [
+        "`packages/core/src/domain/*.schema.ts` for run/spawn/event unions.",
+        "`packages/core/src/internal/run-store.effect.ts` and sync lifecycle in `engine.effect.ts`.",
+        "CLI handlers for `run --sync` and `status` in `packages/cli`.",
+        "`packages/driver-pi` codec + process-driver implementation using `Command.make(cmd, ...args)`."
+      ],
+      "testCommands": [
+        "bun test packages/core/src/domain",
+        "bun test packages/core/src/internal",
+        "bun test packages/cli/src",
+        "bun test packages/driver-pi/src"
+      ]
+    },
+    {
+      "id": "S3",
+      "title": "Wait Semantics + Terminal Single-Shot Invariants",
+      "goal": "Enforce lifecycle correctness guarantees before detached execution complexity is added.",
+      "acceptanceCriteria": [
+        "Test intent: unit (transition guards), integration (wait over persisted/live events), e2e (`wait` timeout/terminal behavior).",
+        "`mill wait <runId> --timeout <seconds>` resolves on first terminal event and never permits terminal->non-terminal transitions.",
+        "Duplicate terminal emissions are deterministically ignored or rejected per documented policy.",
+        "Exactly one terminal event per run and per spawn is enforced in tests (SPEC §9.6 and invariant #6).",
+        "Timeout behavior is deterministic and surfaced as typed error/output contract."
+      ],
+      "deliverables": [
+        "Core lifecycle transition guards and engine `wait` implementation.",
+        "CLI `wait` command with JSON/non-JSON output parity.",
+        "Driver-pi test fixtures for malformed or duplicate terminal event sequences."
+      ],
+      "testCommands": [
+        "bun test packages/core/src/internal",
+        "bun test packages/cli/src/public",
+        "bun test packages/driver-pi/src"
+      ]
+    },
+    {
+      "id": "S4",
+      "title": "Async Detached Run Lifecycle",
+      "goal": "Implement async-by-default submission with private worker process semantics.",
+      "acceptanceCriteria": [
+        "Test intent: integration-heavy plus e2e process lifecycle (`run` submit -> `status`/`wait` completion).",
+        "`mill run <program.ts> --json` returns immediately with `runId` and running/pending state unless `--sync` is used.",
+        "Worker command follows private API contract (`mill _worker --run-id ...`) and performs idempotent finalize.",
+        "Program copy and worker log artifacts are written under run directory (`program.ts`, `logs/worker.log`).",
+        "`--sync` is implemented as submit + wait composition over the same lifecycle implementation."
+      ],
+      "deliverables": [
+        "`packages/core/src/runtime/worker.effect.ts` detached worker runtime.",
+        "CLI async submit wiring and private worker entrypoint.",
+        "Detached worker integration path exercising `packages/driver-pi`."
+      ],
+      "testCommands": [
+        "bun test packages/core/src/runtime",
+        "bun test packages/core/src/internal",
+        "bun test packages/cli/src/bin",
+        "bun test packages/driver-pi/src"
+      ]
+    },
+    {
+      "id": "S5",
+      "title": "Driver/Executor Selection + Extension API Injection",
+      "goal": "Reach configurable runtime composition while preserving strict boundary contracts.",
+      "acceptanceCriteria": [
+        "Test intent: unit (registry/bridge), integration (selected driver/executor path), e2e (`run --driver ... --executor ...`).",
+        "CLI resolves configured defaults and explicit `--driver/--executor` overrides correctly.",
+        "Extension `api` methods are injected onto `globalThis.mill` and bridge through `Runtime.runPromise` only at boundary adapters.",
+        "Extension hook failures emit structured error events without crashing the run by default.",
+        "Discovery/help metadata reflects registered drivers and authoring guidance from resolved config."
+      ],
+      "deliverables": [
+        "Core driver/executor registries and extension hook/event plumbing.",
+        "CLI flag handling for driver/executor selection and `init` skeleton.",
+        "Public adapters in `driver-claude` and `driver-codex` aligned to generic contracts."
+      ],
+      "testCommands": [
+        "bun test packages/core/src/public",
+        "bun test packages/core/src/internal",
+        "bun test packages/cli/src",
+        "bun test packages/driver-pi/src packages/driver-claude/src packages/driver-codex/src"
+      ]
+    },
+    {
+      "id": "S6",
+      "title": "Guardrail + ast-grep Boundary Enforcement",
+      "goal": "Lock architecture constraints so future slices cannot regress Effect and boundary safety.",
+      "acceptanceCriteria": [
+        "Test intent: rule-level unit tests plus integration tests that run guardrail scans from a Bun test harness.",
+        "Required ast-grep rules from SPEC §19 exist and pass against positive/negative fixtures.",
+        "Boundary rules enforce Promise/interface location, public->internal import bans, and bridge restrictions (`Runtime.runPromise` boundary-only).",
+        "Runtime safety rules enforce no shell-string execution, no internal `process.env`/`Date.now`/`Math.random`, and JSON parse only in codec/schema modules.",
+        "Export boundary check prevents internal path exports from any package."
+      ],
+      "deliverables": [
+        "Expanded `.ast-grep/rules/*` and `.ast-grep/tests/*` to full required set.",
+        "Guardrail validation harness callable from Bun tests.",
+        "`scripts/check-exports.ts` coverage for all workspace packages."
+      ],
+      "testCommands": ["bun test .ast-grep/tests", "bun test scripts", "bun test"]
+    },
+    {
+      "id": "S7",
+      "title": "Final Hardening: inspect/session/cancel/watch Semantics",
+      "goal": "Complete observer/control semantics for robust long-running orchestration operations.",
+      "acceptanceCriteria": [
+        "Test intent: integration plus e2e command matrix across inspect/session/cancel/watch with concurrent runs.",
+        "`watch --json` emits valid JSONL tier-1 events; `watch --raw` streams tier-2 raw passthrough without persistence.",
+        "`inspect <runId>[.<spawnId>] --json` returns decoded persisted data; `--session` resolves driver-owned session pointer.",
+        "`cancel <runId>` is interruption-safe, idempotent, and no-op for already terminal runs; emits at most one `run:cancelled` terminal event.",
+        "`ls` and `status` remain consistent with terminal invariants and persisted snapshots after cancellations/completions."
+      ],
+      "deliverables": [
+        "Core observer stream + inspect/cancel implementations tied to event log and in-memory fanout.",
+        "CLI handlers for `watch`, `inspect`, `cancel`, and `ls` with strict JSON stdout contract.",
+        "Driver session bridge interface plus driver-pi implementation for `inspect --session`."
+      ],
+      "testCommands": [
+        "bun test packages/core/src/internal",
+        "bun test packages/core/src/runtime",
+        "bun test packages/cli/src",
+        "bun test packages/driver-pi/src",
+        "bun test"
+      ]
+    }
+  ]
+}

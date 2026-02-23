@@ -1,3 +1,5 @@
+import type * as Effect from "effect/Effect";
+
 export interface SpawnInput {
   readonly agent: string;
   readonly systemPrompt: string;
@@ -26,6 +28,26 @@ export interface DriverProcessConfig {
   readonly env?: Readonly<Record<string, string>>;
 }
 
+export interface DriverCodec {
+  readonly modelCatalog: Effect.Effect<ReadonlyArray<string>, never>;
+}
+
+export interface DriverRegistration {
+  readonly description: string;
+  readonly modelFormat: string;
+  readonly process: DriverProcessConfig;
+  readonly codec: DriverCodec;
+}
+
+export interface MillConfig {
+  readonly defaultDriver: string;
+  readonly defaultModel: string;
+  readonly drivers: Readonly<Record<string, DriverRegistration>>;
+  readonly authoring: {
+    readonly instructions: string;
+  };
+}
+
 export interface DiscoveryPayload {
   readonly discoveryVersion: number;
   readonly programApi: {
@@ -51,4 +73,26 @@ export interface DiscoveryPayload {
     readonly status: string;
     readonly wait: string;
   };
+}
+
+export type ConfigSource = "cwd" | "upward" | "home" | "defaults";
+
+export interface ConfigOverrides {
+  readonly defaultDriver?: string;
+  readonly defaultModel?: string;
+  readonly authoringInstructions?: string;
+}
+
+export interface ResolvedConfig {
+  readonly source: ConfigSource;
+  readonly configPath?: string;
+  readonly config: MillConfig;
+}
+
+export interface ResolveConfigOptions {
+  readonly defaults: MillConfig;
+  readonly cwd?: string;
+  readonly homeDirectory?: string;
+  readonly pathExists?: (path: string) => Promise<boolean>;
+  readonly loadConfigOverrides?: (path: string) => Promise<ConfigOverrides>;
 }

@@ -1,12 +1,81 @@
 import { describe, expect, it } from "bun:test";
+import { Effect } from "effect";
 import { createDiscoveryPayload } from "./discovery.api";
+import type { MillConfig } from "./types";
+
+const makeDefaults = (): MillConfig => ({
+  defaultDriver: "default",
+  defaultModel: "openai/gpt-5.3-codex",
+  drivers: {
+    default: {
+      description: "Catalog-backed test driver",
+      modelFormat: "provider/model-id",
+      process: {
+        command: "pi",
+        args: ["-p"],
+        env: {},
+      },
+      codec: {
+        modelCatalog: Effect.succeed(["provider/model-a", "provider/model-b"]),
+      },
+    },
+  },
+  authoring: {
+    instructions: "from-defaults",
+  },
+});
 
 describe("createDiscoveryPayload", () => {
-  it("returns discovery contract v1", async () => {
-    const payload = await createDiscoveryPayload();
+  it("returns discovery contract v1 with required SPEC §7 fields", async () => {
+    const payload = await createDiscoveryPayload({
+      defaults: makeDefaults(),
+      cwd: "/repo",
+      homeDirectory: "/home/tester",
+      pathExists: async () => false,
+    });
 
     expect(payload.discoveryVersion).toBe(1);
-    expect(payload.async.submit).toContain("mill run");
-    expect(payload.programApi.spawnRequired).toContain("agent");
+    expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
+    expect(payload.programApi.spawnOptional).toEqual(["model"]);
+    expect(payload.programApi.resultFields).toEqual([
+      "text",
+      "sessionRef",
+      "agent",
+      "model",
+      "driver",
+      "exitCode",
+      "stopReason",
+    ]);
+    expect(payload.authoring.instructions).toBe("from-defaults");
+    expect(payload.async).toEqual({
+      submit: "mill run <program.ts> --json",
+      status: "mill status <runId> --json",
+      wait: "mill wait <runId> --timeout 30 --json",
+    });
+  });
+
+  it("sources driver models from the driver codec catalog", async () => {
+    const payload = await createDiscoveryPayload({
+      defaults: makeDefaults(),
+      cwd: "/repo",
+      homeDirectory: "/home/tester",
+      pathExists: async () => false,
+    });
+
+    expect(payload.drivers.default?.models).toEqual(["provider/model-a", "provider/model-b"]);
+  });
+
+  it("applies authoring instructions from resolved config overrides", async () => {
+    const payload = await createDiscoveryPayload({
+      defaults: makeDefaults(),
+      cwd: "/repo",
+      homeDirectory: "/home/tester",
+      pathExists: async (path) => path === "/repo/mill.config.ts",
+      loadConfigOverrides: async () => ({
+        authoringInstructions: "from-cwd-config",
+      }),
+    });
+
+    expect(payload.authoring.instructions).toBe("from-cwd-config");
   });
 });
