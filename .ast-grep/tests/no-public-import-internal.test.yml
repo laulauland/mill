@@ -1,0 +1,13 @@
+id: no-public-import-internal
+valid:
+  - |
+    import { createMill } from "../public/mill.api";
+invalid:
+  - |
+    import { makeEngine } from "../../internal/engine.effect";
+  - |
+    import type { RunId } from "../domain/run.schema";
+  - |
+    export { makeEngine } from "../internal/engine.effect";
+  - |
+    export * from "../runtime/worker.effect";

@@ -47,6 +47,35 @@ export interface DriverRuntime {
   readonly spawn: (input: DriverSpawnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
 }
 
+export interface ExecutorRunInput {
+  readonly runId: string;
+  readonly programPath: string;
+  readonly execute: Effect.Effect<unknown, unknown>;
+}
+
+export interface ExecutorRuntime {
+  readonly name: string;
+  readonly runProgram: (input: ExecutorRunInput) => Effect.Effect<unknown, unknown>;
+}
+
+export interface ExtensionContext {
+  readonly runId: string;
+  readonly driverName: string;
+  readonly executorName: string;
+}
+
+export interface ExtensionRegistration {
+  readonly name: string;
+  readonly setup?: (ctx: ExtensionContext) => Effect.Effect<void, unknown>;
+  readonly onEvent?: (
+    event: { readonly type: string },
+    ctx: ExtensionContext,
+  ) => Effect.Effect<void, unknown>;
+  readonly api?: Readonly<
+    Record<string, (...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, unknown>>
+  >;
+}
+
 export interface Mill {
   spawn(input: SpawnInput): Promise<SpawnOutput>;
 }
@@ -69,10 +98,18 @@ export interface DriverRegistration {
   readonly runtime?: DriverRuntime;
 }
 
+export interface ExecutorRegistration {
+  readonly description: string;
+  readonly runtime: ExecutorRuntime;
+}
+
 export interface MillConfig {
   readonly defaultDriver: string;
+  readonly defaultExecutor: string;
   readonly defaultModel: string;
   readonly drivers: Readonly<Record<string, DriverRegistration>>;
+  readonly executors: Readonly<Record<string, ExecutorRegistration>>;
+  readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly authoring: {
     readonly instructions: string;
   };
@@ -95,6 +132,14 @@ export interface DiscoveryPayload {
       }
     >
   >;
+  readonly executors: Readonly<
+    Record<
+      string,
+      {
+        readonly description: string;
+      }
+    >
+  >;
   readonly authoring: {
     readonly instructions: string;
   };
@@ -109,6 +154,7 @@ export type ConfigSource = "cwd" | "upward" | "home" | "defaults";
 
 export interface ConfigOverrides {
   readonly defaultDriver?: string;
+  readonly defaultExecutor?: string;
   readonly defaultModel?: string;
   readonly authoringInstructions?: string;
 }

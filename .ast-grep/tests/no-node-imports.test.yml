@@ -1,0 +1,7 @@
+id: no-node-imports
+valid:
+  - |
+    import { Effect } from "effect";
+invalid:
+  - |
+    import { readFile } from "node:fs/promises";

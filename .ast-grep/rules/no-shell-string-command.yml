@@ -6,5 +6,9 @@ rule:
   any:
     - pattern: "Command.make('sh', '-lc', $CMD)"
     - pattern: 'Command.make("sh", "-lc", $CMD)'
+    - pattern: "Command.make('sh', '-c', $CMD)"
+    - pattern: 'Command.make("sh", "-c", $CMD)'
     - pattern: "Command.make('bash', '-lc', $CMD)"
     - pattern: 'Command.make("bash", "-lc", $CMD)'
+    - pattern: "Command.make('bash', '-c', $CMD)"
+    - pattern: 'Command.make("bash", "-c", $CMD)'

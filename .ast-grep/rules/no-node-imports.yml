@@ -4,9 +4,14 @@ severity: error
 message: "Direct node: imports are disallowed in application source modules."
 files:
   - "**/src/**/*.ts"
+ignores:
+  - "**/*.test.ts"
+  - "**/*.spec.ts"
 rule:
   any:
-    - pattern: "import $A from 'node:$B'"
-    - pattern: 'import $A from "node:$B"'
-    - pattern: "import { $$$A } from 'node:$B'"
-    - pattern: 'import { $$$A } from "node:$B"'
+    - pattern: 'import $$$A from "$MODULE"'
+    - pattern: "import '$MODULE'"
+    - pattern: 'import "$MODULE"'
+constraints:
+  MODULE:
+    regex: "^node:"

@@ -1,0 +1,9 @@
+id: no-runtime-runpromise-outside-boundary
+valid:
+  - |
+    const output = effect;
+invalid:
+  - |
+    const output = Runtime.runPromise(runtime)(effect);
+  - |
+    const output = Runtime.runPromiseExit(runtime)(effect);

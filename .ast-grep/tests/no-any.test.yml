@@ -1,0 +1,9 @@
+id: no-any
+valid:
+  - |
+    const count: number = 1;
+invalid:
+  - |
+    const payload: any = input;
+  - |
+    const value = <any>source;

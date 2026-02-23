@@ -8,6 +8,7 @@ import type { MillConfig } from "./types";
 
 const makeDefaults = (): MillConfig => ({
   defaultDriver: "default",
+  defaultExecutor: "direct",
   defaultModel: "openai/gpt-5.3-codex",
   drivers: {
     default: {
@@ -23,6 +24,23 @@ const makeDefaults = (): MillConfig => ({
       },
     },
   },
+  executors: {
+    direct: {
+      description: "Direct test executor",
+      runtime: {
+        name: "direct",
+        runProgram: (input) => input.execute,
+      },
+    },
+    vm: {
+      description: "VM test executor",
+      runtime: {
+        name: "vm",
+        runProgram: (input) => input.execute,
+      },
+    },
+  },
+  extensions: [],
   authoring: {
     instructions: "from-defaults",
   },
@@ -157,6 +175,7 @@ describe("resolveConfig", () => {
         'const instructions = [`Use systemPrompt for WHO.`, `Use prompt for WHAT.`].join(" ");',
         "export default {",
         '  defaultDriver: "pi-local" as const,',
+        '  defaultExecutor: "vm" as const,',
         '  defaultModel: "openai/gpt-5.3-codex" as const,',
         "  authoring: {",
         "    instructions,",
@@ -176,6 +195,7 @@ describe("resolveConfig", () => {
       expect(resolved.source).toBe("cwd");
       expect(resolved.configPath).toBe(configPath);
       expect(resolved.config.defaultDriver).toBe("pi-local");
+      expect(resolved.config.defaultExecutor).toBe("vm");
       expect(resolved.config.defaultModel).toBe("openai/gpt-5.3-codex");
       expect(resolved.config.authoring.instructions).toBe(
         "Use systemPrompt for WHO. Use prompt for WHAT.",

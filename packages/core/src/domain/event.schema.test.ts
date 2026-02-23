@@ -35,6 +35,30 @@ describe("MillEvent schema union", () => {
     }
   });
 
+  it("decodes extension:error events for failed extension hooks", () => {
+    const event = decodeMillEventJsonSync(
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: "run_test_01",
+        sequence: 9,
+        timestamp: "2026-02-23T20:00:05.000Z",
+        type: "extension:error",
+        payload: {
+          extensionName: "tools",
+          hook: "onEvent",
+          message: "hook failed",
+        },
+      }),
+    );
+
+    expect(event.type).toBe("extension:error");
+
+    if (event.type === "extension:error") {
+      expect(event.payload.extensionName).toBe("tools");
+      expect(event.payload.hook).toBe("onEvent");
+    }
+  });
+
   it("fails decoding unknown schemaVersion values", () => {
     expect(() =>
       decodeMillEventJsonSync(

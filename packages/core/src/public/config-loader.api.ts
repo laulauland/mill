@@ -85,6 +85,7 @@ const extractAuthoringInstructions = (source: string): string | undefined => {
 
 const parseConfigOverridesFromText = (source: string): ConfigOverrides => ({
   defaultDriver: extractConfigString(source, "defaultDriver"),
+  defaultExecutor: extractConfigString(source, "defaultExecutor"),
   defaultModel: extractConfigString(source, "defaultModel"),
   authoringInstructions: extractAuthoringInstructions(source),
 });
@@ -158,6 +159,7 @@ const findRepoRoot = async (
 const mergeConfig = (defaults: MillConfig, overrides: ConfigOverrides): MillConfig => ({
   ...defaults,
   defaultDriver: overrides.defaultDriver ?? defaults.defaultDriver,
+  defaultExecutor: overrides.defaultExecutor ?? defaults.defaultExecutor,
   defaultModel: overrides.defaultModel ?? defaults.defaultModel,
   authoring: {
     instructions: overrides.authoringInstructions ?? defaults.authoring.instructions,

@@ -1,0 +1,9 @@
+id: no-shell-string-command
+valid:
+  - |
+    const command = Command.make("pi", "-p", payload);
+invalid:
+  - |
+    const command = Command.make("bash", "-c", "echo unsafe");
+  - |
+    const command = Command.make("bash", "-lc", "echo unsafe");

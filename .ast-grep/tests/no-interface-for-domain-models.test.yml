@@ -1,0 +1,11 @@
+id: no-interface-for-domain-models
+valid:
+  - |
+    type RunRecord = {
+      id: string;
+    };
+invalid:
+  - |
+    interface RunRecord {
+      id: string;
+    }

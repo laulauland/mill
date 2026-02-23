@@ -1,0 +1,9 @@
+id: no-raw-promise
+valid:
+  - |
+    const result = Effect.succeed("ok");
+invalid:
+  - |
+    const deferred = new Promise<number>((resolve) => {
+      resolve(1);
+    });

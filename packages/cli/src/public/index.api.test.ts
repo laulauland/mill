@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Schema from "@effect/schema/Schema";
@@ -37,6 +37,8 @@ const RunSyncEnvelope = Schema.parseJson(
     run: Schema.Struct({
       id: Schema.String,
       status: Schema.String,
+      driver: Schema.String,
+      executor: Schema.String,
       paths: Schema.Struct({
         runDir: Schema.String,
         runFile: Schema.String,
@@ -61,10 +63,25 @@ const RunSyncEnvelope = Schema.parseJson(
   }),
 );
 
+const RunSubmitEnvelope = Schema.parseJson(
+  Schema.Struct({
+    runId: Schema.String,
+    status: Schema.Union(Schema.Literal("pending"), Schema.Literal("running")),
+    paths: Schema.Struct({
+      runDir: Schema.String,
+      runFile: Schema.String,
+      eventsFile: Schema.String,
+      resultFile: Schema.String,
+    }),
+  }),
+);
+
 const StatusEnvelope = Schema.parseJson(
   Schema.Struct({
     id: Schema.String,
     status: Schema.String,
+    driver: Schema.String,
+    executor: Schema.String,
     paths: Schema.Struct({
       runDir: Schema.String,
       runFile: Schema.String,
@@ -116,6 +133,7 @@ describe("runCli", () => {
       "anthropic/claude-sonnet-4-6",
     ]);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
+    expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
   });
 
   it("routes human help text to stdout in non-json mode", async () => {
@@ -184,6 +202,8 @@ describe("runCli", () => {
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(runPayload.run.status).toBe("complete");
+      expect(runPayload.run.driver).toBe("default");
+      expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
       expect(runPayload.result.spawns).toHaveLength(1);
 
@@ -211,6 +231,174 @@ describe("runCli", () => {
       const statusPayload = Schema.decodeUnknownSync(StatusEnvelope)(statusStdout[0]);
       expect(statusPayload.id).toBe(runPayload.run.id);
       expect(statusPayload.status).toBe("complete");
+      expect(statusPayload.driver).toBe("default");
+      expect(statusPayload.executor).toBe("direct");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("honors explicit --driver and --executor overrides for run --sync", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-override-run-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runCode = await runCli(
+        ["run", programPath, "--sync", "--json", "--driver", "codex", "--executor", "vm"],
+        {
+          cwd: tempDirectory,
+          homeDirectory,
+          pathExists: async () => false,
+          io: {
+            stdout: (line) => {
+              runStdout.push(line);
+            },
+            stderr: () => undefined,
+          },
+        },
+      );
+
+      expect(runCode).toBe(0);
+
+      const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
+      expect(payload.run.driver).toBe("codex");
+      expect(payload.run.executor).toBe("vm");
+      expect(payload.result.spawns[0]?.driver).toBe("codex");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses resolved config defaults for driver/executor when flags are omitted", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-config-defaults-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runCode = await runCli(["run", programPath, "--sync", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async (path) => path === join(tempDirectory, "mill.config.ts"),
+        loadConfigOverrides: async () => ({
+          defaultDriver: "claude",
+          defaultExecutor: "vm",
+        }),
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(runCode).toBe(0);
+
+      const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
+      expect(payload.run.driver).toBe("claude");
+      expect(payload.run.executor).toBe("vm");
+      expect(payload.result.spawns[0]?.driver).toBe("claude");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("submits run asynchronously by default and writes worker artifacts", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-async-run-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        "});",
+        "globalThis.__millAsyncText = scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runStderr: Array<string> = [];
+
+      const runCode = await runCli(["run", programPath, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: (line) => {
+            runStderr.push(line);
+          },
+        },
+      });
+
+      expect(runCode).toBe(0);
+      expect(runStderr).toHaveLength(0);
+      expect(runStdout).toHaveLength(1);
+
+      const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
+      expect(submittedRun.runId.length).toBeGreaterThan(0);
+
+      const waitStdout: Array<string> = [];
+      const waitCode = await runCli(["wait", submittedRun.runId, "--timeout", "5", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            waitStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(waitCode).toBe(0);
+      const waitedRun = Schema.decodeUnknownSync(StatusEnvelope)(waitStdout[0]);
+      expect(waitedRun.status).toBe("complete");
+
+      const copiedProgram = await readFile(join(submittedRun.paths.runDir, "program.ts"), "utf-8");
+      const workerLog = await readFile(
+        join(submittedRun.paths.runDir, "logs", "worker.log"),
+        "utf-8",
+      );
+
+      expect(copiedProgram).toContain("mill.spawn");
+      expect(workerLog.length).toBeGreaterThan(0);
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
@@ -253,22 +441,19 @@ describe("runCli", () => {
 
       const waitJsonStdout: Array<string> = [];
       const waitJsonStderr: Array<string> = [];
-      const waitJsonCode = await runCli(
-        ["wait", runPayload.run.id, "--timeout", "2", "--json"],
-        {
-          cwd: tempDirectory,
-          homeDirectory,
-          pathExists: async () => false,
-          io: {
-            stdout: (line) => {
-              waitJsonStdout.push(line);
-            },
-            stderr: (line) => {
-              waitJsonStderr.push(line);
-            },
+      const waitJsonCode = await runCli(["wait", runPayload.run.id, "--timeout", "2", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            waitJsonStdout.push(line);
+          },
+          stderr: (line) => {
+            waitJsonStderr.push(line);
           },
         },
-      );
+      });
 
       expect(waitJsonCode).toBe(0);
       expect(waitJsonStderr).toHaveLength(0);
@@ -301,6 +486,38 @@ describe("runCli", () => {
     }
   });
 
+  it("creates init skeleton in cwd", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-init-"));
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    try {
+      const code = await runCli(["init"], {
+        cwd: tempDirectory,
+        homeDirectory: join(tempDirectory, "home"),
+        io: {
+          stdout: (line) => {
+            stdout.push(line);
+          },
+          stderr: (line) => {
+            stderr.push(line);
+          },
+        },
+      });
+
+      expect(code).toBe(0);
+      expect(stderr).toHaveLength(0);
+      expect(stdout[0]).toContain("mill.config.ts");
+
+      const configSource = await readFile(join(tempDirectory, "mill.config.ts"), "utf-8");
+      expect(configSource).toContain("defineConfig");
+      expect(configSource).toContain("defaultExecutor");
+      expect(configSource).toContain("executors");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("wait timeout is deterministic with typed JSON error contract", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-wait-timeout-"));
     const runsDirectory = join(tempDirectory, "runs");
@@ -319,6 +536,7 @@ describe("runCli", () => {
           status: "running",
           programPath: "/tmp/program.ts",
           driver: "default",
+          executor: "direct",
           createdAt: "2026-02-23T20:00:00.000Z",
           updatedAt: "2026-02-23T20:00:00.000Z",
           paths: {

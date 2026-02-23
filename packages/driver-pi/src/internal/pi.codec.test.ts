@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Runtime } from "effect";
+import { Effect } from "effect";
+import { runWithRuntime } from "../public/test-runtime.api";
 import { decodePiProcessOutput } from "./pi.codec";
-
-const runtime = Runtime.defaultRuntime;
 
 describe("pi codec terminal sequencing", () => {
   it("rejects duplicate final lines deterministically", async () => {
@@ -26,7 +25,7 @@ describe("pi codec terminal sequencing", () => {
       }),
     ].join("\n");
 
-    const decodeError = await Runtime.runPromise(runtime)(Effect.flip(decodePiProcessOutput(output)));
+    const decodeError = await runWithRuntime(Effect.flip(decodePiProcessOutput(output)));
 
     expect(decodeError).toMatchObject({
       _tag: "PiCodecError",
@@ -46,7 +45,7 @@ describe("pi codec terminal sequencing", () => {
       JSON.stringify({ type: "tool_call", toolName: "grep" }),
     ].join("\n");
 
-    const decodeError = await Runtime.runPromise(runtime)(Effect.flip(decodePiProcessOutput(output)));
+    const decodeError = await runWithRuntime(Effect.flip(decodePiProcessOutput(output)));
 
     expect(decodeError).toMatchObject({
       _tag: "PiCodecError",

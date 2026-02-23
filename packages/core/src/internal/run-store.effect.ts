@@ -1,12 +1,9 @@
 import * as FileSystem from "@effect/platform/FileSystem";
 import { Data, Effect } from "effect";
-import {
-  decodeMillEventJson,
-  encodeMillEventJson,
-  type MillEvent,
-} from "../domain/event.schema";
+import { decodeMillEventJson, encodeMillEventJson, type MillEvent } from "../domain/event.schema";
 import {
   decodeRunRecordJson,
+  decodeRunResultJson,
   type RunId,
   type RunRecord,
   type RunResult,
@@ -24,7 +21,9 @@ export interface CreateRunInput {
   readonly runId: RunId;
   readonly programPath: string;
   readonly driver: string;
+  readonly executor?: string;
   readonly timestamp: string;
+  readonly status?: RunRecord["status"];
 }
 
 export interface RunStore {
@@ -37,19 +36,16 @@ export interface RunStore {
     runId: RunId,
     status: RunRecord["status"],
     timestamp: string,
-  ) => Effect.Effect<
-    RunRecord,
-    RunNotFoundError | PersistenceError | LifecycleInvariantError
-  >;
+  ) => Effect.Effect<RunRecord, RunNotFoundError | PersistenceError | LifecycleInvariantError>;
   readonly setResult: (
     runId: RunId,
     result: RunResult,
     timestamp: string,
-  ) => Effect.Effect<
-    void,
-    RunNotFoundError | PersistenceError | LifecycleInvariantError
-  >;
+  ) => Effect.Effect<void, RunNotFoundError | PersistenceError | LifecycleInvariantError>;
   readonly getRun: (runId: RunId) => Effect.Effect<RunRecord, RunNotFoundError | PersistenceError>;
+  readonly getResult: (
+    runId: RunId,
+  ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError>;
 }
 
 export interface MakeRunStoreInput {
@@ -113,9 +109,10 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
       const paths = buildPaths(input.runsDirectory, createInput.runId);
       const runRecord: RunRecord = {
         id: createInput.runId,
-        status: "running",
+        status: createInput.status ?? "running",
         programPath: createInput.programPath,
         driver: createInput.driver,
+        executor: createInput.executor ?? "direct",
         createdAt: createInput.timestamp,
         updatedAt: createInput.timestamp,
         paths,
@@ -180,13 +177,42 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
       const runRecord = yield* storeGetRun(input.runsDirectory, runId);
 
       yield* mapPersistenceError(runRecord.paths.resultFile)(
-        fileSystem.writeFileString(runRecord.paths.resultFile, `${JSON.stringify(result, null, 2)}\n`),
+        fileSystem.writeFileString(
+          runRecord.paths.resultFile,
+          `${JSON.stringify(result, null, 2)}\n`,
+        ),
       );
 
       yield* storeSetStatus(input.runsDirectory, runId, result.status, timestamp);
     }),
 
   getRun: (runId) => storeGetRun(input.runsDirectory, runId),
+
+  getResult: (runId) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runRecord = yield* storeGetRun(input.runsDirectory, runId);
+      const hasResult = yield* mapPersistenceError(runRecord.paths.resultFile)(
+        fileSystem.exists(runRecord.paths.resultFile),
+      );
+
+      if (!hasResult) {
+        return undefined;
+      }
+
+      const resultContent = yield* mapPersistenceError(runRecord.paths.resultFile)(
+        fileSystem.readFileString(runRecord.paths.resultFile, "utf-8"),
+      );
+
+      return yield* Effect.mapError(
+        decodeRunResultJson(resultContent),
+        (error) =>
+          new PersistenceError({
+            path: runRecord.paths.resultFile,
+            message: toMessage(error),
+          }),
+      );
+    }),
 });
 
 const storeGetRun = (

@@ -1,0 +1,7 @@
+id: no-dynamic-import
+valid:
+  - |
+    import { run } from "./run";
+invalid:
+  - |
+    const runtime = await import("./runtime");

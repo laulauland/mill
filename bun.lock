@@ -25,6 +25,8 @@
       },
       "dependencies": {
         "@mill/core": "workspace:*",
+        "@mill/driver-claude": "workspace:*",
+        "@mill/driver-codex": "workspace:*",
         "@mill/driver-pi": "workspace:*",
       },
     },

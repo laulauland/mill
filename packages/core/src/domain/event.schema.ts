@@ -121,6 +121,17 @@ export const SpawnCancelledEvent = Schema.Struct({
 });
 export type SpawnCancelledEvent = Schema.Schema.Type<typeof SpawnCancelledEvent>;
 
+export const ExtensionErrorEvent = Schema.Struct({
+  ...EventEnvelope,
+  type: Schema.Literal("extension:error"),
+  payload: Schema.Struct({
+    extensionName: Schema.NonEmptyString,
+    hook: Schema.Literal("setup", "onEvent"),
+    message: Schema.String,
+  }),
+});
+export type ExtensionErrorEvent = Schema.Schema.Type<typeof ExtensionErrorEvent>;
+
 export const MillEvent = Schema.Union(
   RunStartEvent,
   RunStatusEvent,
@@ -133,6 +144,7 @@ export const MillEvent = Schema.Union(
   SpawnErrorEvent,
   SpawnCompleteEvent,
   SpawnCancelledEvent,
+  ExtensionErrorEvent,
 );
 export type MillEvent = Schema.Schema.Type<typeof MillEvent>;
 

@@ -9,4 +9,8 @@ ignores:
 rule:
   any:
     - pattern: "Promise<$T>"
+    - pattern: "$A: Promise<$T>"
+    - pattern: "type $NAME = ($$$ARGS) => Promise<$T>"
+    - pattern: "($$$ARGS) => Promise<$T>"
+    - pattern: "new Promise<$T>($A)"
     - pattern: "new Promise($A)"

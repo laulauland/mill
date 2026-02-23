@@ -41,6 +41,8 @@ const RunSyncEnvelope = Schema.parseJson(
     run: Schema.Struct({
       id: Schema.String,
       status: Schema.String,
+      driver: Schema.String,
+      executor: Schema.String,
       paths: Schema.Struct({
         runDir: Schema.String,
         runFile: Schema.String,
@@ -61,6 +63,19 @@ const RunSyncEnvelope = Schema.parseJson(
           exitCode: Schema.Number,
         }),
       ),
+    }),
+  }),
+);
+
+const RunSubmitEnvelope = Schema.parseJson(
+  Schema.Struct({
+    runId: Schema.String,
+    status: Schema.Union(Schema.Literal("pending"), Schema.Literal("running")),
+    paths: Schema.Struct({
+      runDir: Schema.String,
+      runFile: Schema.String,
+      eventsFile: Schema.String,
+      resultFile: Schema.String,
     }),
   }),
 );
@@ -91,12 +106,175 @@ describe("mill --help --json (e2e)", () => {
       "openai/gpt-5.3-codex",
       "anthropic/claude-sonnet-4-6",
     ]);
+    expect(payload.drivers.claude?.models).toEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
     expect(payload.authoring.instructions.length).toBeGreaterThan(0);
     expect(payload.async.submit).toBe("mill run <program.ts> --json");
   });
 });
 
 describe("mill run/status/wait (e2e)", () => {
+  it("supports run --driver and --executor selection", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-select-e2e-"));
+    const runsDirectory = join(tempDirectory, "runs");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const output = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Inspect repository layout.",',
+        "});",
+        "return output.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "run",
+          programPath,
+          "--sync",
+          "--json",
+          "--driver",
+          "codex",
+          "--executor",
+          "vm",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runOutput);
+      expect(runPayload.run.driver).toBe("codex");
+      expect(runPayload.run.executor).toBe("vm");
+      expect(runPayload.result.spawns[0]?.driver).toBe("codex");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("submits async run by default, then status/wait observes completion", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-async-e2e-"));
+    const runsDirectory = join(tempDirectory, "runs");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Inspect repository layout.",',
+        "});",
+        "globalThis.__millAsyncProgramText = scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const submitOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "run",
+          programPath,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const submitPayload = Schema.decodeUnknownSync(RunSubmitEnvelope)(submitOutput);
+      expect(submitPayload.runId.length).toBeGreaterThan(0);
+
+      const statusOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "status",
+          submitPayload.runId,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const statusPayload = Schema.decodeUnknownSync(StatusEnvelope)(statusOutput);
+      expect(statusPayload.id).toBe(submitPayload.runId);
+
+      const waitOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "wait",
+          submitPayload.runId,
+          "--timeout",
+          "5",
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const waitPayload = Schema.decodeUnknownSync(StatusEnvelope)(waitOutput);
+      expect(waitPayload.id).toBe(submitPayload.runId);
+      expect(waitPayload.status).toBe("complete");
+
+      const copiedProgram = await readFile(join(submitPayload.paths.runDir, "program.ts"), "utf-8");
+      const workerLog = await readFile(
+        join(submitPayload.paths.runDir, "logs", "worker.log"),
+        "utf-8",
+      );
+
+      expect(copiedProgram).toContain("mill.spawn");
+      expect(workerLog.length).toBeGreaterThan(0);
+
+      const workerExitCode = await commandExitCode(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "_worker",
+          "--run-id",
+          submitPayload.runId,
+          "--program",
+          join(submitPayload.paths.runDir, "program.ts"),
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      expect(workerExitCode).toBe(0);
+
+      const eventsFile = await readFile(submitPayload.paths.eventsFile, "utf-8");
+      const terminalEventCount = eventsFile
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { readonly type: string })
+        .filter(
+          (event) =>
+            event.type === "run:complete" ||
+            event.type === "run:failed" ||
+            event.type === "run:cancelled",
+        ).length;
+
+      expect(terminalEventCount).toBe(1);
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("executes run --sync and wait --timeout returns terminal result", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-e2e-"));
     const runsDirectory = join(tempDirectory, "runs");
@@ -137,6 +315,8 @@ describe("mill run/status/wait (e2e)", () => {
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runOutput);
       expect(runPayload.run.status).toBe("complete");
+      expect(runPayload.run.driver).toBe("default");
+      expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
       expect(runPayload.result.spawns).toHaveLength(2);
 
@@ -206,6 +386,7 @@ describe("mill run/status/wait (e2e)", () => {
           status: "running",
           programPath: "/tmp/program.ts",
           driver: "default",
+          executor: "direct",
           createdAt: "2026-02-23T20:00:00.000Z",
           updatedAt: "2026-02-23T20:00:00.000Z",
           paths: {

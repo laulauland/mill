@@ -1,0 +1,7 @@
+id: no-date-now-outside-clock
+valid:
+  - |
+    const now = clockNow;
+invalid:
+  - |
+    const now = Date.now();

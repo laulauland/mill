@@ -1,0 +1,11 @@
+id: no-try-catch
+valid:
+  - |
+    const value = Effect.match(effect, { onFailure: () => 0, onSuccess: (v) => v });
+invalid:
+  - |
+    try {
+      run();
+    } catch (error) {
+      report(error);
+    }

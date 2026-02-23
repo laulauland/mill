@@ -3,4 +3,6 @@ language: TypeScript
 severity: error
 message: Raw Promise construction is disallowed; use Effect abstractions.
 rule:
-  pattern: "new Promise($A)"
+  any:
+    - pattern: "new Promise<$T>($A)"
+    - pattern: "new Promise($A)"

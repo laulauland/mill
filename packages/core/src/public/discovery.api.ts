@@ -25,6 +25,18 @@ const buildDiscoveryDrivers = (
     (entries) => Object.fromEntries(entries),
   );
 
+const buildDiscoveryExecutors = (
+  executors: ResolveConfigOptions["defaults"]["executors"],
+): DiscoveryPayload["executors"] =>
+  Object.fromEntries(
+    Object.entries(executors).map(([executorName, registration]) => [
+      executorName,
+      {
+        description: registration.description,
+      },
+    ]),
+  );
+
 export const createDiscoveryPayload = async (
   options: ResolveConfigOptions,
 ): Promise<DiscoveryPayload> => {
@@ -33,6 +45,7 @@ export const createDiscoveryPayload = async (
   const drivers = await Runtime.runPromise(runtime)(
     buildDiscoveryDrivers(resolvedConfig.config.drivers),
   );
+  const executors = buildDiscoveryExecutors(resolvedConfig.config.executors);
 
   return {
     discoveryVersion: 1,
@@ -42,6 +55,7 @@ export const createDiscoveryPayload = async (
       resultFields: ["text", "sessionRef", "agent", "model", "driver", "exitCode", "stopReason"],
     },
     drivers,
+    executors,
     authoring: {
       instructions: resolvedConfig.config.authoring.instructions,
     },

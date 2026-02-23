@@ -43,6 +43,34 @@ const runTerminalTypes = new Set(["run:complete", "run:failed", "run:cancelled"]
 const spawnTerminalTypes = new Set(["spawn:complete", "spawn:error", "spawn:cancelled"]);
 
 describe("MillEngine sync lifecycle", () => {
+  it("submits pending runs before worker execution", async () => {
+    const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-submit-"));
+    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+
+    const engine = makeMillEngine({
+      runsDirectory,
+      defaultModel: "openai/gpt-5.3-codex",
+      driverName: "default",
+      executorName: "direct",
+      driver: testDriver,
+      extensions: [],
+    });
+
+    try {
+      const submitted = await runWithBunContext(
+        engine.submit({
+          runId,
+          programPath: "/tmp/program.ts",
+        }),
+      );
+
+      expect(submitted.id).toBe(runId);
+      expect(submitted.status).toBe("pending");
+    } finally {
+      await rm(runsDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("persists deterministic run/start/spawn/complete lifecycle", async () => {
     const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-"));
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
@@ -51,7 +79,9 @@ describe("MillEngine sync lifecycle", () => {
       runsDirectory,
       defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
+      executorName: "direct",
       driver: testDriver,
+      extensions: [],
     });
 
     try {
@@ -102,8 +132,9 @@ describe("MillEngine sync lifecycle", () => {
       expect(runTerminalCount).toBe(1);
 
       const spawnIds = events
-        .filter((event): event is Extract<MillEvent, { type: "spawn:start" }> =>
-          event.type === "spawn:start",
+        .filter(
+          (event): event is Extract<MillEvent, { type: "spawn:start" }> =>
+            event.type === "spawn:start",
         )
         .map((event) => event.payload.spawnId);
 
@@ -144,7 +175,9 @@ describe("MillEngine sync lifecycle", () => {
       runsDirectory,
       defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
+      executorName: "direct",
       driver: testDriver,
+      extensions: [],
     });
 
     try {
@@ -238,7 +271,9 @@ describe("MillEngine sync lifecycle", () => {
       runsDirectory,
       defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
+      executorName: "direct",
       driver: testDriver,
+      extensions: [],
     });
 
     try {

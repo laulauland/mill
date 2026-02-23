@@ -2,7 +2,10 @@ import { Data, Effect } from "effect";
 import type { MillEvent } from "../domain/event.schema";
 import type { RunStatus } from "../domain/run.schema";
 
-type RunTerminalEventType = Extract<MillEvent["type"], "run:complete" | "run:failed" | "run:cancelled">;
+type RunTerminalEventType = Extract<
+  MillEvent["type"],
+  "run:complete" | "run:failed" | "run:cancelled"
+>;
 type SpawnTerminalEventType = Extract<
   MillEvent["type"],
   "spawn:complete" | "spawn:error" | "spawn:cancelled"

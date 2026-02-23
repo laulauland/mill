@@ -1,0 +1,11 @@
+id: no-interface-outside-public
+valid:
+  - |
+    type Capability = {
+      run: () => number;
+    };
+invalid:
+  - |
+    interface Capability {
+      run(): number;
+    }

@@ -4,5 +4,9 @@ severity: error
 message: Avoid `any`; use precise types.
 rule:
   any:
-    - pattern: "$A: any"
+    - pattern: "const $A: any = $B"
+    - pattern: "let $A: any = $B"
+    - pattern: "var $A: any = $B"
+    - pattern: "type $A = any"
+    - pattern: "$A as any"
     - pattern: "<any>$A"

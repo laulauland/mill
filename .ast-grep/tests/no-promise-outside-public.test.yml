@@ -1,0 +1,11 @@
+id: no-promise-outside-public
+valid:
+  - |
+    const load = () => Effect.succeed("ok");
+invalid:
+  - |
+    type Loader = () => Promise<string>;
+  - |
+    const deferred = new Promise<string>((resolve) => {
+      resolve("ok");
+    });

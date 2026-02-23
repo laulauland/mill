@@ -15,7 +15,7 @@ import {
   type RunSyncOutput,
 } from "../domain/run.schema";
 import { decodeSpawnResult, type SpawnOptions, type SpawnResult } from "../domain/spawn.schema";
-import type { DriverRuntime } from "../public/types";
+import type { DriverRuntime, ExtensionContext, ExtensionRegistration } from "../public/types";
 import {
   LifecycleInvariantError,
   applyLifecycleTransition,
@@ -43,9 +43,12 @@ export class WaitTimeoutError extends Data.TaggedError("WaitTimeoutError")<{
   message: string;
 }> {}
 
-export interface RunSyncInput {
+export interface RunSubmitInput {
   readonly runId: RunId;
   readonly programPath: string;
+}
+
+export interface RunSyncInput extends RunSubmitInput {
   readonly executeProgram: (
     spawn: (
       input: SpawnOptions,
@@ -57,6 +60,7 @@ export interface RunSyncInput {
 }
 
 export interface MillEngine {
+  readonly submit: (input: RunSubmitInput) => Effect.Effect<RunSyncOutput["run"], PersistenceError>;
   readonly runSync: (
     input: RunSyncInput,
   ) => Effect.Effect<
@@ -66,6 +70,9 @@ export interface MillEngine {
   readonly status: (
     runId: RunId,
   ) => Effect.Effect<RunSyncOutput["run"], RunNotFoundError | PersistenceError>;
+  readonly result: (
+    runId: RunId,
+  ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError>;
   readonly wait: (
     runId: RunId,
     timeout: number | string,
@@ -78,8 +85,10 @@ export interface MillEngine {
 export interface MakeMillEngineInput {
   readonly runsDirectory: string;
   readonly driverName: string;
+  readonly executorName: string;
   readonly defaultModel: string;
   readonly driver: DriverRuntime;
+  readonly extensions: ReadonlyArray<ExtensionRegistration>;
 }
 
 const toIsoTimestamp = Effect.map(Clock.currentTimeMillis, (millis) =>
@@ -115,6 +124,141 @@ const appendTier1Event = (
     yield* runStore.appendEvent(runId, event);
   });
 
+const appendExtensionErrorEvent = (
+  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
+  sequenceRef: Ref.Ref<number>,
+  runStore: RunStore,
+  runId: RunId,
+  extensionName: string,
+  hook: "setup" | "onEvent",
+  message: string,
+): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+  appendTier1Event(lifecycleStateRef, sequenceRef, runStore, runId, (sequence, timestamp) => ({
+    ...makeEventEnvelope(runId, sequence, timestamp),
+    type: "extension:error",
+    payload: {
+      extensionName,
+      hook,
+      message,
+    },
+  }));
+
+const notifyExtensionHookFailures = (
+  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
+  sequenceRef: Ref.Ref<number>,
+  runStore: RunStore,
+  runId: RunId,
+  extensionName: string,
+  hook: "setup" | "onEvent",
+  message: string,
+): Effect.Effect<void, never> =>
+  Effect.catchAll(
+    appendExtensionErrorEvent(
+      lifecycleStateRef,
+      sequenceRef,
+      runStore,
+      runId,
+      extensionName,
+      hook,
+      message,
+    ),
+    () => Effect.void,
+  );
+
+const runExtensionSetupHooks = (
+  extensions: ReadonlyArray<ExtensionRegistration>,
+  extensionContext: ExtensionContext,
+  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
+  sequenceRef: Ref.Ref<number>,
+  runStore: RunStore,
+  runId: RunId,
+): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+  Effect.gen(function* () {
+    for (const extension of extensions) {
+      if (extension.setup === undefined) {
+        continue;
+      }
+
+      const setupExit = yield* Effect.exit(extension.setup(extensionContext));
+
+      if (Exit.isFailure(setupExit)) {
+        yield* notifyExtensionHookFailures(
+          lifecycleStateRef,
+          sequenceRef,
+          runStore,
+          runId,
+          extension.name,
+          "setup",
+          Cause.pretty(setupExit.cause),
+        );
+      }
+    }
+  });
+
+const runExtensionOnEventHooks = (
+  extensions: ReadonlyArray<ExtensionRegistration>,
+  extensionContext: ExtensionContext,
+  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
+  sequenceRef: Ref.Ref<number>,
+  runStore: RunStore,
+  runId: RunId,
+  event: MillEvent,
+): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+  Effect.gen(function* () {
+    if (event.type === "extension:error") {
+      return;
+    }
+
+    for (const extension of extensions) {
+      if (extension.onEvent === undefined) {
+        continue;
+      }
+
+      const hookExit = yield* Effect.exit(extension.onEvent(event, extensionContext));
+
+      if (Exit.isFailure(hookExit)) {
+        yield* notifyExtensionHookFailures(
+          lifecycleStateRef,
+          sequenceRef,
+          runStore,
+          runId,
+          extension.name,
+          "onEvent",
+          Cause.pretty(hookExit.cause),
+        );
+      }
+    }
+  });
+
+const appendTier1EventWithHooks = (
+  extensions: ReadonlyArray<ExtensionRegistration>,
+  extensionContext: ExtensionContext,
+  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
+  sequenceRef: Ref.Ref<number>,
+  runStore: RunStore,
+  runId: RunId,
+  eventBuilder: (sequence: number, timestamp: string) => MillEvent,
+): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+  Effect.gen(function* () {
+    const sequence = yield* nextSequence(sequenceRef);
+    const timestamp = yield* toIsoTimestamp;
+    const event = eventBuilder(sequence, timestamp);
+    const lifecycleState = yield* Ref.get(lifecycleStateRef);
+    const nextState = yield* applyLifecycleTransition(lifecycleState, event);
+
+    yield* Ref.set(lifecycleStateRef, nextState);
+    yield* runStore.appendEvent(runId, event);
+    yield* runExtensionOnEventHooks(
+      extensions,
+      extensionContext,
+      lifecycleStateRef,
+      sequenceRef,
+      runStore,
+      runId,
+      event,
+    );
+  });
+
 const toTimeoutMillis = (timeout: number | string): number => {
   if (typeof timeout === "number") {
     return timeout;
@@ -139,7 +283,10 @@ const isRunTerminalStatus = (status: RunSyncOutput["run"]["status"]): boolean =>
 const waitForRunTerminal = (
   runStore: RunStore,
   runId: RunId,
-): Effect.Effect<RunSyncOutput["run"], RunNotFoundError | PersistenceError | LifecycleInvariantError> =>
+): Effect.Effect<
+  RunSyncOutput["run"],
+  RunNotFoundError | PersistenceError | LifecycleInvariantError
+> =>
   Effect.gen(function* () {
     let observedEvents = 0;
     let terminalObserved = false;
@@ -172,6 +319,8 @@ const waitForRunTerminal = (
   });
 
 const appendSpawnErrorEvent = (
+  extensions: ReadonlyArray<ExtensionRegistration>,
+  extensionContext: ExtensionContext,
   lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
   sequenceRef: Ref.Ref<number>,
   runStore: RunStore,
@@ -179,14 +328,22 @@ const appendSpawnErrorEvent = (
   spawnId: string,
   message: string,
 ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
-  appendTier1Event(lifecycleStateRef, sequenceRef, runStore, runId, (sequence, timestamp) => ({
-    ...makeEventEnvelope(runId, sequence, timestamp),
-    type: "spawn:error",
-    payload: {
-      spawnId: decodeSpawnIdSync(spawnId),
-      message,
-    },
-  }));
+  appendTier1EventWithHooks(
+    extensions,
+    extensionContext,
+    lifecycleStateRef,
+    sequenceRef,
+    runStore,
+    runId,
+    (sequence, timestamp) => ({
+      ...makeEventEnvelope(runId, sequence, timestamp),
+      type: "spawn:error",
+      payload: {
+        spawnId: decodeSpawnIdSync(spawnId),
+        message,
+      },
+    }),
+  );
 
 export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
   const runStore = makeRunStore({
@@ -194,49 +351,151 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
   });
 
   return {
+    submit: (submitInput) =>
+      Effect.gen(function* () {
+        const existingRun = yield* Effect.catchTag(
+          runStore.getRun(submitInput.runId),
+          "RunNotFoundError",
+          () => Effect.succeed(undefined),
+        );
+
+        if (existingRun !== undefined) {
+          return existingRun;
+        }
+
+        const submittedAt = yield* toIsoTimestamp;
+
+        return yield* runStore.create({
+          runId: submitInput.runId,
+          programPath: submitInput.programPath,
+          driver: input.driverName,
+          executor: input.executorName,
+          timestamp: submittedAt,
+          status: "pending",
+        });
+      }),
+
     runSync: (runInput) =>
       Effect.gen(function* () {
-        const lifecycleStateRef = yield* Ref.make(initialLifecycleGuardState);
-        const sequenceRef = yield* Ref.make(0);
-        const spawnCounterRef = yield* Ref.make(0);
-        const spawnResultsRef = yield* Ref.make<ReadonlyArray<SpawnResult>>([]);
+        const existingRun = yield* Effect.catchTag(
+          runStore.getRun(runInput.runId),
+          "RunNotFoundError",
+          () => Effect.succeed(undefined),
+        );
 
-        const startedAt = yield* toIsoTimestamp;
+        let activeRun = existingRun;
 
-        yield* runStore.create({
+        if (activeRun === undefined) {
+          const startedAt = yield* toIsoTimestamp;
+
+          activeRun = yield* runStore.create({
+            runId: runInput.runId,
+            programPath: runInput.programPath,
+            driver: input.driverName,
+            executor: input.executorName,
+            timestamp: startedAt,
+            status: "running",
+          });
+        }
+
+        if (isRunTerminalStatus(activeRun.status)) {
+          const existingResult = yield* runStore.getResult(runInput.runId);
+
+          if (existingResult !== undefined) {
+            return {
+              run: activeRun,
+              result: existingResult,
+            } satisfies RunSyncOutput;
+          }
+
+          return yield* Effect.fail(
+            new ProgramExecutionError({
+              runId: runInput.runId,
+              message: `Run ${runInput.runId} is terminal (${activeRun.status}) but result.json is missing.`,
+            }),
+          );
+        }
+
+        if (activeRun.status === "pending") {
+          const runningAt = yield* toIsoTimestamp;
+          activeRun = yield* runStore.setStatus(runInput.runId, "running", runningAt);
+        }
+
+        const existingEvents = yield* runStore.readEvents(runInput.runId);
+
+        let lifecycleState = initialLifecycleGuardState;
+
+        for (const event of existingEvents) {
+          lifecycleState = yield* applyLifecycleTransition(lifecycleState, event);
+        }
+
+        const existingSpawnCount = existingEvents.filter(
+          (event) => event.type === "spawn:start",
+        ).length;
+        const existingSpawnResults = existingEvents
+          .filter(
+            (event): event is Extract<MillEvent, { type: "spawn:complete" }> =>
+              event.type === "spawn:complete",
+          )
+          .map((event) => event.payload.result);
+
+        const maxSequence = existingEvents.reduce(
+          (currentMax, event) => (event.sequence > currentMax ? event.sequence : currentMax),
+          0,
+        );
+
+        const lifecycleStateRef = yield* Ref.make(lifecycleState);
+        const sequenceRef = yield* Ref.make(maxSequence);
+        const spawnCounterRef = yield* Ref.make(existingSpawnCount);
+        const spawnResultsRef = yield* Ref.make<ReadonlyArray<SpawnResult>>(existingSpawnResults);
+        const extensionContext: ExtensionContext = {
           runId: runInput.runId,
-          programPath: runInput.programPath,
-          driver: input.driverName,
-          timestamp: startedAt,
-        });
+          driverName: input.driverName,
+          executorName: input.executorName,
+        };
 
-        yield* appendTier1Event(
-          lifecycleStateRef,
-          sequenceRef,
-          runStore,
-          runInput.runId,
-          (sequence, timestamp) => ({
-            ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-            type: "run:start",
-            payload: {
-              programPath: runInput.programPath,
-            },
-          }),
-        );
+        if (existingEvents.length === 0) {
+          yield* runExtensionSetupHooks(
+            input.extensions,
+            extensionContext,
+            lifecycleStateRef,
+            sequenceRef,
+            runStore,
+            runInput.runId,
+          );
 
-        yield* appendTier1Event(
-          lifecycleStateRef,
-          sequenceRef,
-          runStore,
-          runInput.runId,
-          (sequence, timestamp) => ({
-            ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-            type: "run:status",
-            payload: {
-              status: "running",
-            },
-          }),
-        );
+          yield* appendTier1EventWithHooks(
+            input.extensions,
+            extensionContext,
+            lifecycleStateRef,
+            sequenceRef,
+            runStore,
+            runInput.runId,
+            (sequence, timestamp) => ({
+              ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+              type: "run:start",
+              payload: {
+                programPath: runInput.programPath,
+              },
+            }),
+          );
+
+          yield* appendTier1EventWithHooks(
+            input.extensions,
+            extensionContext,
+            lifecycleStateRef,
+            sequenceRef,
+            runStore,
+            runInput.runId,
+            (sequence, timestamp) => ({
+              ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+              type: "run:status",
+              payload: {
+                status: "running",
+              },
+            }),
+          );
+        }
 
         const spawn = (
           spawnInput: SpawnOptions,
@@ -262,7 +521,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               },
             };
 
-            yield* appendTier1Event(
+            yield* appendTier1EventWithHooks(
+              input.extensions,
+              extensionContext,
               lifecycleStateRef,
               sequenceRef,
               runStore,
@@ -295,6 +556,8 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               const failureMessage = Cause.pretty(driverOutputExit.cause);
 
               yield* appendSpawnErrorEvent(
+                input.extensions,
+                extensionContext,
                 lifecycleStateRef,
                 sequenceRef,
                 runStore,
@@ -324,7 +587,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1Event(
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -348,7 +613,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1Event(
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -362,11 +629,13 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             }
 
             const spawnResultExit = yield* Effect.exit(
-              Effect.mapError(decodeSpawnResult(driverOutputExit.value.result), (error) =>
-                new ProgramExecutionError({
-                  runId: runInput.runId,
-                  message: `Spawn result decode failed: ${toMessage(error)}`,
-                }),
+              Effect.mapError(
+                decodeSpawnResult(driverOutputExit.value.result),
+                (error) =>
+                  new ProgramExecutionError({
+                    runId: runInput.runId,
+                    message: `Spawn result decode failed: ${toMessage(error)}`,
+                  }),
               ),
             );
 
@@ -374,6 +643,8 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               const failureMessage = Cause.pretty(spawnResultExit.cause);
 
               yield* appendSpawnErrorEvent(
+                input.extensions,
+                extensionContext,
                 lifecycleStateRef,
                 sequenceRef,
                 runStore,
@@ -402,7 +673,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               },
             };
 
-            yield* appendTier1Event(
+            yield* appendTier1EventWithHooks(
+              input.extensions,
+              extensionContext,
               lifecycleStateRef,
               sequenceRef,
               runStore,
@@ -421,6 +694,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         const executionExit = yield* Effect.exit(runInput.executeProgram(spawn));
         const completedAt = yield* toIsoTimestamp;
         const spawnResults = yield* Ref.get(spawnResultsRef);
+        const startedAt = activeRun.createdAt;
 
         if (Exit.isSuccess(executionExit)) {
           const runResult: RunResult = {
@@ -435,7 +709,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 : JSON.stringify(executionExit.value),
           };
 
-          yield* appendTier1Event(
+          yield* appendTier1EventWithHooks(
+            input.extensions,
+            extensionContext,
             lifecycleStateRef,
             sequenceRef,
             runStore,
@@ -469,7 +745,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           errorMessage: failureMessage,
         };
 
-        yield* appendTier1Event(
+        yield* appendTier1EventWithHooks(
+          input.extensions,
+          extensionContext,
           lifecycleStateRef,
           sequenceRef,
           runStore,
@@ -494,6 +772,8 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
       }),
 
     status: (runId) => runStore.getRun(runId),
+
+    result: (runId) => runStore.getResult(runId),
 
     wait: (runId, timeout) => {
       const timeoutMillis = toTimeoutMillis(timeout);

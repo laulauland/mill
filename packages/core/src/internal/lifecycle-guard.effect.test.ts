@@ -1,15 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Runtime, type Effect as EffectType } from "effect";
+import { Effect, type Effect as EffectType } from "effect";
 import { decodeRunIdSync, decodeSpawnIdSync } from "../domain/run.schema";
+import { runWithRuntime } from "../public/test-runtime.api";
 import {
   applyLifecycleTransition,
   initialLifecycleGuardState,
   type LifecycleGuardState,
 } from "./lifecycle-guard.effect";
 
-const runtime = Runtime.defaultRuntime;
-const runEffect = <A, E>(effect: EffectType<A, E>): Promise<A> =>
-  Runtime.runPromise(runtime)(effect);
+const runEffect = <A, E>(effect: EffectType<A, E>): Promise<A> => runWithRuntime(effect);
 
 const runId = decodeRunIdSync("run_lifecycle_guard");
 const spawnId = decodeSpawnIdSync("spawn_lifecycle_guard");

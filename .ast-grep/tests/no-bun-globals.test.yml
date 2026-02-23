@@ -1,0 +1,7 @@
+id: no-bun-globals
+valid:
+  - |
+    const runtime = platformRuntime;
+invalid:
+  - |
+    const processRef = Bun.spawn(["echo", "ok"]);

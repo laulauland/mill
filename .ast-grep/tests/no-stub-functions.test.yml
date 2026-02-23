@@ -1,0 +1,7 @@
+id: no-stub-functions
+valid:
+  - |
+    export const ready = true;
+invalid:
+  - |
+    throw new Error("Not implemented");

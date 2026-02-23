@@ -9,3 +9,4 @@ rule:
   any:
     - pattern: "process.env.$A"
     - pattern: "process.env[$A]"
+    - pattern: "const { $$$A } = process.env"

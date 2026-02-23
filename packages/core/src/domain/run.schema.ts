@@ -29,6 +29,7 @@ export const RunRecord = Schema.Struct({
   status: RunStatus,
   programPath: Schema.NonEmptyString,
   driver: Schema.NonEmptyString,
+  executor: Schema.NonEmptyString,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   paths: RunPaths,

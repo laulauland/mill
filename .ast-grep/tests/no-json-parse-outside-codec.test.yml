@@ -1,0 +1,7 @@
+id: no-json-parse-outside-codec
+valid:
+  - |
+    const payload = decodedPayload;
+invalid:
+  - |
+    const payload = JSON.parse(raw);

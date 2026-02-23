@@ -4,11 +4,16 @@ severity: error
 message: Public modules must not import private internal/runtime/domain modules directly.
 files:
   - "**/src/public/**/*.ts"
+ignores:
+  - "**/*.test.ts"
 rule:
   any:
-    - pattern: "import $A from '../internal/$B'"
-    - pattern: "import $A from '../runtime/$B'"
-    - pattern: "import $A from '../domain/$B'"
-    - pattern: "import { $$$A } from '../internal/$B'"
-    - pattern: "import { $$$A } from '../runtime/$B'"
-    - pattern: "import { $$$A } from '../domain/$B'"
+    - pattern: 'import $$$A from "$MODULE"'
+    - pattern: "import '$MODULE'"
+    - pattern: 'import "$MODULE"'
+    - pattern: 'export * from "$MODULE"'
+    - pattern: 'export { $$$A } from "$MODULE"'
+    - pattern: 'export type { $$$A } from "$MODULE"'
+constraints:
+  MODULE:
+    regex: "(^|/)(internal|runtime|domain)/"

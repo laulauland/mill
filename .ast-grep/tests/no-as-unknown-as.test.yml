@@ -1,0 +1,7 @@
+id: no-as-unknown-as
+valid:
+  - |
+    const value = source as string;
+invalid:
+  - |
+    const forced = source as unknown as number;

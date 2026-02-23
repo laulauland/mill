@@ -1,0 +1,7 @@
+id: no-math-random-outside-random
+valid:
+  - |
+    const seed = randomValue;
+invalid:
+  - |
+    const seed = Math.random();

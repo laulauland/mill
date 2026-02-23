@@ -1,0 +1,9 @@
+id: no-process-env-outside-config
+valid:
+  - |
+    const homeDirectory = resolved.homeDirectory;
+invalid:
+  - |
+    const homeDirectory = process.env.HOME;
+  - |
+    const { HOME } = process.env;

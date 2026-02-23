@@ -1,0 +1,7 @@
+id: no-dot-then
+valid:
+  - |
+    const value = await Promise.resolve(1);
+invalid:
+  - |
+    const next = Promise.resolve(1).then((value) => value + 1);

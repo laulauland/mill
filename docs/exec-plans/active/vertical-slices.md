@@ -247,6 +247,16 @@ Lock architecture constraints so future slices cannot regress Effect/boundary sa
 - `bun test scripts`
 - `bun test`
 
+**Status (2026-02-23)**
+
+- ✅ Expanded `.ast-grep/tests/` with rule-level positive/negative fixtures for the full SPEC §19 rule set.
+- ✅ Hardened boundary and runtime-safety rule coverage (`no-public-import-internal`, `no-node-imports`, `no-shell-string-command`, Promise/`any` guards) to satisfy missing fixture cases.
+- ✅ Added Bun-test guardrail integration harness (`scripts/guardrail-harness.ts` + `scripts/guardrail-harness.test.ts`) that executes repository guardrail checks and validates failing fixture scans for boundary/runtime violations.
+- ✅ Refactored `scripts/check-exports.ts` into a testable workspace-wide checker (`collectWorkspacePackageJsonPaths`, `checkExportBoundaries`, `isInternalExportPath`, CLI `runCheck`).
+- ✅ Added `scripts/check-exports.test.ts` coverage for workspace glob discovery and internal export-path detection across conditional/array `exports` forms.
+- ✅ Re-ran `bun run lint:ast-grep:test`, `bun test scripts`, and full `bun test` with green results.
+- ✅ Follow-up hardening pass: `no-public-import-internal` now catches re-export forms (`export ... from`), `no-process-env-outside-config` now catches destructured `process.env`, and export-boundary checks now reject internal/runtime/domain **export keys** in addition to export target values.
+
 ---
 
 ## S7 — Final Hardening: inspect/session/cancel/watch Semantics (Dedicated Final Slice)
