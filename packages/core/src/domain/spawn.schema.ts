@@ -21,3 +21,8 @@ export const SpawnResult = Schema.Struct({
 });
 
 export type SpawnResult = Schema.Schema.Type<typeof SpawnResult>;
+
+export const decodeSpawnOptions = Schema.decodeUnknown(SpawnOptions);
+export const decodeSpawnOptionsSync = Schema.decodeUnknownSync(SpawnOptions);
+export const decodeSpawnResult = Schema.decodeUnknown(SpawnResult);
+export const decodeSpawnResultSync = Schema.decodeUnknownSync(SpawnResult);

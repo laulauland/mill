@@ -89,6 +89,17 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 - `bun test packages/cli/src`
 - `bun test packages/driver-pi/src`
 
+**Status (2026-02-23)**
+
+- ✅ Added Tier-1 event discriminated union schemas in `packages/core/src/domain/event.schema.ts` with persisted decode helpers (`Schema.parseJson` + `Schema.decodeUnknown*`).
+- ✅ Expanded run/spawn schema contracts with typed decode utilities for persisted artifacts (`run.json`, `result.json`) and runtime validation of `SpawnResult` (`sessionRef` non-empty).
+- ✅ Implemented `packages/core/src/internal/run-store.effect.ts` for run directory creation and append-only `events.ndjson` persistence.
+- ✅ Implemented sync lifecycle orchestration in `packages/core/src/internal/engine.effect.ts` (run start/status, spawn mapping, run terminal persistence).
+- ✅ Implemented `run --sync` and `status` CLI command handlers in `packages/cli/src/public/index.api.ts`, with JSON mode contract preserved on stdout.
+- ✅ Implemented process-backed pi driver runtime in `packages/driver-pi` with codec decoding and command invocation via `Command.make(cmd, ...args)`.
+- ✅ Added unit/integration/e2e coverage for schemas, run store, engine↔driver flow, CLI `run --sync`, CLI `status`, and persisted artifact verification.
+- ✅ Re-ran targeted slice suites (`core/domain`, `core/internal`, `cli/src`, `driver-pi/src`) with green results.
+
 ---
 
 ## S3 — Wait Semantics + Terminal Single-Shot Invariants
@@ -121,6 +132,19 @@ Enforce lifecycle correctness guarantees before detached execution complexity is
 - `bun test packages/core/src/internal`
 - `bun test packages/cli/src/public`
 - `bun test packages/driver-pi/src`
+
+**Status (2026-02-23)**
+
+- ✅ Added core lifecycle transition guards in `packages/core/src/internal/lifecycle-guard.effect.ts` and unit coverage for terminal single-shot / terminal→non-terminal rejection paths.
+- ✅ Hardened run status transitions in `RunStore` so terminal statuses are immutable (`complete|failed|cancelled` cannot transition further).
+- ✅ Implemented `MillEngine.wait(runId, timeout)` with deterministic polling over persisted events plus typed timeout error (`WaitTimeoutError`).
+- ✅ `wait` now validates persisted event streams with lifecycle guards and tracks terminal observation without allowing post-terminal transitions.
+- ✅ Implemented deterministic terminal policy: duplicate terminal emissions are rejected via `LifecycleInvariantError` (not ignored).
+- ✅ Added CLI `wait` command (`mill wait <runId> --timeout <seconds> [--json]`) with JSON/human output parity.
+- ✅ Added typed JSON timeout contract for CLI (`{ ok: false, error: { _tag: "WaitTimeoutError", runId, timeoutSeconds, message } }`) and non-zero timeout exit code.
+- ✅ Added driver-pi malformed fixture coverage for duplicate/invalid terminal output ordering in codec + runtime integration tests.
+- ✅ Added integration/e2e coverage for persisted/live wait behavior and timeout behavior.
+- ✅ Re-ran full workspace `bun test`; suite is green.
 
 ---
 

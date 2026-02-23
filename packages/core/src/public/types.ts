@@ -18,6 +18,35 @@ export interface SpawnOutput {
   readonly errorMessage?: string;
 }
 
+export interface DriverSpawnInput {
+  readonly runId: string;
+  readonly spawnId: string;
+  readonly agent: string;
+  readonly systemPrompt: string;
+  readonly prompt: string;
+  readonly model: string;
+}
+
+export type DriverSpawnEvent =
+  | {
+      readonly type: "milestone";
+      readonly message: string;
+    }
+  | {
+      readonly type: "tool_call";
+      readonly toolName: string;
+    };
+
+export interface DriverSpawnOutput {
+  readonly events: ReadonlyArray<DriverSpawnEvent>;
+  readonly result: SpawnOutput;
+}
+
+export interface DriverRuntime {
+  readonly name: string;
+  readonly spawn: (input: DriverSpawnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
+}
+
 export interface Mill {
   spawn(input: SpawnInput): Promise<SpawnOutput>;
 }
@@ -37,6 +66,7 @@ export interface DriverRegistration {
   readonly modelFormat: string;
   readonly process: DriverProcessConfig;
   readonly codec: DriverCodec;
+  readonly runtime?: DriverRuntime;
 }
 
 export interface MillConfig {
