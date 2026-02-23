@@ -291,3 +291,14 @@ Complete observer/control semantics for robust long-running orchestration operat
 - `bun test packages/cli/src`
 - `bun test packages/driver-pi/src`
 - `bun test`
+
+**Status (2026-02-23)**
+
+- ✅ Added core observer fanout hub (`packages/core/src/internal/observer-hub.effect.ts`) and wired engine tier-1/tier-2 publishing to persisted append + in-memory live subscribers.
+- ✅ Extended `MillEngine` with `watch`, `watchRaw`, `inspect`, `cancel`, and `list` semantics.
+- ✅ Hardened append path synchronization against concurrent terminal transitions by rehydrating lifecycle guard state from persisted events before each append.
+- ✅ Implemented `inspect` run/spawn decoded views and session bridge plumbing in `packages/core/src/public/run.api.ts`.
+- ✅ Added driver session bridge contract (`resolveSession`) and implemented pointer resolution for `@mill/driver-pi`.
+- ✅ Added CLI handlers for `watch`, `inspect`, `cancel`, and `ls` with JSON stdout contracts.
+- ✅ Fixed async submit detachment stdio to `ignore` so `run --json` remains non-blocking even under captured stdout in e2e contexts.
+- ✅ Added integration/e2e coverage for command matrix behavior across watch/inspect/session/cancel/ls, including concurrent run cancellation invariants.

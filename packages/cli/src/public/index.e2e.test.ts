@@ -87,6 +87,49 @@ const StatusEnvelope = Schema.parseJson(
   }),
 );
 
+const CancelEnvelope = Schema.parseJson(
+  Schema.Struct({
+    runId: Schema.String,
+    status: Schema.String,
+    alreadyTerminal: Schema.Boolean,
+  }),
+);
+
+const InspectRunEnvelope = Schema.parseJson(
+  Schema.Struct({
+    kind: Schema.Literal("run"),
+    run: Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+    }),
+    events: Schema.Array(
+      Schema.Struct({
+        type: Schema.String,
+        sequence: Schema.Number,
+      }),
+    ),
+  }),
+);
+
+const SessionEnvelope = Schema.parseJson(
+  Schema.Struct({
+    runId: Schema.String,
+    spawnId: Schema.String,
+    sessionRef: Schema.String,
+    pointer: Schema.String,
+    driver: Schema.String,
+  }),
+);
+
+const ListEnvelope = Schema.parseJson(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+    }),
+  ),
+);
+
 const commandOutput = (command: Command.Command): Promise<string> =>
   Runtime.runPromise(runtime)(Effect.provide(Command.string(command), BunContext.layer));
 
@@ -363,6 +406,188 @@ describe("mill run/status/wait (e2e)", () => {
       expect(runFile.length).toBeGreaterThan(0);
       expect(eventsFile.length).toBeGreaterThan(0);
       expect(resultFile.length).toBeGreaterThan(0);
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("runs inspect/session/cancel/watch matrix across concurrent runs", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-matrix-e2e-"));
+    const runsDirectory = join(tempDirectory, "runs");
+    const completeProgramPath = join(tempDirectory, "complete.ts");
+    const cancelProgramPath = join(tempDirectory, "cancel.ts");
+
+    await writeFile(
+      completeProgramPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Inspect repository layout.",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeFile(
+      cancelProgramPath,
+      [
+        "await new Promise((resolve) => setTimeout(resolve, 3000));",
+        "return 'late-complete';",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const submitCompleteOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "run",
+          completeProgramPath,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const submitCancelOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "run",
+          cancelProgramPath,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const completeRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(submitCompleteOutput);
+      const cancelRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(submitCancelOutput);
+
+      const cancelOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "cancel",
+          cancelRun.runId,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const cancelPayload = Schema.decodeUnknownSync(CancelEnvelope)(cancelOutput);
+      expect(cancelPayload.runId).toBe(cancelRun.runId);
+      expect(cancelPayload.status).toBe("cancelled");
+
+      const waitCompleteOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "wait",
+          completeRun.runId,
+          "--timeout",
+          "8",
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const waitComplete = Schema.decodeUnknownSync(StatusEnvelope)(waitCompleteOutput);
+      expect(waitComplete.status).toBe("complete");
+
+      const watchOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "watch",
+          completeRun.runId,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const watchLines = watchOutput
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      expect(watchLines.length).toBeGreaterThan(0);
+      const watchTerminalCount = watchLines
+        .map((line) => JSON.parse(line) as { readonly type: string })
+        .filter(
+          (event) =>
+            event.type === "run:complete" ||
+            event.type === "run:failed" ||
+            event.type === "run:cancelled",
+        ).length;
+      expect(watchTerminalCount).toBe(1);
+
+      const inspectCancelledOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "inspect",
+          cancelRun.runId,
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const inspectedCancelled = Schema.decodeUnknownSync(InspectRunEnvelope)(inspectCancelledOutput);
+      expect(inspectedCancelled.run.status).toBe("cancelled");
+      expect(
+        inspectedCancelled.events.filter((event) => event.type === "run:cancelled"),
+      ).toHaveLength(1);
+
+      const inspectSessionOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "inspect",
+          `${completeRun.runId}.spawn_1`,
+          "--session",
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const sessionPayload = Schema.decodeUnknownSync(SessionEnvelope)(inspectSessionOutput);
+      expect(sessionPayload.runId).toBe(completeRun.runId);
+      expect(sessionPayload.spawnId).toBe("spawn_1");
+
+      const listOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "ls",
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const listedRuns = Schema.decodeUnknownSync(ListEnvelope)(listOutput);
+      const cancelledListed = listedRuns.find((item) => item.id === cancelRun.runId);
+      const completeListed = listedRuns.find((item) => item.id === completeRun.runId);
+
+      expect(cancelledListed?.status).toBe("cancelled");
+      expect(completeListed?.status).toBe("complete");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

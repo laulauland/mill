@@ -39,12 +39,22 @@ export type DriverSpawnEvent =
 
 export interface DriverSpawnOutput {
   readonly events: ReadonlyArray<DriverSpawnEvent>;
+  readonly raw?: ReadonlyArray<string>;
   readonly result: SpawnOutput;
+}
+
+export interface DriverSessionPointer {
+  readonly driver: string;
+  readonly sessionRef: string;
+  readonly pointer: string;
 }
 
 export interface DriverRuntime {
   readonly name: string;
   readonly spawn: (input: DriverSpawnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
+  readonly resolveSession?: (input: {
+    readonly sessionRef: string;
+  }) => Effect.Effect<DriverSessionPointer, unknown>;
 }
 
 export interface ExecutorRunInput {

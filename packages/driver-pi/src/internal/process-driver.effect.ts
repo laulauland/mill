@@ -41,12 +41,28 @@ export const makePiProcessDriver = (config: DriverProcessConfig): DriverRuntime 
           }),
       );
 
-      return yield* Effect.mapError(
+      const decoded = yield* Effect.mapError(
         decodePiProcessOutput(stdout),
         (error) =>
           new PiProcessDriverError({
             message: toMessage(error),
           }),
       );
+
+      const raw = stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      return {
+        ...decoded,
+        raw,
+      };
+    }),
+  resolveSession: ({ sessionRef }) =>
+    Effect.succeed({
+      driver: "pi",
+      sessionRef,
+      pointer: `pi://session/${encodeURIComponent(sessionRef)}`,
     }),
 });

@@ -52,6 +52,30 @@ describe("createPiDriverRegistration", () => {
     expect(output.result.exitCode).toBe(0);
   });
 
+  it("resolves session pointers for inspect --session bridge", async () => {
+    const driver = createPiDriverRegistration();
+
+    expect(driver.runtime).toBeDefined();
+
+    if (driver.runtime === undefined) {
+      throw new Error("driver runtime is required");
+    }
+
+    expect(driver.runtime.resolveSession).toBeDefined();
+
+    if (driver.runtime.resolveSession === undefined) {
+      throw new Error("resolveSession bridge is required");
+    }
+
+    const session = await Runtime.runPromise(runtime)(
+      Effect.provide(driver.runtime.resolveSession({ sessionRef: "session/scout" }), BunContext.layer),
+    );
+
+    expect(session.sessionRef).toBe("session/scout");
+    expect(session.driver).toBe("pi");
+    expect(session.pointer.length).toBeGreaterThan(0);
+  });
+
   it("rejects malformed duplicate terminal output fixtures", async () => {
     const driver = createPiDriverRegistration({
       process: {

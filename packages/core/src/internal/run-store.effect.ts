@@ -2,6 +2,7 @@ import * as FileSystem from "@effect/platform/FileSystem";
 import { Data, Effect } from "effect";
 import { decodeMillEventJson, encodeMillEventJson, type MillEvent } from "../domain/event.schema";
 import {
+  decodeRunId,
   decodeRunRecordJson,
   decodeRunResultJson,
   type RunId,
@@ -46,6 +47,7 @@ export interface RunStore {
   readonly getResult: (
     runId: RunId,
   ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError>;
+  readonly listRuns: (status?: RunRecord["status"]) => Effect.Effect<ReadonlyArray<RunRecord>, PersistenceError>;
 }
 
 export interface MakeRunStoreInput {
@@ -212,6 +214,52 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
             message: toMessage(error),
           }),
       );
+    }),
+
+  listRuns: (status) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runsDirectoryExists = yield* mapPersistenceError(input.runsDirectory)(
+        fileSystem.exists(input.runsDirectory),
+      );
+
+      if (!runsDirectoryExists) {
+        return [];
+      }
+
+      const runDirectories = yield* mapPersistenceError(input.runsDirectory)(
+        fileSystem.readDirectory(input.runsDirectory),
+      );
+
+      const loadedRuns = yield* Effect.forEach(
+        runDirectories,
+        (runDirectory) =>
+          Effect.gen(function* () {
+            const decodedRunId = yield* Effect.either(decodeRunId(runDirectory));
+
+            if (decodedRunId._tag === "Left") {
+              return undefined;
+            }
+
+            const maybeRun = yield* Effect.either(storeGetRun(input.runsDirectory, decodedRunId.right));
+
+            if (maybeRun._tag === "Left") {
+              return undefined;
+            }
+
+            return maybeRun.right;
+          }),
+        {
+          concurrency: "unbounded",
+        },
+      );
+
+      const filteredRuns = loadedRuns
+        .filter((run): run is RunRecord => run !== undefined)
+        .filter((run) => (status === undefined ? true : run.status === status))
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+
+      return filteredRuns;
     }),
 });
 

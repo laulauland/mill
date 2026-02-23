@@ -1,4 +1,4 @@
-import { Cause, Clock, Data, Effect, Exit, Ref } from "effect";
+import { Cause, Clock, Data, Effect, Exit, Ref, Stream } from "effect";
 import {
   makeEventEnvelope,
   type MillEvent,
@@ -13,6 +13,7 @@ import {
   type RunId,
   type RunResult,
   type RunSyncOutput,
+  type SpawnId,
 } from "../domain/run.schema";
 import { decodeSpawnResult, type SpawnOptions, type SpawnResult } from "../domain/spawn.schema";
 import type { DriverRuntime, ExtensionContext, ExtensionRegistration } from "../public/types";
@@ -29,6 +30,12 @@ import {
   makeRunStore,
   type RunStore,
 } from "./run-store.effect";
+import {
+  publishRawEvent,
+  publishTier1Event,
+  watchRawLive,
+  watchTier1Live,
+} from "./observer-hub.effect";
 
 export class ConfigError extends Data.TaggedError("ConfigError")<{ message: string }> {}
 
@@ -59,6 +66,31 @@ export interface RunSyncInput extends RunSubmitInput {
   ) => Effect.Effect<unknown, ProgramExecutionError>;
 }
 
+export interface InspectRef {
+  readonly runId: RunId;
+  readonly spawnId?: SpawnId;
+}
+
+export type InspectResult =
+  | {
+      readonly kind: "run";
+      readonly run: RunSyncOutput["run"];
+      readonly events: ReadonlyArray<MillEvent>;
+      readonly result: RunResult | undefined;
+    }
+  | {
+      readonly kind: "spawn";
+      readonly runId: RunId;
+      readonly spawnId: SpawnId;
+      readonly events: ReadonlyArray<MillEvent>;
+      readonly result: SpawnResult | undefined;
+    };
+
+export interface CancelResult {
+  readonly run: RunSyncOutput["run"];
+  readonly alreadyTerminal: boolean;
+}
+
 export interface MillEngine {
   readonly submit: (input: RunSubmitInput) => Effect.Effect<RunSyncOutput["run"], PersistenceError>;
   readonly runSync: (
@@ -80,6 +112,19 @@ export interface MillEngine {
     RunSyncOutput["run"],
     RunNotFoundError | PersistenceError | LifecycleInvariantError | WaitTimeoutError
   >;
+  readonly list: (status?: RunSyncOutput["run"]["status"]) => Effect.Effect<
+    ReadonlyArray<RunSyncOutput["run"]>,
+    PersistenceError
+  >;
+  readonly watch: (runId: RunId) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError>;
+  readonly watchRaw: (runId: RunId) => Stream.Stream<string, RunNotFoundError | PersistenceError>;
+  readonly inspect: (
+    ref: InspectRef,
+  ) => Effect.Effect<InspectResult, RunNotFoundError | PersistenceError>;
+  readonly cancel: (
+    runId: RunId,
+    reason?: string,
+  ) => Effect.Effect<CancelResult, RunNotFoundError | PersistenceError | LifecycleInvariantError>;
 }
 
 export interface MakeMillEngineInput {
@@ -106,6 +151,49 @@ const toMessage = (error: unknown): string => {
 const nextSequence = (sequenceRef: Ref.Ref<number>): Effect.Effect<number> =>
   Ref.updateAndGet(sequenceRef, (current) => current + 1);
 
+const toPersistenceError = (
+  runId: RunId,
+  error: RunNotFoundError | PersistenceError,
+): PersistenceError => {
+  if (error._tag === "PersistenceError") {
+    return error;
+  }
+
+  return new PersistenceError({
+    path: runId,
+    message: `Run ${runId} not found while appending event.`,
+  });
+};
+
+const synchronizeAppendState = (
+  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
+  sequenceRef: Ref.Ref<number>,
+  runStore: RunStore,
+  runId: RunId,
+): Effect.Effect<LifecycleGuardState, PersistenceError | LifecycleInvariantError> =>
+  Effect.gen(function* () {
+    const persistedEvents = yield* Effect.mapError(
+      runStore.readEvents(runId),
+      (error) => toPersistenceError(runId, error),
+    );
+
+    let lifecycleState = initialLifecycleGuardState;
+
+    for (const persistedEvent of persistedEvents) {
+      lifecycleState = yield* applyLifecycleTransition(lifecycleState, persistedEvent);
+    }
+
+    const maxPersistedSequence = persistedEvents.reduce(
+      (currentMax, event) => (event.sequence > currentMax ? event.sequence : currentMax),
+      0,
+    );
+
+    yield* Ref.set(lifecycleStateRef, lifecycleState);
+    yield* Ref.set(sequenceRef, maxPersistedSequence);
+
+    return lifecycleState;
+  });
+
 const appendTier1Event = (
   lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
   sequenceRef: Ref.Ref<number>,
@@ -114,14 +202,20 @@ const appendTier1Event = (
   eventBuilder: (sequence: number, timestamp: string) => MillEvent,
 ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
   Effect.gen(function* () {
+    const synchronizedState = yield* synchronizeAppendState(
+      lifecycleStateRef,
+      sequenceRef,
+      runStore,
+      runId,
+    );
     const sequence = yield* nextSequence(sequenceRef);
     const timestamp = yield* toIsoTimestamp;
     const event = eventBuilder(sequence, timestamp);
-    const lifecycleState = yield* Ref.get(lifecycleStateRef);
-    const nextState = yield* applyLifecycleTransition(lifecycleState, event);
+    const nextState = yield* applyLifecycleTransition(synchronizedState, event);
 
     yield* Ref.set(lifecycleStateRef, nextState);
     yield* runStore.appendEvent(runId, event);
+    yield* publishTier1Event(runId, event);
   });
 
 const appendExtensionErrorEvent = (
@@ -240,14 +334,20 @@ const appendTier1EventWithHooks = (
   eventBuilder: (sequence: number, timestamp: string) => MillEvent,
 ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
   Effect.gen(function* () {
+    const synchronizedState = yield* synchronizeAppendState(
+      lifecycleStateRef,
+      sequenceRef,
+      runStore,
+      runId,
+    );
     const sequence = yield* nextSequence(sequenceRef);
     const timestamp = yield* toIsoTimestamp;
     const event = eventBuilder(sequence, timestamp);
-    const lifecycleState = yield* Ref.get(lifecycleStateRef);
-    const nextState = yield* applyLifecycleTransition(lifecycleState, event);
+    const nextState = yield* applyLifecycleTransition(synchronizedState, event);
 
     yield* Ref.set(lifecycleStateRef, nextState);
     yield* runStore.appendEvent(runId, event);
+    yield* publishTier1Event(runId, event);
     yield* runExtensionOnEventHooks(
       extensions,
       extensionContext,
@@ -344,6 +444,53 @@ const appendSpawnErrorEvent = (
       },
     }),
   );
+
+const terminalEventForRun = (event: MillEvent): boolean =>
+  event.type === "run:complete" || event.type === "run:failed" || event.type === "run:cancelled";
+
+const isSpawnEventForSpawn = (event: MillEvent, spawnId: SpawnId): boolean => {
+  if (event.type === "spawn:start") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:milestone") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:tool_call") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:error") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:complete") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:cancelled") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  return false;
+};
+
+const spawnResultFromEvents = (
+  events: ReadonlyArray<MillEvent>,
+  spawnId: SpawnId,
+): SpawnResult | undefined => {
+  const completion = events.find(
+    (event): event is Extract<MillEvent, { type: "spawn:complete" }> =>
+      event.type === "spawn:complete" && event.payload.spawnId === spawnId,
+  );
+
+  if (completion === undefined) {
+    return undefined;
+  }
+
+  return completion.payload.result;
+};
 
 export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
   const runStore = makeRunStore({
@@ -574,6 +721,10 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               );
             }
 
+            for (const rawLine of driverOutputExit.value.raw ?? []) {
+              yield* publishRawEvent(runInput.runId, rawLine);
+            }
+
             for (const driverEvent of driverOutputExit.value.events) {
               if (driverEvent.type === "milestone") {
                 const milestoneEvent: Omit<
@@ -790,5 +941,99 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         }),
       );
     },
+
+    list: (status) => runStore.listRuns(status),
+
+    watch: (runId) =>
+      Stream.unwrapScoped(
+        Effect.map(runStore.readEvents(runId), (persistedEvents) =>
+          Stream.concat(Stream.fromIterable(persistedEvents), watchTier1Live(runId)),
+        ),
+      ),
+
+    watchRaw: (runId) =>
+      Stream.unwrapScoped(Effect.zipRight(runStore.getRun(runId), Effect.succeed(watchRawLive(runId)))),
+
+    inspect: (ref) =>
+      Effect.gen(function* () {
+        const run = yield* runStore.getRun(ref.runId);
+        const events = yield* runStore.readEvents(ref.runId);
+
+        if (ref.spawnId === undefined) {
+          const result = yield* runStore.getResult(ref.runId);
+
+          return {
+            kind: "run",
+            run,
+            events,
+            result,
+          } satisfies InspectResult;
+        }
+
+        const spawnEvents = events.filter((event) => isSpawnEventForSpawn(event, ref.spawnId));
+
+        return {
+          kind: "spawn",
+          runId: ref.runId,
+          spawnId: ref.spawnId,
+          events: spawnEvents,
+          result: spawnResultFromEvents(events, ref.spawnId),
+        } satisfies InspectResult;
+      }),
+
+    cancel: (runId, reason) =>
+      Effect.gen(function* () {
+        const run = yield* runStore.getRun(runId);
+
+        if (isRunTerminalStatus(run.status)) {
+          return {
+            run,
+            alreadyTerminal: true,
+          } satisfies CancelResult;
+        }
+
+        const events = yield* runStore.readEvents(runId);
+        const alreadyTerminalEvent = events.some(terminalEventForRun);
+
+        if (!alreadyTerminalEvent) {
+          let lifecycleState = initialLifecycleGuardState;
+
+          for (const event of events) {
+            lifecycleState = yield* applyLifecycleTransition(lifecycleState, event);
+          }
+
+          const maxSequence = events.reduce(
+            (currentMax, event) => (event.sequence > currentMax ? event.sequence : currentMax),
+            0,
+          );
+
+          const lifecycleStateRef = yield* Ref.make(lifecycleState);
+          const sequenceRef = yield* Ref.make(maxSequence);
+
+          yield* Effect.catchTag(
+            appendTier1Event(lifecycleStateRef, sequenceRef, runStore, runId, (sequence, timestamp) => ({
+              ...makeEventEnvelope(runId, sequence, timestamp),
+              type: "run:cancelled",
+              payload: {
+                reason,
+              },
+            })),
+            "LifecycleInvariantError",
+            () => Effect.void,
+          );
+        }
+
+        const cancelledAt = yield* toIsoTimestamp;
+        const cancelledRun = yield* Effect.catchTag(
+          runStore.setStatus(runId, "cancelled", cancelledAt),
+          "LifecycleInvariantError",
+          () => runStore.getRun(runId),
+        );
+
+        return {
+          run: cancelledRun,
+          alreadyTerminal: false,
+        } satisfies CancelResult;
+      }),
   };
 };

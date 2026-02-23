@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import { decodeMillEventJsonSync, type MillEvent } from "../domain/event.schema";
 import { decodeRunIdSync } from "../domain/run.schema";
 import { runWithBunContext } from "../public/test-runtime.api";
@@ -305,6 +305,218 @@ describe("MillEngine sync lifecycle", () => {
         _tag: "WaitTimeoutError",
         runId,
       });
+    } finally {
+      await rm(runsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("inspect returns decoded persisted run and spawn views", async () => {
+    const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-inspect-"));
+    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+
+    const engine = makeMillEngine({
+      runsDirectory,
+      defaultModel: "openai/gpt-5.3-codex",
+      driverName: "default",
+      executorName: "direct",
+      driver: testDriver,
+      extensions: [],
+    });
+
+    try {
+      await runWithBunContext(
+        engine.runSync({
+          runId,
+          programPath: "/tmp/program.ts",
+          executeProgram: (spawn) =>
+            Effect.flatMap(
+              spawn({
+                agent: "scout",
+                systemPrompt: "You are concise.",
+                prompt: "Inspect this run",
+              }),
+              () => Effect.void,
+            ),
+        }),
+      );
+
+      const inspectedRun = await runWithBunContext(engine.inspect({ runId }));
+      expect(inspectedRun.kind).toBe("run");
+
+      if (inspectedRun.kind === "run") {
+        expect(inspectedRun.run.id).toBe(runId);
+        expect(inspectedRun.events.length).toBeGreaterThan(0);
+      }
+
+      const spawnStart = inspectedRun.events.find((event) => event.type === "spawn:start");
+      expect(spawnStart).toBeDefined();
+
+      if (spawnStart === undefined || spawnStart.type !== "spawn:start") {
+        return;
+      }
+
+      const inspectedSpawn = await runWithBunContext(
+        engine.inspect({ runId, spawnId: spawnStart.payload.spawnId }),
+      );
+
+      expect(inspectedSpawn.kind).toBe("spawn");
+
+      if (inspectedSpawn.kind === "spawn") {
+        expect(inspectedSpawn.spawnId).toBe(spawnStart.payload.spawnId);
+        expect(inspectedSpawn.result?.sessionRef).toBe("session/scout");
+      }
+    } finally {
+      await rm(runsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("watch and watchRaw surface tier-1 persisted events and tier-2 raw passthrough", async () => {
+    const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-watch-"));
+    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+
+    const driverWithRaw: DriverRuntime = {
+      name: "test-driver-raw",
+      spawn: (input) =>
+        Effect.succeed({
+          raw: [
+            JSON.stringify({ type: "milestone", message: `raw:${input.agent}` }),
+            JSON.stringify({ type: "final", sessionRef: `session/${input.agent}` }),
+          ],
+          events: [
+            {
+              type: "milestone",
+              message: `spawned:${input.agent}`,
+            },
+          ],
+          result: {
+            text: `driver:${input.prompt}`,
+            sessionRef: `session/${input.agent}`,
+            agent: input.agent,
+            model: input.model,
+            driver: "test-driver-raw",
+            exitCode: 0,
+          },
+        }),
+    };
+
+    const engine = makeMillEngine({
+      runsDirectory,
+      defaultModel: "openai/gpt-5.3-codex",
+      driverName: "default",
+      executorName: "direct",
+      driver: driverWithRaw,
+      extensions: [],
+    });
+
+    try {
+      await runWithBunContext(
+        engine.submit({
+          runId,
+          programPath: "/tmp/program.ts",
+        }),
+      );
+
+      const watchTier1Effect = Effect.scoped(
+        Stream.runCollect(
+          Stream.takeUntil(engine.watch(runId), (event) =>
+            event.type === "run:complete" ||
+            event.type === "run:failed" ||
+            event.type === "run:cancelled",
+          ),
+        ),
+      );
+
+      const watchRawEffect = Effect.scoped(Stream.runCollect(Stream.take(engine.watchRaw(runId), 2)));
+
+      const executionEffect = engine.runSync({
+        runId,
+        programPath: "/tmp/program.ts",
+        executeProgram: (spawn) =>
+          Effect.flatMap(
+            spawn({
+              agent: "scout",
+              systemPrompt: "You are concise.",
+              prompt: "watch this run",
+            }),
+            () => Effect.void,
+          ),
+      });
+
+      const [tier1EventsChunk, rawEventsChunk] = await runWithBunContext(
+        Effect.map(
+          Effect.all([watchTier1Effect, watchRawEffect, executionEffect], {
+            concurrency: "unbounded",
+          }),
+          ([tier1Events, rawEvents]) => [tier1Events, rawEvents] as const,
+        ),
+      );
+
+      const tier1Events = [...tier1EventsChunk];
+      const rawEvents = [...rawEventsChunk];
+
+      expect(tier1Events.some((event) => event.type === "run:start")).toBe(true);
+      expect(tier1Events.some((event) => event.type === "run:complete")).toBe(true);
+      expect(rawEvents).toHaveLength(2);
+      expect(rawEvents[0]).toContain("raw:scout");
+
+      const eventsFile = await readFile(join(runsDirectory, runId, "events.ndjson"), "utf-8");
+      expect(eventsFile.includes("\"type\":\"final\"")).toBe(false);
+    } finally {
+      await rm(runsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("cancel is idempotent and appends at most one run:cancelled terminal event", async () => {
+    const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-cancel-"));
+    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+
+    const store = makeRunStore({ runsDirectory });
+    const engine = makeMillEngine({
+      runsDirectory,
+      defaultModel: "openai/gpt-5.3-codex",
+      driverName: "default",
+      executorName: "direct",
+      driver: testDriver,
+      extensions: [],
+    });
+
+    try {
+      await runWithBunContext(
+        store.create({
+          runId,
+          programPath: "/tmp/program.ts",
+          driver: "default",
+          executor: "direct",
+          status: "running",
+          timestamp: "2026-02-23T20:00:00.000Z",
+        }),
+      );
+
+      await runWithBunContext(
+        store.appendEvent(runId, {
+          schemaVersion: 1,
+          runId,
+          sequence: 1,
+          timestamp: "2026-02-23T20:00:00.000Z",
+          type: "run:start",
+          payload: {
+            programPath: "/tmp/program.ts",
+          },
+        }),
+      );
+
+      await runWithBunContext(engine.cancel(runId));
+      await runWithBunContext(engine.cancel(runId));
+
+      const run = await runWithBunContext(engine.status(runId));
+      expect(run.status).toBe("cancelled");
+
+      const events = await runWithBunContext(store.readEvents(runId));
+      const cancelledCount = events.filter((event) => event.type === "run:cancelled").length;
+      const terminalCount = events.filter((event) => runTerminalTypes.has(event.type)).length;
+
+      expect(cancelledCount).toBe(1);
+      expect(terminalCount).toBe(1);
     } finally {
       await rm(runsDirectory, { recursive: true, force: true });
     }

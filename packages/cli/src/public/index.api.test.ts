@@ -91,6 +91,62 @@ const StatusEnvelope = Schema.parseJson(
   }),
 );
 
+const InspectRunEnvelope = Schema.parseJson(
+  Schema.Struct({
+    kind: Schema.Literal("run"),
+    run: Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+    }),
+    events: Schema.Array(
+      Schema.Struct({
+        type: Schema.String,
+        sequence: Schema.Number,
+      }),
+    ),
+  }),
+);
+
+const InspectSpawnEnvelope = Schema.parseJson(
+  Schema.Struct({
+    kind: Schema.Literal("spawn"),
+    runId: Schema.String,
+    spawnId: Schema.String,
+    result: Schema.optional(
+      Schema.Struct({
+        sessionRef: Schema.String,
+      }),
+    ),
+  }),
+);
+
+const SessionEnvelope = Schema.parseJson(
+  Schema.Struct({
+    runId: Schema.String,
+    spawnId: Schema.String,
+    sessionRef: Schema.String,
+    pointer: Schema.String,
+    driver: Schema.String,
+  }),
+);
+
+const CancelEnvelope = Schema.parseJson(
+  Schema.Struct({
+    runId: Schema.String,
+    status: Schema.String,
+    alreadyTerminal: Schema.Boolean,
+  }),
+);
+
+const ListEnvelope = Schema.parseJson(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+    }),
+  ),
+);
+
 const WaitTimeoutEnvelope = Schema.parseJson(
   Schema.Struct({
     ok: Schema.Literal(false),
@@ -481,6 +537,325 @@ describe("runCli", () => {
       expect(waitHumanStderr).toHaveLength(0);
       expect(waitHumanStdout[0]).toContain(`run ${runPayload.run.id}`);
       expect(waitHumanStdout[0]).toContain("status=complete");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("supports watch/inspect/session/ls JSON contracts for completed runs", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-inspect-watch-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runCode = await runCli(["run", programPath, "--sync", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(runCode).toBe(0);
+      const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
+
+      const watchStdout: Array<string> = [];
+      const watchCode = await runCli(["watch", runPayload.run.id, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            watchStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(watchCode).toBe(0);
+      expect(watchStdout.length).toBeGreaterThan(0);
+
+      for (const line of watchStdout) {
+        const parsed = JSON.parse(line) as { readonly type?: string; readonly runId?: string };
+        expect(parsed.runId).toBe(runPayload.run.id);
+        expect(typeof parsed.type).toBe("string");
+      }
+
+      const inspectRunStdout: Array<string> = [];
+      const inspectRunCode = await runCli(["inspect", runPayload.run.id, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            inspectRunStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(inspectRunCode).toBe(0);
+      const inspectedRun = Schema.decodeUnknownSync(InspectRunEnvelope)(inspectRunStdout[0]);
+      expect(inspectedRun.run.id).toBe(runPayload.run.id);
+      expect(inspectedRun.events.length).toBeGreaterThan(0);
+
+      const inspectSpawnStdout: Array<string> = [];
+      const inspectSpawnCode = await runCli(["inspect", `${runPayload.run.id}.spawn_1`, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            inspectSpawnStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(inspectSpawnCode).toBe(0);
+      const inspectedSpawn = Schema.decodeUnknownSync(InspectSpawnEnvelope)(inspectSpawnStdout[0]);
+      expect(inspectedSpawn.spawnId).toBe("spawn_1");
+      expect(inspectedSpawn.result?.sessionRef.length).toBeGreaterThan(0);
+
+      const inspectSessionStdout: Array<string> = [];
+      const inspectSessionCode = await runCli(
+        ["inspect", `${runPayload.run.id}.spawn_1`, "--session", "--json"],
+        {
+          cwd: tempDirectory,
+          homeDirectory,
+          pathExists: async () => false,
+          io: {
+            stdout: (line) => {
+              inspectSessionStdout.push(line);
+            },
+            stderr: () => undefined,
+          },
+        },
+      );
+
+      expect(inspectSessionCode).toBe(0);
+      const sessionPayload = Schema.decodeUnknownSync(SessionEnvelope)(inspectSessionStdout[0]);
+      expect(sessionPayload.runId).toBe(runPayload.run.id);
+      expect(sessionPayload.spawnId).toBe("spawn_1");
+      expect(sessionPayload.pointer.length).toBeGreaterThan(0);
+
+      const listStdout: Array<string> = [];
+      const listCode = await runCli(["ls", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            listStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(listCode).toBe(0);
+      const listPayload = Schema.decodeUnknownSync(ListEnvelope)(listStdout[0]);
+      expect(listPayload.some((run) => run.id === runPayload.run.id)).toBe(true);
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("cancel is idempotent and preserves terminal invariants", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-cancel-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "await new Promise((resolve) => setTimeout(resolve, 400));",
+        "return 'done';",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runCode = await runCli(["run", programPath, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(runCode).toBe(0);
+      const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
+
+      const cancelStdout1: Array<string> = [];
+      const cancelCode1 = await runCli(["cancel", submittedRun.runId, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            cancelStdout1.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(cancelCode1).toBe(0);
+      const firstCancel = Schema.decodeUnknownSync(CancelEnvelope)(cancelStdout1[0]);
+      expect(firstCancel.runId).toBe(submittedRun.runId);
+      expect(firstCancel.status).toBe("cancelled");
+
+      const cancelStdout2: Array<string> = [];
+      const cancelCode2 = await runCli(["cancel", submittedRun.runId, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            cancelStdout2.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(cancelCode2).toBe(0);
+      const secondCancel = Schema.decodeUnknownSync(CancelEnvelope)(cancelStdout2[0]);
+      expect(secondCancel.runId).toBe(submittedRun.runId);
+
+      const inspectStdout: Array<string> = [];
+      const inspectCode = await runCli(["inspect", submittedRun.runId, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            inspectStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(inspectCode).toBe(0);
+      const inspectedRun = Schema.decodeUnknownSync(InspectRunEnvelope)(inspectStdout[0]);
+      const terminalEvents = inspectedRun.events.filter(
+        (event) =>
+          event.type === "run:complete" ||
+          event.type === "run:failed" ||
+          event.type === "run:cancelled",
+      );
+
+      expect(terminalEvents).toHaveLength(1);
+      expect(terminalEvents[0]?.type).toBe("run:cancelled");
+
+      await new Promise((resolve) => setTimeout(resolve, 450));
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("watch --raw streams tier-2 passthrough without persistence", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-watch-raw-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runCode = await runCli(["run", programPath, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        launchWorker: async (input) => {
+          const workerArgs = [
+            "_worker",
+            "--run-id",
+            input.runId,
+            "--program",
+            input.programPath,
+            "--runs-dir",
+            input.runsDirectory,
+            "--driver",
+            input.driverName,
+            "--executor",
+            input.executorName,
+          ];
+
+          setTimeout(() => {
+            void runCli(workerArgs, {
+              cwd: input.cwd,
+              homeDirectory,
+              pathExists: async () => false,
+              io: {
+                stdout: () => undefined,
+                stderr: () => undefined,
+              },
+            });
+          }, 25);
+        },
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(runCode).toBe(0);
+      const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
+
+      const watchStdout: Array<string> = [];
+      const watchCode = await runCli(["watch", submittedRun.runId, "--raw"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            watchStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(watchCode).toBe(0);
+      expect(watchStdout.length).toBeGreaterThan(0);
+      expect(watchStdout.some((line) => line.includes('"type":"final"'))).toBe(true);
+
+      const eventsContent = await readFile(submittedRun.paths.eventsFile, "utf-8");
+      expect(eventsContent.includes('"type":"final"')).toBe(false);
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

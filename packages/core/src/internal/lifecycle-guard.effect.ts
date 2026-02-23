@@ -128,6 +128,10 @@ export const ensureRunStatusTransition = (
     return Effect.void;
   }
 
+  if (current === "pending" && next === "cancelled") {
+    return Effect.void;
+  }
+
   if (current === "running" && (next === "running" || isTerminalStatus(next))) {
     return Effect.void;
   }

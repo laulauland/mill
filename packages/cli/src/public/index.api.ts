@@ -3,14 +3,18 @@ import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Runtime, Scope } from "effect";
 import {
+  cancelRun,
   createDiscoveryPayload,
   defineConfig,
   getRunStatus,
+  inspectRun,
+  listRuns,
   processDriver,
   runProgramSync,
   runWorker,
   submitRun,
   waitForRun,
+  watchRun,
   type ConfigOverrides,
   type LaunchWorkerInput,
 } from "@mill/core";
@@ -29,6 +33,7 @@ interface RunCliOptions {
   readonly runsDirectory?: string;
   readonly pathExists?: (path: string) => Promise<boolean>;
   readonly loadConfigOverrides?: (path: string) => Promise<ConfigOverrides>;
+  readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
   readonly io?: CliIo;
 }
 
@@ -128,9 +133,9 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
     input.executorName,
   ).pipe(
     Command.workingDirectory(input.cwd),
-    Command.stdin("inherit"),
-    Command.stdout("inherit"),
-    Command.stderr("inherit"),
+    Command.stdin("ignore"),
+    Command.stdout("ignore"),
+    Command.stderr("ignore"),
   );
 
   await runWithBunContext(
@@ -164,7 +169,7 @@ const runCommand = async (
     executorName: readFlagValue(argv, "--executor"),
     pathExists: options.pathExists,
     loadConfigOverrides: options.loadConfigOverrides,
-    launchWorker: launchDetachedWorker,
+    launchWorker: options.launchWorker ?? launchDetachedWorker,
   } as const;
 
   if (argv.includes("--sync")) {
@@ -401,6 +406,138 @@ const waitCommand = async (
   return 1;
 };
 
+const watchCommand = async (
+  argv: ReadonlyArray<string>,
+  options: RunCliOptions,
+  io: CliIo,
+): Promise<number> => {
+  const runId = argv[0];
+
+  if (runId === undefined) {
+    io.stderr("Usage: mill watch <runId> [--json] [--raw]");
+    return 1;
+  }
+
+  await watchRun({
+    defaults: defaultConfig,
+    runId,
+    raw: argv.includes("--raw"),
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
+    driverName: readFlagValue(argv, "--driver"),
+    pathExists: options.pathExists,
+    loadConfigOverrides: options.loadConfigOverrides,
+    onEvent: (line) => {
+      io.stdout(line);
+    },
+  });
+
+  return 0;
+};
+
+const inspectCommand = async (
+  argv: ReadonlyArray<string>,
+  options: RunCliOptions,
+  io: CliIo,
+): Promise<number> => {
+  const ref = argv[0];
+
+  if (ref === undefined) {
+    io.stderr("Usage: mill inspect <runId>[.<spawnId>] [--json] [--session]");
+    return 1;
+  }
+
+  const inspected = await inspectRun({
+    defaults: defaultConfig,
+    ref,
+    session: argv.includes("--session"),
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
+    driverName: readFlagValue(argv, "--driver"),
+    pathExists: options.pathExists,
+    loadConfigOverrides: options.loadConfigOverrides,
+  });
+
+  if (argv.includes("--json")) {
+    io.stdout(JSON.stringify(inspected));
+    return 0;
+  }
+
+  io.stdout(JSON.stringify(inspected, null, 2));
+  return 0;
+};
+
+const cancelCommand = async (
+  argv: ReadonlyArray<string>,
+  options: RunCliOptions,
+  io: CliIo,
+): Promise<number> => {
+  const runId = argv[0];
+
+  if (runId === undefined) {
+    io.stderr("Usage: mill cancel <runId> [--json]");
+    return 1;
+  }
+
+  const cancelled = await cancelRun({
+    defaults: defaultConfig,
+    runId,
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
+    driverName: readFlagValue(argv, "--driver"),
+    pathExists: options.pathExists,
+    loadConfigOverrides: options.loadConfigOverrides,
+  });
+
+  if (argv.includes("--json")) {
+    io.stdout(JSON.stringify(cancelled));
+    return 0;
+  }
+
+  io.stdout(`run ${cancelled.runId} status=${cancelled.status}`);
+  return 0;
+};
+
+const lsCommand = async (
+  argv: ReadonlyArray<string>,
+  options: RunCliOptions,
+  io: CliIo,
+): Promise<number> => {
+  const statusFilter = readFlagValue(argv, "--status") as
+    | "pending"
+    | "running"
+    | "complete"
+    | "failed"
+    | "cancelled"
+    | undefined;
+  const runs = await listRuns({
+    defaults: defaultConfig,
+    status: statusFilter,
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
+    driverName: readFlagValue(argv, "--driver"),
+    pathExists: options.pathExists,
+    loadConfigOverrides: options.loadConfigOverrides,
+  });
+
+  if (argv.includes("--json")) {
+    io.stdout(JSON.stringify(runs));
+    return 0;
+  }
+
+  if (runs.length === 0) {
+    io.stdout("No runs found.");
+    return 0;
+  }
+
+  io.stdout(runs.map((run) => `${run.id}\t${run.status}\t${run.updatedAt}`).join("\n"));
+  return 0;
+};
+
 export const runCli = async (
   argv: ReadonlyArray<string>,
   options?: RunCliOptions,
@@ -450,6 +587,22 @@ export const runCli = async (
 
   if (argv[0] === "wait") {
     return waitCommand(argv.slice(1), options ?? {}, io);
+  }
+
+  if (argv[0] === "watch") {
+    return watchCommand(argv.slice(1), options ?? {}, io);
+  }
+
+  if (argv[0] === "inspect") {
+    return inspectCommand(argv.slice(1), options ?? {}, io);
+  }
+
+  if (argv[0] === "cancel") {
+    return cancelCommand(argv.slice(1), options ?? {}, io);
+  }
+
+  if (argv[0] === "ls") {
+    return lsCommand(argv.slice(1), options ?? {}, io);
   }
 
   if (argv[0] === "init") {
