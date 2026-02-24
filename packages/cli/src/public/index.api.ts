@@ -1,4 +1,4 @@
-import { Args, Command as CliCommand, Options, ValidationError } from "@effect/cli";
+import { Args, CliConfig, Command as CliCommand, Options, ValidationError } from "@effect/cli";
 import * as PlatformCommand from "@effect/platform/Command";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
@@ -64,7 +64,7 @@ const createDirectExecutor = () => ({
 const defaultConfig = defineConfig({
   defaultDriver: "pi",
   defaultExecutor: "direct",
-  defaultModel: "openai/gpt-5.3-codex",
+  defaultModel: "openai-codex/gpt-5.3-codex",
   drivers: {
     pi: processDriver(createPiDriverRegistration()),
     claude: processDriver(createClaudeDriverRegistration()),
@@ -241,7 +241,7 @@ const INIT_CONFIG_TEMPLATE = [
   "export default defineConfig({",
   '  defaultDriver: "pi",',
   '  defaultExecutor: "direct",',
-  '  defaultModel: "openai/gpt-5.3-codex",',
+  '  defaultModel: "openai-codex/gpt-5.3-codex",',
   "  drivers: {",
   "    pi: processDriver(createPiDriverRegistration()),",
   "    claude: processDriver(createClaudeDriverRegistration()),",
@@ -685,12 +685,68 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   );
 };
 
+const HELP_TEXT = `mill - orchestration runtime for AI agents
+
+Usage: mill <command> [options]
+
+Commands:
+  run <program.ts>              Run a mill program
+  status <runId>                Show run state
+  wait <runId> --timeout <s>    Wait for terminal state
+  watch <runId>                 Stream run events
+  inspect <ref>                 Inspect run or spawn detail
+  cancel <runId>                Cancel a running execution
+  ls                            List runs
+  init                          Create starter mill.config.ts
+  discovery                     Emit discovery metadata
+
+Global options: --json, --driver <name>, --runs-dir <path>
+
+Examples:
+
+  Sequential pipeline:
+    const scan = await mill.spawn({
+      agent: "scout",
+      systemPrompt: "You are a code risk analyst.",
+      prompt: "Review src/auth and summarize top security risks.",
+    });
+    const plan = await mill.spawn({
+      agent: "planner",
+      systemPrompt: "You turn findings into an execution-ready plan.",
+      prompt: \`Create remediation steps from:\\n\\n\${scan.text}\`,
+    });
+
+  Parallel fan-out:
+    const [security, perf] = await Promise.all([
+      mill.spawn({ agent: "security", systemPrompt: "...", prompt: "Review src/auth/" }),
+      mill.spawn({ agent: "perf", systemPrompt: "...", prompt: "Profile src/api/" }),
+    ]);
+
+Authoring:
+  systemPrompt = WHO the agent is (personality, methodology, output format)
+  prompt       = WHAT to do now (specific files, concrete task)
+  Prefer cheaper models for search, stronger models for synthesis.
+
+Run mill <command> --help for details.`;
+
+const isHelpRequest = (argv: ReadonlyArray<string>): boolean => {
+  if (argv.length === 0) return true;
+
+  return argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
+};
+
 export const runCli = async (
   argv: ReadonlyArray<string>,
   options?: RunCliOptions,
 ): Promise<number> => {
   const resolvedOptions = options ?? {};
   const io = resolvedOptions.io ?? defaultIo;
+
+  if (isHelpRequest(argv)) {
+    io.stdout(HELP_TEXT);
+    return 0;
+  }
+
   const command = createCli(resolvedOptions, io);
   const run = CliCommand.run(command, {
     name: "mill",
@@ -710,5 +766,7 @@ export const runCli = async (
     ),
   );
 
-  return runWithBunContext(codeEffect);
+  const compactHelp = CliConfig.layer({ showBuiltIns: false, showTypes: false });
+
+  return runWithBunContext(Effect.provide(codeEffect, compactHelp));
 };

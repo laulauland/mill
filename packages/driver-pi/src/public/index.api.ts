@@ -1,26 +1,63 @@
+import * as Command from "@effect/platform/Command";
+import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect } from "effect";
 import type { DriverCodec, DriverProcessConfig, DriverRegistration } from "@mill/core";
+import { decodePiModelCatalogOutput } from "../pi.codec";
 import { makePiProcessDriver } from "../process-driver.effect";
-
-const PI_MODELS: ReadonlyArray<string> = ["openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-6"];
-
-const DEFAULT_PI_PROCESS_SCRIPT =
-  "const input=JSON.parse(process.argv[1]);" +
-  "console.log(JSON.stringify({type:'milestone',message:'spawn:'+input.agent}));" +
-  "console.log(JSON.stringify({type:'final',text:'pi:'+input.prompt,sessionRef:'session/'+input.agent,agent:input.agent,model:input.model,exitCode:0,stopReason:'complete'}));";
 
 export interface CreatePiDriverRegistrationInput {
   readonly process?: DriverProcessConfig;
+  readonly models?: ReadonlyArray<string>;
 }
 
-export const createPiCodec = (): DriverCodec => ({
-  modelCatalog: Effect.succeed(PI_MODELS),
-});
+const defaultModelCatalog = (
+  process: DriverProcessConfig,
+): Effect.Effect<ReadonlyArray<string>, never> => {
+  if (process.command !== "pi") {
+    return Effect.succeed([]);
+  }
+
+  const listModelsEffect = Effect.provide(
+    Command.string(Command.make(process.command, "--list-models")),
+    BunContext.layer,
+  );
+
+  return Effect.catchAll(
+    Effect.flatMap(listModelsEffect, decodePiModelCatalogOutput),
+    () => Effect.succeed([]),
+  );
+};
+
+export const createPiCodec = (input?: {
+  readonly process?: DriverProcessConfig;
+  readonly models?: ReadonlyArray<string>;
+}): DriverCodec => {
+  if (input?.models !== undefined) {
+    return {
+      modelCatalog: Effect.succeed(input.models),
+    };
+  }
+
+  const process = input?.process ?? createPiDriverConfig();
+
+  return {
+    modelCatalog: defaultModelCatalog(process),
+  };
+};
 
 export const createPiDriverConfig = (): DriverProcessConfig => ({
-  command: "bun",
-  args: ["-e", DEFAULT_PI_PROCESS_SCRIPT],
-  env: {},
+  command: "pi",
+  args: [
+    "--mode",
+    "json",
+    "--print",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+  ],
+  env: undefined,
 });
 
 export const createPiDriverRegistration = (
@@ -29,10 +66,13 @@ export const createPiDriverRegistration = (
   const process = input?.process ?? createPiDriverConfig();
 
   return {
-    description: "Local process driver",
+    description: "PI process driver",
     modelFormat: "provider/model-id",
     process,
-    codec: createPiCodec(),
+    codec: createPiCodec({
+      process,
+      models: input?.models,
+    }),
     runtime: makePiProcessDriver(process),
   };
 };

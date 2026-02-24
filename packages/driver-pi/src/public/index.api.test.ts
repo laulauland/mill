@@ -5,25 +5,42 @@ import { createPiDriverRegistration } from "./index.api";
 
 const runtime = Runtime.defaultRuntime;
 
+const PI_JSON_FIXTURE_SCRIPT =
+  "const args=process.argv.slice(1);" +
+  "const modelIndex=args.indexOf('--model');" +
+  "const model=modelIndex>=0?args[modelIndex+1]:'openai/gpt-5.3-codex';" +
+  "const prompt=args[args.length-1]??'';" +
+  "console.log(JSON.stringify({type:'session',id:'session-test'}));" +
+  "console.log(JSON.stringify({type:'agent_start'}));" +
+  "console.log(JSON.stringify({type:'tool_execution_start',toolName:'bash'}));" +
+  "console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'fixture:'+prompt}],model,stopReason:'stop'}}));" +
+  "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'fixture:'+prompt}],model,stopReason:'stop'}]}));";
+
 const DUPLICATE_TERMINAL_SCRIPT =
-  "const input=JSON.parse(process.argv[1]);" +
-  "console.log(JSON.stringify({type:'milestone',message:'spawn:'+input.agent}));" +
-  "console.log(JSON.stringify({type:'final',text:'ok',sessionRef:'session/'+input.agent,agent:input.agent,model:input.model,exitCode:0}));" +
-  "console.log(JSON.stringify({type:'final',text:'duplicate',sessionRef:'session/'+input.agent,agent:input.agent,model:input.model,exitCode:0}));";
+  "console.log(JSON.stringify({type:'agent_end',messages:[]}));" +
+  "console.log(JSON.stringify({type:'agent_end',messages:[]}));";
 
 describe("createPiDriverRegistration", () => {
-  it("exposes catalog-backed model discovery via codec", async () => {
-    const driver = createPiDriverRegistration();
+  it("supports explicit model catalog overrides via codec", async () => {
+    const driver = createPiDriverRegistration({
+      models: ["openai/gpt-5.3-codex"],
+    });
 
     const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
 
-    expect(models).toEqual(["openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-6"]);
+    expect(models).toEqual(["openai/gpt-5.3-codex"]);
     expect(driver.process.command.length).toBeGreaterThan(0);
     expect(driver.process.args.length).toBeGreaterThan(0);
   });
 
-  it("spawns process-backed runs and decodes structured result payload", async () => {
-    const driver = createPiDriverRegistration();
+  it("spawns process-backed runs and decodes structured pi JSON output", async () => {
+    const driver = createPiDriverRegistration({
+      process: {
+        command: "bun",
+        args: ["-e", PI_JSON_FIXTURE_SCRIPT],
+      },
+      models: ["openai/gpt-5.3-codex"],
+    });
 
     expect(driver.runtime).toBeDefined();
 
@@ -45,15 +62,18 @@ describe("createPiDriverRegistration", () => {
       ),
     );
 
-    expect(output.events.length).toBeGreaterThan(0);
-    expect(output.result.sessionRef.length).toBeGreaterThan(0);
+    expect(output.events.some((event) => event.type === "tool_call")).toBe(true);
+    expect(output.result.sessionRef).toBe("session-test");
     expect(output.result.agent).toBe("scout");
     expect(output.result.model).toBe("openai/gpt-5.3-codex");
+    expect(output.result.text).toBe("fixture:Say hello");
     expect(output.result.exitCode).toBe(0);
   });
 
   it("resolves session pointers for inspect --session bridge", async () => {
-    const driver = createPiDriverRegistration();
+    const driver = createPiDriverRegistration({
+      models: ["openai/gpt-5.3-codex"],
+    });
 
     expect(driver.runtime).toBeDefined();
 
@@ -85,6 +105,7 @@ describe("createPiDriverRegistration", () => {
         command: "bun",
         args: ["-e", DUPLICATE_TERMINAL_SCRIPT],
       },
+      models: ["openai/gpt-5.3-codex"],
     });
 
     expect(driver.runtime).toBeDefined();

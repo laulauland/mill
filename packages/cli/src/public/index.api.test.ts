@@ -197,12 +197,10 @@ describe("runCli", () => {
 
     const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(stdout[0]);
     expect(payload.discoveryVersion).toBe(1);
-    expect(payload.drivers.pi?.models).toEqual([
-      "openai/gpt-5.3-codex",
-      "anthropic/claude-sonnet-4-6",
-    ]);
+    expect((payload.drivers.pi?.models.length ?? 0) > 0).toBe(true);
+    expect(Array.isArray(payload.drivers.claude?.models)).toBe(true);
+    expect(Array.isArray(payload.drivers.codex?.models)).toBe(true);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
     expect(payload.executors.direct?.description).toBe("Local direct executor");
     expect(payload.executors.vm).toBeUndefined();
   });
@@ -306,11 +304,18 @@ describe("runCli", () => {
     try {
       const runStdout: Array<string> = [];
       const runCode = await runCli(
-        ["run", programPath, "--sync", "--json", "--driver", "codex", "--executor", "direct"],
+        ["run", programPath, "--sync", "--json", "--driver", "pi", "--executor", "direct"],
         {
           cwd: tempDirectory,
           homeDirectory,
-          pathExists: async () => false,
+          pathExists: async (path) => path === join(tempDirectory, "mill.config.ts"),
+          loadConfigModule: async () => ({
+            default: {
+              defaultDriver: "claude",
+              defaultExecutor: "direct",
+              defaultModel: "google-gemini-cli/gemini-2.0-flash",
+            },
+          }),
           io: {
             stdout: (line) => {
               runStdout.push(line);
@@ -323,9 +328,9 @@ describe("runCli", () => {
       expect(runCode).toBe(0);
 
       const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
-      expect(payload.run.driver).toBe("codex");
+      expect(payload.run.driver).toBe("pi");
       expect(payload.run.executor).toBe("direct");
-      expect(payload.result.spawns[0]?.driver).toBe("codex");
+      expect(payload.result.spawns[0]?.driver).toBe("pi");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

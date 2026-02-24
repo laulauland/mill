@@ -1,20 +1,22 @@
 import { Effect } from "effect";
 import type { DriverCodec, DriverProcessConfig, DriverRegistration } from "@mill/core";
-
-const CODEX_MODELS: ReadonlyArray<string> = ["openai/gpt-5.3-codex"];
+import { makeCodexProcessDriver } from "../process-driver.effect";
 
 export interface CreateCodexDriverRegistrationInput {
   readonly process?: DriverProcessConfig;
+  readonly models?: ReadonlyArray<string>;
 }
 
-export const createCodexCodec = (): DriverCodec => ({
-  modelCatalog: Effect.succeed(CODEX_MODELS),
+export const createCodexCodec = (input?: {
+  readonly models?: ReadonlyArray<string>;
+}): DriverCodec => ({
+  modelCatalog: Effect.succeed(input?.models ?? []),
 });
 
 export const createCodexDriverConfig = (): DriverProcessConfig => ({
   command: "codex",
-  args: [],
-  env: {},
+  args: ["exec", "--json", "--skip-git-repo-check"],
+  env: undefined,
 });
 
 export const createCodexDriverRegistration = (
@@ -26,27 +28,9 @@ export const createCodexDriverRegistration = (
     description: "Codex process driver",
     modelFormat: "provider/model-id",
     process,
-    codec: createCodexCodec(),
-    runtime: {
-      name: "codex",
-      spawn: (spawnInput) =>
-        Effect.succeed({
-          events: [
-            {
-              type: "milestone",
-              message: `codex:${spawnInput.agent}`,
-            },
-          ],
-          result: {
-            text: `codex:${spawnInput.prompt}`,
-            sessionRef: `session/codex/${spawnInput.agent}`,
-            agent: spawnInput.agent,
-            model: spawnInput.model,
-            driver: "codex",
-            exitCode: 0,
-            stopReason: "complete",
-          },
-        }),
-    },
+    codec: createCodexCodec({
+      models: input?.models,
+    }),
+    runtime: makeCodexProcessDriver(process),
   };
 };

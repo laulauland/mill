@@ -5,9 +5,16 @@ import { createClaudeDriverRegistration } from "./index.api";
 
 const runtime = Runtime.defaultRuntime;
 
+const CLAUDE_JSON_FIXTURE_SCRIPT =
+  "console.log(JSON.stringify({type:'system',session_id:'claude-session'}));" +
+  "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash'},{type:'text',text:'Working...'}]}}));" +
+  "console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done',stop_reason:'stop',session_id:'claude-session'}));";
+
 describe("createClaudeDriverRegistration", () => {
-  it("exposes catalog-backed model discovery", async () => {
-    const driver = createClaudeDriverRegistration();
+  it("supports explicit model catalogs", async () => {
+    const driver = createClaudeDriverRegistration({
+      models: ["anthropic/claude-sonnet-4-6"],
+    });
     const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
 
     expect(models).toEqual(["anthropic/claude-sonnet-4-6"]);
@@ -15,7 +22,13 @@ describe("createClaudeDriverRegistration", () => {
   });
 
   it("spawns runtime outputs via generic driver contracts", async () => {
-    const driver = createClaudeDriverRegistration();
+    const driver = createClaudeDriverRegistration({
+      process: {
+        command: "bun",
+        args: ["-e", CLAUDE_JSON_FIXTURE_SCRIPT],
+      },
+      models: ["anthropic/claude-sonnet-4-6"],
+    });
 
     if (driver.runtime === undefined) {
       return;
@@ -36,6 +49,7 @@ describe("createClaudeDriverRegistration", () => {
     );
 
     expect(output.result.driver).toBe("claude");
-    expect(output.result.sessionRef.length).toBeGreaterThan(0);
+    expect(output.result.sessionRef).toBe("claude-session");
+    expect(output.events.some((event) => event.type === "tool_call")).toBe(true);
   });
 });

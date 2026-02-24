@@ -1,20 +1,22 @@
 import { Effect } from "effect";
 import type { DriverCodec, DriverProcessConfig, DriverRegistration } from "@mill/core";
-
-const CLAUDE_MODELS: ReadonlyArray<string> = ["anthropic/claude-sonnet-4-6"];
+import { makeClaudeProcessDriver } from "../process-driver.effect";
 
 export interface CreateClaudeDriverRegistrationInput {
   readonly process?: DriverProcessConfig;
+  readonly models?: ReadonlyArray<string>;
 }
 
-export const createClaudeCodec = (): DriverCodec => ({
-  modelCatalog: Effect.succeed(CLAUDE_MODELS),
+export const createClaudeCodec = (input?: {
+  readonly models?: ReadonlyArray<string>;
+}): DriverCodec => ({
+  modelCatalog: Effect.succeed(input?.models ?? []),
 });
 
 export const createClaudeDriverConfig = (): DriverProcessConfig => ({
   command: "claude",
-  args: [],
-  env: {},
+  args: ["--print", "--verbose", "--output-format", "stream-json"],
+  env: undefined,
 });
 
 export const createClaudeDriverRegistration = (
@@ -26,27 +28,9 @@ export const createClaudeDriverRegistration = (
     description: "Claude process driver",
     modelFormat: "provider/model-id",
     process,
-    codec: createClaudeCodec(),
-    runtime: {
-      name: "claude",
-      spawn: (spawnInput) =>
-        Effect.succeed({
-          events: [
-            {
-              type: "milestone",
-              message: `claude:${spawnInput.agent}`,
-            },
-          ],
-          result: {
-            text: `claude:${spawnInput.prompt}`,
-            sessionRef: `session/claude/${spawnInput.agent}`,
-            agent: spawnInput.agent,
-            model: spawnInput.model,
-            driver: "claude",
-            exitCode: 0,
-            stopReason: "complete",
-          },
-        }),
-    },
+    codec: createClaudeCodec({
+      models: input?.models,
+    }),
+    runtime: makeClaudeProcessDriver(process),
   };
 };

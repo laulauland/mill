@@ -1,4 +1,3 @@
-import * as Schema from "@effect/schema/Schema";
 import { Data, Effect } from "effect";
 import type { DriverSpawnEvent, DriverSpawnOutput } from "@mill/core";
 
@@ -6,76 +5,83 @@ export class PiCodecError extends Data.TaggedError("PiCodecError")<{
   message: string;
 }> {}
 
-const PiMilestoneLine = Schema.Struct({
-  type: Schema.Literal("milestone"),
-  message: Schema.NonEmptyString,
-});
+type DecodePiProcessInput = {
+  readonly agent: string;
+  readonly model: string;
+  readonly spawnId: string;
+};
 
-type PiMilestoneLine = Schema.Schema.Type<typeof PiMilestoneLine>;
+type JsonRecord = Readonly<Record<string, unknown>>;
 
-const PiToolCallLine = Schema.Struct({
-  type: Schema.Literal("tool_call"),
-  toolName: Schema.NonEmptyString,
-});
+const isRecord = (value: unknown): value is JsonRecord =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
-type PiToolCallLine = Schema.Schema.Type<typeof PiToolCallLine>;
+const readString = (record: JsonRecord, key: string): string | undefined => {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+};
 
-const PiFinalLine = Schema.Struct({
-  type: Schema.Literal("final"),
-  text: Schema.String,
-  sessionRef: Schema.NonEmptyString,
-  agent: Schema.NonEmptyString,
-  model: Schema.NonEmptyString,
-  exitCode: Schema.Number,
-  stopReason: Schema.optional(Schema.String),
-  errorMessage: Schema.optional(Schema.String),
-});
+const extractTextFromContent = (content: unknown): string | undefined => {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
 
-type PiFinalLine = Schema.Schema.Type<typeof PiFinalLine>;
+  const textParts = content
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return undefined;
+      }
 
-const PiOutputLine = Schema.Union(PiMilestoneLine, PiToolCallLine, PiFinalLine);
+      if (readString(entry, "type") !== "text") {
+        return undefined;
+      }
 
-const decodeLine = Schema.decodeUnknown(Schema.parseJson(PiOutputLine));
+      return readString(entry, "text");
+    })
+    .filter((text): text is string => text !== undefined && text.length > 0);
 
-const toDriverEvent = (line: PiMilestoneLine | PiToolCallLine): DriverSpawnEvent => {
-  if (line.type === "milestone") {
-    return {
-      type: "milestone",
-      message: line.message,
-    };
+  if (textParts.length === 0) {
+    return undefined;
+  }
+
+  return textParts.join("\n");
+};
+
+const extractAssistantSummary = (message: unknown): { text?: string; stopReason?: string } => {
+  if (!isRecord(message)) {
+    return {};
   }
 
   return {
-    type: "tool_call",
-    toolName: line.toolName,
+    text: extractTextFromContent(message.content),
+    stopReason: readString(message, "stopReason"),
   };
 };
 
-const decodeFinalResult = (
-  finalLine: PiFinalLine | undefined,
-): Effect.Effect<DriverSpawnOutput["result"], PiCodecError> => {
-  if (finalLine === undefined) {
-    return Effect.fail(
-      new PiCodecError({
-        message: "Missing final output line from pi process",
-      }),
-    );
-  }
+const decodeJsonLine = (line: string): Effect.Effect<JsonRecord, PiCodecError> =>
+  Effect.flatMap(
+    Effect.try({
+      try: () => JSON.parse(line) as unknown,
+      catch: (error) =>
+        new PiCodecError({
+          message: String(error),
+        }),
+    }),
+    (parsed) =>
+      isRecord(parsed)
+        ? Effect.succeed(parsed)
+        : Effect.fail(
+            new PiCodecError({
+              message: "line must decode to a JSON object",
+            }),
+          ),
+  );
 
-  return Effect.succeed({
-    text: finalLine.text,
-    sessionRef: finalLine.sessionRef,
-    agent: finalLine.agent,
-    model: finalLine.model,
-    driver: "pi",
-    exitCode: finalLine.exitCode,
-    stopReason: finalLine.stopReason,
-    errorMessage: finalLine.errorMessage,
-  });
-};
+const isTerminalEvent = (eventType: string | undefined): boolean => eventType === "agent_end";
 
 export const decodePiProcessOutput = (
   output: string,
+  input: DecodePiProcessInput,
 ): Effect.Effect<DriverSpawnOutput, PiCodecError> =>
   Effect.gen(function* () {
     const lines = output
@@ -83,48 +89,179 @@ export const decodePiProcessOutput = (
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
-    const decodedLines = yield* Effect.forEach(lines, (line) =>
-      Effect.mapError(
-        decodeLine(line),
-        (error) =>
-          new PiCodecError({
-            message: String(error),
-          }),
-      ),
-    );
+    const decodedLines = yield* Effect.forEach(lines, decodeJsonLine);
 
-    let finalLine: PiFinalLine | undefined = undefined;
     const events: Array<DriverSpawnEvent> = [];
+    let sessionRef: string | undefined;
+    let responseText: string | undefined;
+    let stopReason: string | undefined;
+    let terminalSeen = false;
 
     for (const decoded of decodedLines) {
-      if (decoded.type === "final") {
-        if (finalLine !== undefined) {
-          return yield* Effect.fail(
-            new PiCodecError({
-              message: "Duplicate terminal final lines are not allowed.",
-            }),
-          );
-        }
+      const eventType = readString(decoded, "type");
 
-        finalLine = decoded;
-        continue;
-      }
-
-      if (finalLine !== undefined) {
+      if (terminalSeen && !isTerminalEvent(eventType)) {
         return yield* Effect.fail(
           new PiCodecError({
-            message: `Non-terminal line ${decoded.type} emitted after final terminal line.`,
+            message: `Non-terminal line ${eventType ?? "unknown"} emitted after terminal agent_end.`,
           }),
         );
       }
 
-      events.push(toDriverEvent(decoded));
+      if (isTerminalEvent(eventType)) {
+        if (terminalSeen) {
+          return yield* Effect.fail(
+            new PiCodecError({
+              message: "Duplicate terminal agent_end lines are not allowed.",
+            }),
+          );
+        }
+
+        terminalSeen = true;
+
+        const messages = decoded.messages;
+
+        if (Array.isArray(messages)) {
+          const assistantMessages = messages
+            .filter((entry): entry is JsonRecord => isRecord(entry))
+            .filter((entry) => readString(entry, "role") === "assistant");
+
+          const lastAssistantMessage = assistantMessages[assistantMessages.length - 1];
+          const assistantSummary = extractAssistantSummary(lastAssistantMessage);
+
+          if (assistantSummary.text !== undefined) {
+            responseText = assistantSummary.text;
+          }
+
+          if (assistantSummary.stopReason !== undefined) {
+            stopReason = assistantSummary.stopReason;
+          }
+        }
+
+        continue;
+      }
+
+      if (eventType === "session") {
+        const id = readString(decoded, "id");
+
+        if (id !== undefined) {
+          sessionRef = id;
+          events.push({
+            type: "milestone",
+            message: "session:start",
+          });
+        }
+
+        continue;
+      }
+
+      if (eventType === "agent_start") {
+        events.push({
+          type: "milestone",
+          message: "agent:start",
+        });
+        continue;
+      }
+
+      if (eventType === "turn_start") {
+        events.push({
+          type: "milestone",
+          message: "turn:start",
+        });
+        continue;
+      }
+
+      if (eventType === "tool_execution_start") {
+        const toolName = readString(decoded, "toolName");
+
+        if (toolName !== undefined) {
+          events.push({
+            type: "tool_call",
+            toolName,
+          });
+        }
+
+        continue;
+      }
+
+      if (eventType === "message_end") {
+        const message = decoded.message;
+
+        if (!isRecord(message) || readString(message, "role") !== "assistant") {
+          continue;
+        }
+
+        const assistantSummary = extractAssistantSummary(message);
+
+        if (assistantSummary.text !== undefined) {
+          responseText = assistantSummary.text;
+        }
+
+        if (assistantSummary.stopReason !== undefined) {
+          stopReason = assistantSummary.stopReason;
+        }
+      }
     }
 
-    const result = yield* decodeFinalResult(finalLine);
+    if (!terminalSeen) {
+      return yield* Effect.fail(
+        new PiCodecError({
+          message: "Missing terminal agent_end line from pi process output.",
+        }),
+      );
+    }
 
     return {
       events,
-      result,
+      result: {
+        text: responseText ?? "",
+        sessionRef: sessionRef ?? `session/${input.spawnId}`,
+        agent: input.agent,
+        model: input.model,
+        driver: "pi",
+        exitCode: 0,
+        stopReason,
+      },
     } satisfies DriverSpawnOutput;
+  });
+
+export const decodePiModelCatalogOutput = (
+  output: string,
+): Effect.Effect<ReadonlyArray<string>, PiCodecError> =>
+  Effect.gen(function* () {
+    const lines = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    const models = new Set<string>();
+
+    for (const line of lines) {
+      if (line.startsWith("provider") || line.startsWith("-")) {
+        continue;
+      }
+
+      const match = /^(\S+)\s+(\S+)\s+/.exec(line);
+
+      if (match === null) {
+        continue;
+      }
+
+      const provider = match[1];
+      const model = match[2];
+
+      if (provider !== undefined && model !== undefined) {
+        models.add(`${provider}/${model}`);
+      }
+    }
+
+    if (models.size === 0) {
+      return yield* Effect.fail(
+        new PiCodecError({
+          message: "No models found in pi --list-models output.",
+        }),
+      );
+    }
+
+    return Array.from(models);
   });

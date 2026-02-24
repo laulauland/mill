@@ -1,9 +1,9 @@
 import * as Command from "@effect/platform/Command";
 import { Data, Effect } from "effect";
 import type { DriverProcessConfig, DriverRuntime, DriverSpawnInput } from "@mill/core";
-import { decodePiProcessOutput } from "./pi.codec";
+import { decodeClaudeProcessOutput } from "./claude.codec";
 
-export class PiProcessDriverError extends Data.TaggedError("PiProcessDriverError")<{
+export class ClaudeProcessDriverError extends Data.TaggedError("ClaudeProcessDriverError")<{
   message: string;
 }> {}
 
@@ -15,12 +15,20 @@ const toMessage = (error: unknown): string => {
   return String(error);
 };
 
-const commandForSpawn = (config: DriverProcessConfig, input: DriverSpawnInput): Command.Command => {
+const normalizeClaudeModel = (model: string): string => {
+  const parts = model.split("/");
+  return parts[parts.length - 1] ?? model;
+};
+
+const commandForSpawn = (
+  config: DriverProcessConfig,
+  input: DriverSpawnInput,
+): Command.Command => {
   const command = Command.make(
     config.command,
     ...config.args,
     "--model",
-    input.model,
+    normalizeClaudeModel(input.model),
     "--system-prompt",
     input.systemPrompt,
     input.prompt,
@@ -33,27 +41,27 @@ const commandForSpawn = (config: DriverProcessConfig, input: DriverSpawnInput): 
   return Command.env(command, config.env);
 };
 
-export const makePiProcessDriver = (config: DriverProcessConfig): DriverRuntime => ({
-  name: "pi",
+export const makeClaudeProcessDriver = (config: DriverProcessConfig): DriverRuntime => ({
+  name: "claude",
   spawn: (input) =>
     Effect.gen(function* () {
       const command = commandForSpawn(config, input);
       const stdout = yield* Effect.mapError(
         Command.string(command),
         (error) =>
-          new PiProcessDriverError({
+          new ClaudeProcessDriverError({
             message: toMessage(error),
           }),
       );
 
       const decoded = yield* Effect.mapError(
-        decodePiProcessOutput(stdout, {
+        decodeClaudeProcessOutput(stdout, {
           agent: input.agent,
           model: input.model,
           spawnId: input.spawnId,
         }),
         (error) =>
-          new PiProcessDriverError({
+          new ClaudeProcessDriverError({
             message: toMessage(error),
           }),
       );
@@ -70,8 +78,8 @@ export const makePiProcessDriver = (config: DriverProcessConfig): DriverRuntime 
     }),
   resolveSession: ({ sessionRef }) =>
     Effect.succeed({
-      driver: "pi",
+      driver: "claude",
       sessionRef,
-      pointer: `pi://session/${encodeURIComponent(sessionRef)}`,
+      pointer: `claude://session/${encodeURIComponent(sessionRef)}`,
     }),
 });

@@ -157,12 +157,9 @@ describe("mill discovery/help (e2e)", () => {
     const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(output);
     expect(payload.discoveryVersion).toBe(1);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect(payload.drivers.pi?.models).toEqual([
-      "openai/gpt-5.3-codex",
-      "anthropic/claude-sonnet-4-6",
-    ]);
-    expect(payload.drivers.claude?.models).toEqual(["anthropic/claude-sonnet-4-6"]);
-    expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
+    expect((payload.drivers.pi?.models.length ?? 0) > 0).toBe(true);
+    expect(Array.isArray(payload.drivers.claude?.models)).toBe(true);
+    expect(Array.isArray(payload.drivers.codex?.models)).toBe(true);
     expect(payload.executors.direct?.description).toBe("Local direct executor");
     expect(payload.executors.vm).toBeUndefined();
     expect(payload.authoring.instructions.length).toBeGreaterThan(0);
@@ -174,9 +171,9 @@ describe("mill discovery/help (e2e)", () => {
       Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "--help"),
     );
 
-    expect(output).toContain("USAGE");
-    expect(output).toContain("$ mill");
-    expect(output).toContain("COMMANDS");
+    expect(output).toContain("Usage: mill <command>");
+    expect(output).toContain("Commands:");
+    expect(output).toContain("run <program.ts>");
     expect(output).not.toContain("Effect-first");
   });
 
@@ -204,6 +201,7 @@ describe("mill run/status/wait (e2e)", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Inspect repository layout.",',
+        '  model: "google-gemini-cli/gemini-2.0-flash",',
         "});",
         "return output.text;",
       ].join("\n"),
@@ -221,7 +219,7 @@ describe("mill run/status/wait (e2e)", () => {
           "--sync",
           "--json",
           "--driver",
-          "codex",
+          "pi",
           "--executor",
           "direct",
           "--runs-dir",
@@ -230,9 +228,9 @@ describe("mill run/status/wait (e2e)", () => {
       );
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runOutput);
-      expect(runPayload.run.driver).toBe("codex");
+      expect(runPayload.run.driver).toBe("pi");
       expect(runPayload.run.executor).toBe("direct");
-      expect(runPayload.result.spawns[0]?.driver).toBe("codex");
+      expect(runPayload.result.spawns[0]?.driver).toBe("pi");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
