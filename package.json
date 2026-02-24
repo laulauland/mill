@@ -12,7 +12,7 @@
     "lint:ast-grep:test": "ast-grep test --config .ast-grep/sgconfig.yml --test-dir .ast-grep/tests --skip-snapshot-tests",
     "lint:ast-grep": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src --error",
     "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src/internal packages/*/src/domain packages/*/src/runtime --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import)'",
-    "lint:boundary": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src --error --filter 'no-(interface-outside-public|promise-outside-public|interface-for-domain-models|effect-runpromise|runtime-runpromise-outside-boundary|public-import-internal)'",
+    "lint:boundary": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src --error --filter 'no-(interface-outside-public|promise-outside-public|interface-for-domain-models|effect-runpromise|runtime-runpromise-outside-boundary|public-import-internal|dynamic-import)'",
     "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src/internal packages/*/src/domain packages/*/src/runtime --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)'",
     "lint:exports": "bun run scripts/check-exports.ts",
     "format": "oxfmt . --write",
@@ -20,9 +20,13 @@
     "check": "bun run lint:ast-grep:test && bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety && bun run lint:exports && bun run lint:ast-grep && bun run lint && bun run format:check && bun run typecheck && bun test"
   },
   "dependencies": {
+    "@effect/cli": "^0.73.2",
     "@effect/platform": "^0.94.5",
     "@effect/platform-bun": "^0.87.1",
+    "@effect/printer": "^0.47.0",
+    "@effect/printer-ansi": "^0.47.0",
     "@effect/schema": "^0.75.5",
+    "@effect/typeclass": "^0.38.0",
     "effect": "^3.19.19"
   },
   "devDependencies": {

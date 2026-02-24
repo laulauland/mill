@@ -35,7 +35,9 @@ const ensureRawPubSub = (runId: string): Effect.Effect<PubSub.PubSub<string>> =>
   });
 
 export const publishTier1Event = (runId: string, event: MillEvent): Effect.Effect<void> =>
-  Effect.asVoid(Effect.flatMap(ensureTier1PubSub(runId), (pubSub) => PubSub.publish(pubSub, event)));
+  Effect.asVoid(
+    Effect.flatMap(ensureTier1PubSub(runId), (pubSub) => PubSub.publish(pubSub, event)),
+  );
 
 export const publishRawEvent = (runId: string, raw: string): Effect.Effect<void> =>
   Effect.asVoid(Effect.flatMap(ensureRawPubSub(runId), (pubSub) => PubSub.publish(pubSub, raw)));

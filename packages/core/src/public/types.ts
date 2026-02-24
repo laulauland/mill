@@ -162,11 +162,16 @@ export interface DiscoveryPayload {
 
 export type ConfigSource = "cwd" | "upward" | "home" | "defaults";
 
-export interface ConfigOverrides {
+export interface ConfigFileOverrides {
   readonly defaultDriver?: string;
   readonly defaultExecutor?: string;
   readonly defaultModel?: string;
-  readonly authoringInstructions?: string;
+  readonly drivers?: Readonly<Record<string, DriverRegistration>>;
+  readonly executors?: Readonly<Record<string, ExecutorRegistration>>;
+  readonly extensions?: ReadonlyArray<ExtensionRegistration>;
+  readonly authoring?: {
+    readonly instructions?: string;
+  };
 }
 
 export interface ResolvedConfig {
@@ -180,5 +185,5 @@ export interface ResolveConfigOptions {
   readonly cwd?: string;
   readonly homeDirectory?: string;
   readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigOverrides?: (path: string) => Promise<ConfigOverrides>;
+  readonly loadConfigModule?: (path: string) => Promise<unknown>;
 }

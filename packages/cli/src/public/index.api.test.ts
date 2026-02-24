@@ -21,6 +21,12 @@ const DiscoveryEnvelope = Schema.parseJson(
         models: Schema.Array(Schema.String),
       }),
     }),
+    executors: Schema.Record({
+      key: Schema.String,
+      value: Schema.Struct({
+        description: Schema.String,
+      }),
+    }),
     authoring: Schema.Struct({
       instructions: Schema.String,
     }),
@@ -159,12 +165,19 @@ const WaitTimeoutEnvelope = Schema.parseJson(
   }),
 );
 
+const WatchEventEnvelope = Schema.parseJson(
+  Schema.Struct({
+    type: Schema.String,
+    runId: Schema.String,
+  }),
+);
+
 describe("runCli", () => {
-  it("writes machine payload to stdout only in --json mode", async () => {
+  it("writes machine payload to stdout for discovery --json", async () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli(["--help", "--json"], {
+    const code = await runCli(["discovery", "--json"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async () => false,
@@ -184,36 +197,14 @@ describe("runCli", () => {
 
     const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(stdout[0]);
     expect(payload.discoveryVersion).toBe(1);
-    expect(payload.drivers.default?.models).toEqual([
+    expect(payload.drivers.pi?.models).toEqual([
       "openai/gpt-5.3-codex",
       "anthropic/claude-sonnet-4-6",
     ]);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
     expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
-  });
-
-  it("routes human help text to stdout in non-json mode", async () => {
-    const stdout: Array<string> = [];
-    const stderr: Array<string> = [];
-
-    const code = await runCli(["--help"], {
-      cwd: "/workspace/repo",
-      homeDirectory: "/Users/tester",
-      pathExists: async () => false,
-      io: {
-        stdout: (line) => {
-          stdout.push(line);
-        },
-        stderr: (line) => {
-          stderr.push(line);
-        },
-      },
-    });
-
-    expect(code).toBe(0);
-    expect(stdout).toHaveLength(1);
-    expect(stderr).toHaveLength(0);
-    expect(stdout[0]).toContain("mill — Effect-first orchestration runtime");
+    expect(payload.executors.direct?.description).toBe("Local direct executor");
+    expect(payload.executors.vm).toBeUndefined();
   });
 
   it("executes run --sync and resolves status for persisted runId", async () => {
@@ -258,7 +249,7 @@ describe("runCli", () => {
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(runPayload.run.status).toBe("complete");
-      expect(runPayload.run.driver).toBe("default");
+      expect(runPayload.run.driver).toBe("pi");
       expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
       expect(runPayload.result.spawns).toHaveLength(1);
@@ -287,7 +278,7 @@ describe("runCli", () => {
       const statusPayload = Schema.decodeUnknownSync(StatusEnvelope)(statusStdout[0]);
       expect(statusPayload.id).toBe(runPayload.run.id);
       expect(statusPayload.status).toBe("complete");
-      expect(statusPayload.driver).toBe("default");
+      expect(statusPayload.driver).toBe("pi");
       expect(statusPayload.executor).toBe("direct");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -315,7 +306,7 @@ describe("runCli", () => {
     try {
       const runStdout: Array<string> = [];
       const runCode = await runCli(
-        ["run", programPath, "--sync", "--json", "--driver", "codex", "--executor", "vm"],
+        ["run", programPath, "--sync", "--json", "--driver", "codex", "--executor", "direct"],
         {
           cwd: tempDirectory,
           homeDirectory,
@@ -333,7 +324,7 @@ describe("runCli", () => {
 
       const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(payload.run.driver).toBe("codex");
-      expect(payload.run.executor).toBe("vm");
+      expect(payload.run.executor).toBe("direct");
       expect(payload.result.spawns[0]?.driver).toBe("codex");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -364,9 +355,11 @@ describe("runCli", () => {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async (path) => path === join(tempDirectory, "mill.config.ts"),
-        loadConfigOverrides: async () => ({
-          defaultDriver: "claude",
-          defaultExecutor: "vm",
+        loadConfigModule: async () => ({
+          default: {
+            defaultDriver: "claude",
+            defaultExecutor: "direct",
+          },
         }),
         io: {
           stdout: (line) => {
@@ -380,7 +373,7 @@ describe("runCli", () => {
 
       const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(payload.run.driver).toBe("claude");
-      expect(payload.run.executor).toBe("vm");
+      expect(payload.run.executor).toBe("direct");
       expect(payload.result.spawns[0]?.driver).toBe("claude");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -594,7 +587,7 @@ describe("runCli", () => {
       expect(watchStdout.length).toBeGreaterThan(0);
 
       for (const line of watchStdout) {
-        const parsed = JSON.parse(line) as { readonly type?: string; readonly runId?: string };
+        const parsed = Schema.decodeUnknownSync(WatchEventEnvelope)(line);
         expect(parsed.runId).toBe(runPayload.run.id);
         expect(typeof parsed.type).toBe("string");
       }
@@ -685,10 +678,7 @@ describe("runCli", () => {
 
     await writeFile(
       programPath,
-      [
-        "await new Promise((resolve) => setTimeout(resolve, 400));",
-        "return 'done';",
-      ].join("\n"),
+      ["await new Promise((resolve) => setTimeout(resolve, 400));", "return 'done';"].join("\n"),
       "utf-8",
     );
 
@@ -769,7 +759,22 @@ describe("runCli", () => {
       expect(terminalEvents).toHaveLength(1);
       expect(terminalEvents[0]?.type).toBe("run:cancelled");
 
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      const statusAfterCancelStdout: Array<string> = [];
+      const statusAfterCancelCode = await runCli(["status", submittedRun.runId, "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            statusAfterCancelStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(statusAfterCancelCode).toBe(0);
+      const cancelledStatus = Schema.decodeUnknownSync(StatusEnvelope)(statusAfterCancelStdout[0]);
+      expect(cancelledStatus.status).toBe("cancelled");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
@@ -910,7 +915,7 @@ describe("runCli", () => {
           id: runId,
           status: "running",
           programPath: "/tmp/program.ts",
-          driver: "default",
+          driver: "pi",
           executor: "direct",
           createdAt: "2026-02-23T20:00:00.000Z",
           updatedAt: "2026-02-23T20:00:00.000Z",

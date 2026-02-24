@@ -1,7 +1,8 @@
-import * as Command from "@effect/platform/Command";
+import { Args, Command as CliCommand, Options, ValidationError } from "@effect/cli";
+import * as PlatformCommand from "@effect/platform/Command";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Runtime, Scope } from "effect";
+import { Effect, Option, Runtime, Scope } from "effect";
 import {
   cancelRun,
   createDiscoveryPayload,
@@ -15,7 +16,6 @@ import {
   submitRun,
   waitForRun,
   watchRun,
-  type ConfigOverrides,
   type LaunchWorkerInput,
 } from "@mill/core";
 import { createClaudeDriverRegistration } from "@mill/driver-claude";
@@ -32,9 +32,14 @@ interface RunCliOptions {
   readonly homeDirectory?: string;
   readonly runsDirectory?: string;
   readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigOverrides?: (path: string) => Promise<ConfigOverrides>;
+  readonly loadConfigModule?: (path: string) => Promise<unknown>;
   readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
   readonly io?: CliIo;
+}
+
+interface CliExit {
+  readonly _tag: "CliExit";
+  readonly code: number;
 }
 
 const runtime = Runtime.defaultRuntime;
@@ -56,26 +61,17 @@ const createDirectExecutor = () => ({
   },
 });
 
-const createVmExecutor = () => ({
-  description: "VM-style executor placeholder",
-  runtime: {
-    name: "vm",
-    runProgram: (input: { readonly execute: Effect.Effect<unknown, unknown> }) => input.execute,
-  },
-});
-
 const defaultConfig = defineConfig({
-  defaultDriver: "default",
+  defaultDriver: "pi",
   defaultExecutor: "direct",
   defaultModel: "openai/gpt-5.3-codex",
   drivers: {
-    default: processDriver(createPiDriverRegistration()),
+    pi: processDriver(createPiDriverRegistration()),
     claude: processDriver(createClaudeDriverRegistration()),
     codex: processDriver(createCodexDriverRegistration()),
   },
   executors: {
     direct: createDirectExecutor(),
-    vm: createVmExecutor(),
   },
   extensions: [],
   authoring: {
@@ -84,39 +80,13 @@ const defaultConfig = defineConfig({
   },
 });
 
-const readFlagValue = (argv: ReadonlyArray<string>, flag: string): string | undefined => {
-  const index = argv.indexOf(flag);
-
-  if (index < 0) {
-    return undefined;
-  }
-
-  return argv[index + 1];
-};
-
-const parseTimeoutSeconds = (argv: ReadonlyArray<string>): number | undefined => {
-  const value = readFlagValue(argv, "--timeout");
-
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const parsed = Number.parseFloat(value);
-
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return undefined;
-  }
-
-  return parsed;
-};
-
 const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>): Promise<A> =>
   Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
 
 const millBinPath = decodeURIComponent(new URL("../bin/mill.ts", import.meta.url).pathname);
 
 const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => {
-  const workerCommand = Command.make(
+  const workerCommand = PlatformCommand.make(
     process.execPath,
     "run",
     millBinPath,
@@ -132,50 +102,77 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
     "--executor",
     input.executorName,
   ).pipe(
-    Command.workingDirectory(input.cwd),
-    Command.stdin("ignore"),
-    Command.stdout("ignore"),
-    Command.stderr("ignore"),
+    PlatformCommand.workingDirectory(input.cwd),
+    PlatformCommand.stdin("ignore"),
+    PlatformCommand.stdout("ignore"),
+    PlatformCommand.stderr("ignore"),
   );
 
   await runWithBunContext(
     Effect.gen(function* () {
       const detachedScope = yield* Scope.make();
 
-      yield* Scope.extend(Command.start(workerCommand), detachedScope);
+      yield* Scope.extend(PlatformCommand.start(workerCommand), detachedScope);
     }),
   );
 };
 
+const optionalTextOption = (name: string) => Options.text(name).pipe(Options.optional);
+
+const fromOption = <A>(value: Option.Option<A>): A | undefined =>
+  Option.isSome(value) ? value.value : undefined;
+
+const toCliEffect = (program: Promise<number>) =>
+  Effect.flatMap(
+    Effect.promise(() => program),
+    (code) =>
+      code === 0
+        ? Effect.void
+        : Effect.fail<CliExit>({
+            _tag: "CliExit",
+            code,
+          }),
+  );
+
+const formatUnknownError = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+};
+
+interface RunCommandInput {
+  readonly program: string;
+  readonly json: boolean;
+  readonly sync: boolean;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+  readonly executor: Option.Option<string>;
+}
+
 const runCommand = async (
-  argv: ReadonlyArray<string>,
+  command: RunCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const programPath = argv[0];
-
-  if (programPath === undefined) {
-    io.stderr("Usage: mill run <program.ts> [--json] [--sync] [--driver] [--executor]");
-    return 1;
-  }
-
   const runInput = {
     defaults: defaultConfig,
-    programPath,
+    programPath: command.program,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
-    executorName: readFlagValue(argv, "--executor"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
+    executorName: fromOption(command.executor),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
     launchWorker: options.launchWorker ?? launchDetachedWorker,
   } as const;
 
-  if (argv.includes("--sync")) {
+  if (command.sync) {
     const output = await runProgramSync(runInput);
 
-    if (argv.includes("--json")) {
+    if (command.json) {
       io.stdout(JSON.stringify(output));
       return 0;
     }
@@ -186,7 +183,7 @@ const runCommand = async (
 
   const submittedRun = await submitRun(runInput);
 
-  if (argv.includes("--json")) {
+  if (command.json) {
     io.stdout(
       JSON.stringify({
         runId: submittedRun.id,
@@ -201,35 +198,34 @@ const runCommand = async (
   return 0;
 };
 
+interface WorkerCommandInput {
+  readonly runId: string;
+  readonly program: string;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+  readonly executor: Option.Option<string>;
+  readonly json: boolean;
+}
+
 const workerCommand = async (
-  argv: ReadonlyArray<string>,
+  command: WorkerCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const runId = readFlagValue(argv, "--run-id");
-  const programPath = readFlagValue(argv, "--program");
-
-  if (runId === undefined || programPath === undefined) {
-    io.stderr(
-      "Usage: mill _worker --run-id <id> --program <abs-path> [--runs-dir] [--driver] [--executor]",
-    );
-    return 1;
-  }
-
   const output = await runWorker({
     defaults: defaultConfig,
-    runId,
-    programPath,
+    runId: command.runId,
+    programPath: command.program,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
-    executorName: readFlagValue(argv, "--executor"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
+    executorName: fromOption(command.executor),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
   });
 
-  if (argv.includes("--json")) {
+  if (command.json) {
     io.stdout(JSON.stringify(output));
   }
 
@@ -243,11 +239,11 @@ const INIT_CONFIG_TEMPLATE = [
   'import { createCodexDriverRegistration } from "@mill/driver-codex";',
   "",
   "export default defineConfig({",
-  '  defaultDriver: "default",',
+  '  defaultDriver: "pi",',
   '  defaultExecutor: "direct",',
   '  defaultModel: "openai/gpt-5.3-codex",',
   "  drivers: {",
-  "    default: processDriver(createPiDriverRegistration()),",
+  "    pi: processDriver(createPiDriverRegistration()),",
   "    claude: processDriver(createClaudeDriverRegistration()),",
   "    codex: processDriver(createCodexDriverRegistration()),",
   "  },",
@@ -259,13 +255,7 @@ const INIT_CONFIG_TEMPLATE = [
   "        runProgram: ({ execute }) => execute,",
   "      },",
   "    },",
-  "    vm: {",
-  '      description: "VM-style executor placeholder",',
-  "      runtime: {",
-  '        name: "vm",',
-  "        runProgram: ({ execute }) => execute,",
-  "      },",
-  "    },",
+  "    // Future: add sandboxed executors here.",
   "  },",
   "  extensions: [],",
   "  authoring: {",
@@ -288,30 +278,30 @@ const initCommand = async (options: RunCliOptions, io: CliIo): Promise<number> =
   return 0;
 };
 
+interface StatusCommandInput {
+  readonly runId: string;
+  readonly json: boolean;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+}
+
 const statusCommand = async (
-  argv: ReadonlyArray<string>,
+  command: StatusCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const runId = argv[0];
-
-  if (runId === undefined) {
-    io.stderr("Usage: mill status <runId> [--json]");
-    return 1;
-  }
-
   const output = await getRunStatus({
     defaults: defaultConfig,
-    runId,
+    runId: command.runId,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
   });
 
-  if (argv.includes("--json")) {
+  if (command.json) {
     io.stdout(JSON.stringify(output));
     return 0;
   }
@@ -320,36 +310,42 @@ const statusCommand = async (
   return 0;
 };
 
+interface WaitCommandInput {
+  readonly runId: string;
+  readonly timeout: number;
+  readonly json: boolean;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+}
+
 const waitCommand = async (
-  argv: ReadonlyArray<string>,
+  command: WaitCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const runId = argv[0];
-  const timeoutSeconds = parseTimeoutSeconds(argv);
-  const isJson = argv.includes("--json");
-
-  if (runId === undefined || timeoutSeconds === undefined) {
-    io.stderr("Usage: mill wait <runId> --timeout <seconds> [--json]");
+  if (!Number.isFinite(command.timeout) || command.timeout <= 0) {
+    io.stderr("--timeout must be a positive number.");
     return 1;
   }
+
+  const timeoutSeconds = command.timeout;
 
   const [waitResult] = await Promise.allSettled([
     waitForRun({
       defaults: defaultConfig,
-      runId,
+      runId: command.runId,
       timeoutSeconds,
       cwd: options.cwd,
       homeDirectory: options.homeDirectory,
-      runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-      driverName: readFlagValue(argv, "--driver"),
+      runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+      driverName: fromOption(command.driver),
       pathExists: options.pathExists,
-      loadConfigOverrides: options.loadConfigOverrides,
+      loadConfigModule: options.loadConfigModule,
     }),
   ]);
 
   if (waitResult.status === "fulfilled") {
-    if (isJson) {
+    if (command.json) {
       io.stdout(JSON.stringify(waitResult.value));
       return 0;
     }
@@ -364,15 +360,15 @@ const waitCommand = async (
   };
 
   if (waitError._tag === "WaitTimeoutError") {
-    const message = `Timeout waiting for run ${runId} after ${timeoutSeconds}s.`;
+    const message = `Timeout waiting for run ${command.runId} after ${timeoutSeconds}s.`;
 
-    if (isJson) {
+    if (command.json) {
       io.stdout(
         JSON.stringify({
           ok: false,
           error: {
             _tag: "WaitTimeoutError",
-            runId,
+            runId: command.runId,
             timeoutSeconds,
             message,
           },
@@ -387,13 +383,13 @@ const waitCommand = async (
 
   const fallbackMessage = waitError.message ?? String(waitResult.reason);
 
-  if (isJson) {
+  if (command.json) {
     io.stdout(
       JSON.stringify({
         ok: false,
         error: {
           _tag: "WaitError",
-          runId,
+          runId: command.runId,
           timeoutSeconds,
           message: fallbackMessage,
         },
@@ -406,28 +402,29 @@ const waitCommand = async (
   return 1;
 };
 
+interface WatchCommandInput {
+  readonly runId: string;
+  readonly json: boolean;
+  readonly raw: boolean;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+}
+
 const watchCommand = async (
-  argv: ReadonlyArray<string>,
+  command: WatchCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const runId = argv[0];
-
-  if (runId === undefined) {
-    io.stderr("Usage: mill watch <runId> [--json] [--raw]");
-    return 1;
-  }
-
   await watchRun({
     defaults: defaultConfig,
-    runId,
-    raw: argv.includes("--raw"),
+    runId: command.runId,
+    raw: command.raw,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
     onEvent: (line) => {
       io.stdout(line);
     },
@@ -436,31 +433,32 @@ const watchCommand = async (
   return 0;
 };
 
+interface InspectCommandInput {
+  readonly ref: string;
+  readonly json: boolean;
+  readonly session: boolean;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+}
+
 const inspectCommand = async (
-  argv: ReadonlyArray<string>,
+  command: InspectCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const ref = argv[0];
-
-  if (ref === undefined) {
-    io.stderr("Usage: mill inspect <runId>[.<spawnId>] [--json] [--session]");
-    return 1;
-  }
-
   const inspected = await inspectRun({
     defaults: defaultConfig,
-    ref,
-    session: argv.includes("--session"),
+    ref: command.ref,
+    session: command.session,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
   });
 
-  if (argv.includes("--json")) {
+  if (command.json) {
     io.stdout(JSON.stringify(inspected));
     return 0;
   }
@@ -469,30 +467,30 @@ const inspectCommand = async (
   return 0;
 };
 
+interface CancelCommandInput {
+  readonly runId: string;
+  readonly json: boolean;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+}
+
 const cancelCommand = async (
-  argv: ReadonlyArray<string>,
+  command: CancelCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const runId = argv[0];
-
-  if (runId === undefined) {
-    io.stderr("Usage: mill cancel <runId> [--json]");
-    return 1;
-  }
-
   const cancelled = await cancelRun({
     defaults: defaultConfig,
-    runId,
+    runId: command.runId,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
   });
 
-  if (argv.includes("--json")) {
+  if (command.json) {
     io.stdout(JSON.stringify(cancelled));
     return 0;
   }
@@ -501,30 +499,33 @@ const cancelCommand = async (
   return 0;
 };
 
+const RUN_STATUSES = ["pending", "running", "complete", "failed", "cancelled"] as const;
+type RunStatus = (typeof RUN_STATUSES)[number];
+
+interface LsCommandInput {
+  readonly json: boolean;
+  readonly status: Option.Option<RunStatus>;
+  readonly runsDir: Option.Option<string>;
+  readonly driver: Option.Option<string>;
+}
+
 const lsCommand = async (
-  argv: ReadonlyArray<string>,
+  command: LsCommandInput,
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const statusFilter = readFlagValue(argv, "--status") as
-    | "pending"
-    | "running"
-    | "complete"
-    | "failed"
-    | "cancelled"
-    | undefined;
   const runs = await listRuns({
     defaults: defaultConfig,
-    status: statusFilter,
+    status: fromOption(command.status),
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
-    runsDirectory: readFlagValue(argv, "--runs-dir") ?? options.runsDirectory,
-    driverName: readFlagValue(argv, "--driver"),
+    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
+    driverName: fromOption(command.driver),
     pathExists: options.pathExists,
-    loadConfigOverrides: options.loadConfigOverrides,
+    loadConfigModule: options.loadConfigModule,
   });
 
-  if (argv.includes("--json")) {
+  if (command.json) {
     io.stdout(JSON.stringify(runs));
     return 0;
   }
@@ -538,77 +539,176 @@ const lsCommand = async (
   return 0;
 };
 
+interface DiscoveryCommandInput {
+  readonly json: boolean;
+}
+
+const discoveryCommand = async (
+  command: DiscoveryCommandInput,
+  options: RunCliOptions,
+  io: CliIo,
+): Promise<number> => {
+  const payload = await createDiscoveryPayload({
+    defaults: defaultConfig,
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    pathExists: options.pathExists,
+    loadConfigModule: options.loadConfigModule,
+  });
+
+  io.stdout(command.json ? JSON.stringify(payload) : JSON.stringify(payload, null, 2));
+  return 0;
+};
+
+const createCli = (options: RunCliOptions, io: CliIo) => {
+  const run = CliCommand.make(
+    "run",
+    {
+      program: Args.text({ name: "program.ts" }),
+      json: Options.boolean("json"),
+      sync: Options.boolean("sync"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+      executor: optionalTextOption("executor"),
+    },
+    (command) => toCliEffect(runCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Run a mill program."));
+
+  const worker = CliCommand.make(
+    "_worker",
+    {
+      runId: Options.text("run-id"),
+      program: Options.text("program"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+      executor: optionalTextOption("executor"),
+      json: Options.boolean("json"),
+    },
+    (command) => toCliEffect(workerCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Run the detached worker for an existing run."));
+
+  const status = CliCommand.make(
+    "status",
+    {
+      runId: Args.text({ name: "runId" }),
+      json: Options.boolean("json"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+    },
+    (command) => toCliEffect(statusCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Read the current run status."));
+
+  const wait = CliCommand.make(
+    "wait",
+    {
+      runId: Args.text({ name: "runId" }),
+      timeout: Options.float("timeout"),
+      json: Options.boolean("json"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+    },
+    (command) => toCliEffect(waitCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Wait for a run to reach a terminal state."));
+
+  const watch = CliCommand.make(
+    "watch",
+    {
+      runId: Args.text({ name: "runId" }),
+      json: Options.boolean("json"),
+      raw: Options.boolean("raw"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+    },
+    (command) => toCliEffect(watchCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Stream run events."));
+
+  const inspect = CliCommand.make(
+    "inspect",
+    {
+      ref: Args.text({ name: "runId[.spawnId]" }),
+      json: Options.boolean("json"),
+      session: Options.boolean("session"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+    },
+    (command) => toCliEffect(inspectCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Inspect run, spawn, or session output."));
+
+  const cancel = CliCommand.make(
+    "cancel",
+    {
+      runId: Args.text({ name: "runId" }),
+      json: Options.boolean("json"),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+    },
+    (command) => toCliEffect(cancelCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Cancel a run."));
+
+  const ls = CliCommand.make(
+    "ls",
+    {
+      json: Options.boolean("json"),
+      status: Options.choice("status", RUN_STATUSES).pipe(Options.optional),
+      runsDir: optionalTextOption("runs-dir"),
+      driver: optionalTextOption("driver"),
+    },
+    (command) => toCliEffect(lsCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("List runs."));
+
+  const init = CliCommand.make("init", {}, () => toCliEffect(initCommand(options, io))).pipe(
+    CliCommand.withDescription("Create a starter mill.config.ts."),
+  );
+
+  const discovery = CliCommand.make(
+    "discovery",
+    {
+      json: Options.boolean("json"),
+    },
+    (command) => toCliEffect(discoveryCommand(command, options, io)),
+  ).pipe(CliCommand.withDescription("Emit discovery metadata for tooling."));
+
+  return CliCommand.make("mill").pipe(
+    CliCommand.withDescription("Mill orchestration runtime."),
+    CliCommand.withSubcommands([
+      run,
+      status,
+      wait,
+      watch,
+      inspect,
+      cancel,
+      ls,
+      init,
+      discovery,
+      worker,
+    ]),
+  );
+};
+
 export const runCli = async (
   argv: ReadonlyArray<string>,
   options?: RunCliOptions,
 ): Promise<number> => {
-  const io = options?.io ?? defaultIo;
-  const showHelp = argv.length === 0 || argv.includes("--help");
+  const resolvedOptions = options ?? {};
+  const io = resolvedOptions.io ?? defaultIo;
+  const command = createCli(resolvedOptions, io);
+  const run = CliCommand.run(command, {
+    name: "mill",
+    version: "0.0.0",
+    executable: "mill",
+  });
 
-  if (showHelp) {
-    const payload = await createDiscoveryPayload({
-      defaults: defaultConfig,
-      cwd: options?.cwd,
-      homeDirectory: options?.homeDirectory,
-      pathExists: options?.pathExists,
-      loadConfigOverrides: options?.loadConfigOverrides,
-    });
+  const codeEffect = run([process.execPath, millBinPath, ...argv]).pipe(
+    Effect.as(0),
+    Effect.catchTag("CliExit", (error) => Effect.succeed(error.code)),
+    Effect.catchIf(ValidationError.isValidationError, () => Effect.succeed(1)),
+    Effect.catchAll((error) =>
+      Effect.sync(() => {
+        io.stderr(formatUnknownError(error));
+        return 1;
+      }),
+    ),
+  );
 
-    if (argv.includes("--json")) {
-      io.stdout(JSON.stringify(payload));
-      return 0;
-    }
-
-    io.stdout(
-      [
-        "mill — Effect-first orchestration runtime",
-        "",
-        `Authoring guidance: ${payload.authoring.instructions}`,
-        `Registered drivers: ${Object.keys(payload.drivers).join(", ")}`,
-        `Registered executors: ${Object.keys(payload.executors).join(", ")}`,
-        "",
-        "Run `mill --help --json` for machine-readable discovery.",
-      ].join("\n"),
-    );
-    return 0;
-  }
-
-  if (argv[0] === "run") {
-    return runCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "_worker") {
-    return workerCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "status") {
-    return statusCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "wait") {
-    return waitCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "watch") {
-    return watchCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "inspect") {
-    return inspectCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "cancel") {
-    return cancelCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "ls") {
-    return lsCommand(argv.slice(1), options ?? {}, io);
-  }
-
-  if (argv[0] === "init") {
-    return initCommand(options ?? {}, io);
-  }
-
-  io.stderr(`Unknown command: ${argv[0]}`);
-  return 1;
+  return runWithBunContext(codeEffect);
 };

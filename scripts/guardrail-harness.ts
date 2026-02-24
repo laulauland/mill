@@ -23,8 +23,14 @@ export interface GuardrailSuiteInput {
 }
 
 export interface GuardrailSuiteResult {
-  readonly results: ReadonlyArray<{ readonly check: GuardrailCheck; readonly result: GuardrailCommandResult }>;
-  readonly failures: ReadonlyArray<{ readonly check: GuardrailCheck; readonly result: GuardrailCommandResult }>;
+  readonly results: ReadonlyArray<{
+    readonly check: GuardrailCheck;
+    readonly result: GuardrailCommandResult;
+  }>;
+  readonly failures: ReadonlyArray<{
+    readonly check: GuardrailCheck;
+    readonly result: GuardrailCommandResult;
+  }>;
 }
 
 export const runGuardrailCommand = async (
@@ -53,8 +59,13 @@ export const runGuardrailCommand = async (
   };
 };
 
-export const runGuardrailSuite = async (input: GuardrailSuiteInput): Promise<GuardrailSuiteResult> => {
-  const results: Array<{ readonly check: GuardrailCheck; readonly result: GuardrailCommandResult }> = [];
+export const runGuardrailSuite = async (
+  input: GuardrailSuiteInput,
+): Promise<GuardrailSuiteResult> => {
+  const results: Array<{
+    readonly check: GuardrailCheck;
+    readonly result: GuardrailCommandResult;
+  }> = [];
 
   for (const check of input.checks) {
     const result = await runGuardrailCommand({ cwd: input.cwd, cmd: check.cmd });

@@ -104,10 +104,12 @@ export const checkExportBoundaries = async (
 
     const packageName = typeof packageJson.name === "string" ? packageJson.name : packageJsonPath;
     const invalidExports = [
-      ...new Set([
-        ...normalizeExportKeys(packageJson.exports),
-        ...normalizeExportEntries(packageJson.exports),
-      ].filter((entry) => isInternalExportPath(entry))),
+      ...new Set(
+        [
+          ...normalizeExportKeys(packageJson.exports),
+          ...normalizeExportEntries(packageJson.exports),
+        ].filter((entry) => isInternalExportPath(entry)),
+      ),
     ].sort();
 
     if (invalidExports.length > 0) {

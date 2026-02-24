@@ -2,10 +2,19 @@ import { describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Schema from "@effect/schema/Schema";
 import { Effect } from "effect";
 import { decodeMillEventJsonSync } from "../domain/event.schema";
 import { runProgramSync, runWorker } from "./run.api";
 import type { MillConfig } from "./types";
+
+const ProgramResultEnvelope = Schema.parseJson(
+  Schema.Struct({
+    note: Schema.optional(Schema.String),
+    driver: Schema.optional(Schema.String),
+    executor: Schema.optional(Schema.String),
+  }),
+);
 
 const makeConfig = (): MillConfig => ({
   defaultDriver: "default",
@@ -172,11 +181,9 @@ describe("run.api integration", () => {
       expect(output.run.executor).toBe("vm");
       expect(output.result.spawns[0]?.driver).toBe("codex");
 
-      const parsedProgramResult = JSON.parse(output.result.programResult ?? "{}") as {
-        readonly note?: string;
-        readonly driver?: string;
-        readonly executor?: string;
-      };
+      const parsedProgramResult = Schema.decodeUnknownSync(ProgramResultEnvelope)(
+        output.result.programResult ?? "{}",
+      );
 
       expect(parsedProgramResult.note).toBe("echo:hello");
       expect(parsedProgramResult.driver).toBe("codex");
@@ -190,6 +197,13 @@ describe("run.api integration", () => {
         .map((line) => decodeMillEventJsonSync(line).type);
 
       expect(eventTypes.includes("extension:error")).toBe(true);
+
+      const hostMarker = await readFile(
+        join(output.run.paths.runDir, "program-host.marker"),
+        "utf-8",
+      );
+      expect(hostMarker).toContain("process-host:bun");
+      expect(hostMarker).toContain(`executor=${output.run.executor}`);
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

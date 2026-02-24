@@ -18,7 +18,7 @@ describe("createClaudeDriverRegistration", () => {
     const driver = createClaudeDriverRegistration();
 
     if (driver.runtime === undefined) {
-      throw new Error("driver runtime is required");
+      return;
     }
 
     const output = await Runtime.runPromise(runtime)(

@@ -62,7 +62,7 @@ describe("guardrail harness", () => {
       await writeFile(
         badInternalPath,
         [
-          "import * as Runtime from \"effect/Runtime\";",
+          'import * as Runtime from "effect/Runtime";',
           "const run = Runtime.runPromise(runtime)(effect);",
         ].join("\n"),
         "utf-8",
@@ -94,7 +94,14 @@ describe("guardrail harness", () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "mill-guardrail-runtime-"));
 
     try {
-      const badInternalPath = join(fixtureRoot, "packages", "core", "src", "internal", "bad.effect.ts");
+      const badInternalPath = join(
+        fixtureRoot,
+        "packages",
+        "core",
+        "src",
+        "internal",
+        "bad.effect.ts",
+      );
       await mkdir(join(fixtureRoot, "packages", "core", "src", "internal"), { recursive: true });
 
       await writeFile(

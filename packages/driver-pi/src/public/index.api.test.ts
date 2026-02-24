@@ -58,17 +58,20 @@ describe("createPiDriverRegistration", () => {
     expect(driver.runtime).toBeDefined();
 
     if (driver.runtime === undefined) {
-      throw new Error("driver runtime is required");
+      return;
     }
 
     expect(driver.runtime.resolveSession).toBeDefined();
 
     if (driver.runtime.resolveSession === undefined) {
-      throw new Error("resolveSession bridge is required");
+      return;
     }
 
     const session = await Runtime.runPromise(runtime)(
-      Effect.provide(driver.runtime.resolveSession({ sessionRef: "session/scout" }), BunContext.layer),
+      Effect.provide(
+        driver.runtime.resolveSession({ sessionRef: "session/scout" }),
+        BunContext.layer,
+      ),
     );
 
     expect(session.sessionRef).toBe("session/scout");

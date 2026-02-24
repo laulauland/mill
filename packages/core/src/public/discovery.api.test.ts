@@ -98,14 +98,18 @@ describe("createDiscoveryPayload", () => {
     expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
   });
 
-  it("applies authoring instructions from resolved config overrides", async () => {
+  it("applies authoring instructions from resolved config module", async () => {
     const payload = await createDiscoveryPayload({
       defaults: makeDefaults(),
       cwd: "/repo",
       homeDirectory: "/home/tester",
       pathExists: async (path) => path === "/repo/mill.config.ts",
-      loadConfigOverrides: async () => ({
-        authoringInstructions: "from-cwd-config",
+      loadConfigModule: async () => ({
+        default: {
+          authoring: {
+            instructions: "from-cwd-config",
+          },
+        },
       }),
     });
 

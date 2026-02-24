@@ -2,7 +2,7 @@ import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Runtime } from "effect";
 import type {
-  ConfigOverrides,
+  ConfigFileOverrides,
   DriverRegistration,
   MillConfig,
   ResolvedConfig,
@@ -19,92 +19,6 @@ const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunConte
 
 const defaultPathExists = async (path: string): Promise<boolean> =>
   runWithBunContext(Effect.flatMap(FileSystem.FileSystem, (fileSystem) => fileSystem.exists(path)));
-
-const extractConfigString = (source: string, key: string): string | undefined => {
-  const match = new RegExp(`${key}\\s*:\\s*["']([^"'\\n]+)["']`).exec(source);
-  return match?.[1];
-};
-
-const extractConstStringValue = (source: string, identifier: string): string | undefined => {
-  const escapedIdentifier = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const directStringMatch = new RegExp(
-    `const\\s+${escapedIdentifier}\\s*=\\s*(["'\\"])(([\\s\\S]*?))\\1\\s*;?`,
-  ).exec(source);
-
-  if (directStringMatch !== null) {
-    return directStringMatch[2];
-  }
-
-  const joinedArrayMatch = new RegExp(
-    `const\\s+${escapedIdentifier}\\s*=\\s*\\[([\\s\\S]*?)\\]\\.join\\((["'])((?:[\\s\\S]*?))\\2\\)\\s*;?`,
-  ).exec(source);
-
-  if (joinedArrayMatch === null) {
-    return undefined;
-  }
-
-  const values = Array.from(joinedArrayMatch[1].matchAll(/["'`]([^"'`]+)["'`]/g)).map(
-    (match) => match[1],
-  );
-
-  if (values.length === 0) {
-    return undefined;
-  }
-
-  return values.join(joinedArrayMatch[3]);
-};
-
-const extractAuthoringInstructions = (source: string): string | undefined => {
-  const directInstructions = extractConfigString(source, "instructions");
-
-  if (directInstructions !== undefined) {
-    return directInstructions;
-  }
-
-  const authoringBlockMatch = /authoring\s*:\s*\{([\s\S]*?)\}/.exec(source);
-
-  if (authoringBlockMatch === null) {
-    return undefined;
-  }
-
-  const authoringBlock = authoringBlockMatch[1];
-  const explicitIdentifierMatch = /instructions\s*:\s*([A-Za-z_$][\w$]*)/.exec(authoringBlock);
-
-  if (explicitIdentifierMatch !== null) {
-    return extractConstStringValue(source, explicitIdentifierMatch[1]);
-  }
-
-  const hasShorthandInstructions = /\binstructions\b\s*(?:,|$)/.test(authoringBlock);
-
-  if (!hasShorthandInstructions) {
-    return undefined;
-  }
-
-  return extractConstStringValue(source, "instructions");
-};
-
-const parseConfigOverridesFromText = (source: string): ConfigOverrides => ({
-  defaultDriver: extractConfigString(source, "defaultDriver"),
-  defaultExecutor: extractConfigString(source, "defaultExecutor"),
-  defaultModel: extractConfigString(source, "defaultModel"),
-  authoringInstructions: extractAuthoringInstructions(source),
-});
-
-const readConfigSource = async (path: string): Promise<string> =>
-  runWithBunContext(
-    Effect.catchAll(
-      Effect.flatMap(FileSystem.FileSystem, (fileSystem) =>
-        fileSystem.readFileString(path, "utf-8"),
-      ),
-      () => Effect.succeed(""),
-    ),
-  );
-
-const defaultLoadConfigOverrides = async (path: string): Promise<ConfigOverrides> => {
-  const source = await readConfigSource(path);
-
-  return parseConfigOverridesFromText(source);
-};
 
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {
@@ -155,16 +69,6 @@ const findRepoRoot = async (
     current = parent;
   }
 };
-
-const mergeConfig = (defaults: MillConfig, overrides: ConfigOverrides): MillConfig => ({
-  ...defaults,
-  defaultDriver: overrides.defaultDriver ?? defaults.defaultDriver,
-  defaultExecutor: overrides.defaultExecutor ?? defaults.defaultExecutor,
-  defaultModel: overrides.defaultModel ?? defaults.defaultModel,
-  authoring: {
-    instructions: overrides.authoringInstructions ?? defaults.authoring.instructions,
-  },
-});
 
 const resolveConfigPath = async (
   cwd: string,
@@ -224,6 +128,119 @@ const resolveConfigPath = async (
   return undefined;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const hasConfigShape = (value: Record<string, unknown>): boolean =>
+  [
+    "defaultDriver",
+    "defaultExecutor",
+    "defaultModel",
+    "drivers",
+    "executors",
+    "extensions",
+    "authoring",
+  ].some((key) => key in value);
+
+const readRecordField = (
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined => {
+  const field = value[key];
+
+  if (!isRecord(field)) {
+    return undefined;
+  }
+
+  return field;
+};
+
+const readStringField = (value: Record<string, unknown>, key: string): string | undefined => {
+  const field = value[key];
+  return typeof field === "string" ? field : undefined;
+};
+
+const toConfigOverrides = (value: Record<string, unknown>): ConfigFileOverrides => {
+  const authoringRecord = readRecordField(value, "authoring");
+
+  return {
+    defaultDriver: readStringField(value, "defaultDriver"),
+    defaultExecutor: readStringField(value, "defaultExecutor"),
+    defaultModel: readStringField(value, "defaultModel"),
+    drivers: readRecordField(value, "drivers") as Readonly<Record<string, DriverRegistration>>,
+    executors: readRecordField(value, "executors") as MillConfig["executors"],
+    extensions: Array.isArray(value.extensions)
+      ? (value.extensions as MillConfig["extensions"])
+      : undefined,
+    authoring: {
+      instructions:
+        authoringRecord === undefined
+          ? undefined
+          : readStringField(authoringRecord, "instructions"),
+    },
+  };
+};
+
+const toModuleSpecifier = (path: string, cwd: string): string => {
+  if (path.startsWith("file://")) {
+    return path;
+  }
+
+  if (path.startsWith("/")) {
+    return new URL(path, "file://").href;
+  }
+
+  return new URL(path, `file://${normalizePath(cwd)}/`).href;
+};
+
+const defaultLoadConfigModule = async (path: string): Promise<unknown> => {
+  const moduleSpecifier = toModuleSpecifier(path, process.cwd());
+  // ast-grep-ignore: no-dynamic-import
+  return import(moduleSpecifier);
+};
+
+const extractConfigFromModule = (moduleValue: unknown): ConfigFileOverrides | undefined => {
+  if (!isRecord(moduleValue)) {
+    return undefined;
+  }
+
+  const candidateValues: ReadonlyArray<unknown> = [
+    moduleValue.default,
+    moduleValue.config,
+    moduleValue.millConfig,
+    moduleValue,
+  ];
+
+  for (const candidate of candidateValues) {
+    if (!isRecord(candidate) || !hasConfigShape(candidate)) {
+      continue;
+    }
+
+    return toConfigOverrides(candidate);
+  }
+
+  return undefined;
+};
+
+const mergeConfig = (defaults: MillConfig, overrides: ConfigFileOverrides): MillConfig => ({
+  ...defaults,
+  defaultDriver: overrides.defaultDriver ?? defaults.defaultDriver,
+  defaultExecutor: overrides.defaultExecutor ?? defaults.defaultExecutor,
+  defaultModel: overrides.defaultModel ?? defaults.defaultModel,
+  drivers: {
+    ...defaults.drivers,
+    ...overrides.drivers,
+  },
+  executors: {
+    ...defaults.executors,
+    ...overrides.executors,
+  },
+  extensions: overrides.extensions ?? defaults.extensions,
+  authoring: {
+    instructions: overrides.authoring?.instructions ?? defaults.authoring.instructions,
+  },
+});
+
 export const defineConfig = <T extends MillConfig>(config: T): T => config;
 
 export const processDriver = <T extends DriverRegistration>(driver: T): T => driver;
@@ -232,7 +249,7 @@ export const resolveConfig = async (options: ResolveConfigOptions): Promise<Reso
   const cwd = options.cwd ?? process.cwd();
   const homeDirectory = options.homeDirectory ?? process.env.HOME;
   const pathExists = options.pathExists ?? defaultPathExists;
-  const loadConfigOverrides = options.loadConfigOverrides ?? defaultLoadConfigOverrides;
+  const loadConfigModule = options.loadConfigModule ?? defaultLoadConfigModule;
 
   const resolvedPath = await resolveConfigPath(cwd, homeDirectory, pathExists);
 
@@ -243,11 +260,13 @@ export const resolveConfig = async (options: ResolveConfigOptions): Promise<Reso
     };
   }
 
-  const overrides = await loadConfigOverrides(resolvedPath.path);
+  const loadedModule = await loadConfigModule(resolvedPath.path);
+  const loadedConfig = extractConfigFromModule(loadedModule);
 
   return {
     source: resolvedPath.source,
     configPath: resolvedPath.path,
-    config: mergeConfig(options.defaults, overrides),
+    config:
+      loadedConfig === undefined ? options.defaults : mergeConfig(options.defaults, loadedConfig),
   };
 };

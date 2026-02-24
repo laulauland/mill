@@ -1,11 +1,7 @@
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Runtime, Stream } from "effect";
-import {
-  makeMillEngine,
-  ProgramExecutionError,
-  type InspectResult,
-} from "../engine.effect";
+import { makeMillEngine, ProgramExecutionError, type InspectResult } from "../engine.effect";
 import { makeDriverRegistry } from "../driver-registry.effect";
 import { makeExecutorRegistry } from "../executor-registry.effect";
 import {
@@ -15,33 +11,16 @@ import {
   type RunSyncOutput,
 } from "../run.schema";
 import { runDetachedWorker } from "../worker.effect";
-import { decodeSpawnOptions } from "../spawn.schema";
+import { executeProgramInProcessHost } from "../program-host.effect";
 import { resolveConfig } from "./config-loader.api";
 import type {
-  ConfigOverrides,
   DriverSessionPointer,
   ExecutorRuntime,
   ExtensionRegistration,
   ResolveConfigOptions,
-  SpawnInput,
-  SpawnOutput,
 } from "./types";
 
 const runtime = Runtime.defaultRuntime;
-
-type ProgramRunner = () => Promise<unknown>;
-
-type AsyncFunctionConstructor = new (...args: ReadonlyArray<string>) => ProgramRunner;
-
-const ProgramAsyncFunction = Object.getPrototypeOf(async () => undefined)
-  .constructor as AsyncFunctionConstructor;
-
-interface GlobalMillContext {
-  mill?: {
-    spawn: (input: SpawnInput) => Promise<SpawnOutput>;
-    [name: string]: unknown;
-  };
-}
 
 interface BaseRunInput extends ResolveConfigOptions {
   readonly driverName?: string;
@@ -58,16 +37,13 @@ export interface RunProgramSyncInput extends SubmitRunInput {
   readonly waitTimeoutSeconds?: number;
 }
 
-interface GetRunStatusInput extends Omit<
-  ResolveConfigOptions,
-  "pathExists" | "loadConfigOverrides"
-> {
+interface GetRunStatusInput extends Omit<ResolveConfigOptions, "pathExists" | "loadConfigModule"> {
   readonly runId: string;
   readonly driverName?: string;
   readonly executorName?: string;
   readonly runsDirectory?: string;
   readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigOverrides?: (path: string) => Promise<ConfigOverrides>;
+  readonly loadConfigModule?: (path: string) => Promise<unknown>;
 }
 
 export interface WaitForRunInput extends GetRunStatusInput {
@@ -173,65 +149,6 @@ const writeSubmissionArtifacts = (
     }),
   );
 
-const toExtensionApiBridge = (
-  extensions: ReadonlyArray<ExtensionRegistration>,
-): Readonly<Record<string, unknown>> =>
-  Object.fromEntries(
-    extensions
-      .filter((extension) => extension.api !== undefined)
-      .map((extension) => {
-        const api = extension.api ?? {};
-
-        return [
-          extension.name,
-          Object.fromEntries(
-            Object.entries(api).map(([methodName, method]) => [
-              methodName,
-              (...args: ReadonlyArray<unknown>) =>
-                Runtime.runPromise(runtime)(Effect.provide(method(...args), BunContext.layer)),
-            ]),
-          ),
-        ] as const;
-      }),
-  );
-
-const executeProgramWithInjectedMill = (
-  programSource: string,
-  spawn: (input: SpawnInput) => Effect.Effect<SpawnOutput, unknown>,
-  extensions: ReadonlyArray<ExtensionRegistration>,
-): Effect.Effect<unknown, ProgramExecutionError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const globalContext = globalThis as GlobalMillContext;
-      const previousMill = globalContext.mill;
-      const programRunner = new ProgramAsyncFunction(programSource);
-      const extensionApiBridge = toExtensionApiBridge(extensions);
-
-      globalContext.mill = {
-        spawn: async (input) => {
-          const decodedInput = await Runtime.runPromise(runtime)(decodeSpawnOptions(input));
-          return Runtime.runPromise(runtime)(Effect.provide(spawn(decodedInput), BunContext.layer));
-        },
-        ...extensionApiBridge,
-      };
-
-      try {
-        return await programRunner();
-      } finally {
-        if (previousMill === undefined) {
-          delete globalContext.mill;
-        } else {
-          globalContext.mill = previousMill;
-        }
-      }
-    },
-    catch: (error) =>
-      new ProgramExecutionError({
-        runId: "pending",
-        message: String(error),
-      }),
-  });
-
 const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> => {
   const cwd = input.cwd ?? process.cwd();
   const resolvedConfig = await resolveConfig(input);
@@ -268,11 +185,18 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
   };
 };
 
-const parseInspectRef = (ref: string): { runId: string; spawnId?: string } => {
+const parseInspectRef = (
+  ref: string,
+):
+  | {
+      runId: string;
+      spawnId?: string;
+    }
+  | undefined => {
   const [runIdPart, spawnIdPart] = ref.split(".");
 
   if (runIdPart === undefined || runIdPart.length === 0) {
-    throw new Error("inspect reference requires a runId");
+    return undefined;
   }
 
   if (spawnIdPart === undefined || spawnIdPart.length === 0) {
@@ -339,7 +263,7 @@ export const runProgramSync = async (input: RunProgramSyncInput): Promise<RunSyn
     driverName: input.driverName,
     executorName: input.executorName,
     pathExists: input.pathExists,
-    loadConfigOverrides: input.loadConfigOverrides,
+    loadConfigModule: input.loadConfigModule,
   });
 
   const engineContext = await makeEngineForConfig(input);
@@ -348,7 +272,7 @@ export const runProgramSync = async (input: RunProgramSyncInput): Promise<RunSyn
   );
 
   if (result === undefined) {
-    throw new Error(`Run ${submittedRun.id} completed without persisted result.`);
+    return Promise.reject(new Error(`Run ${submittedRun.id} completed without persisted result.`));
   }
 
   return {
@@ -374,11 +298,16 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
           engineContext.selectedExecutorRuntime.runProgram({
             runId: input.runId,
             programPath,
-            execute: executeProgramWithInjectedMill(
+            execute: executeProgramInProcessHost({
+              runId: input.runId,
+              runDirectory: joinPath(engineContext.runsDirectory, input.runId),
+              workingDirectory: cwd,
+              programPath,
               programSource,
+              executorName: engineContext.selectedExecutorName,
+              extensions: engineContext.selectedExtensions,
               spawn,
-              engineContext.selectedExtensions,
-            ),
+            }),
           }),
           (error) =>
             new ProgramExecutionError({
@@ -411,7 +340,7 @@ export const waitForRun = async (input: WaitForRunInput): Promise<RunRecord> => 
     return waitOutcome.right;
   }
 
-  throw waitOutcome.left;
+  return Promise.reject(waitOutcome.left);
 };
 
 export const watchRun = async (input: WatchRunInput): Promise<void> => {
@@ -438,7 +367,9 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
   await runWithBunContext(
     Effect.scoped(
       Stream.runForEach(
-        Stream.takeUntil(engineContext.engine.watch(runId), (event) => isRunTerminalEvent(event.type)),
+        Stream.takeUntil(engineContext.engine.watch(runId), (event) =>
+          isRunTerminalEvent(event.type),
+        ),
         (event) =>
           Effect.sync(() => {
             input.onEvent(JSON.stringify(event));
@@ -452,12 +383,16 @@ export const inspectRun = async (
   input: InspectRunInput,
 ): Promise<InspectResult | InspectSessionOutput> => {
   const parsedRef = parseInspectRef(input.ref);
+
+  if (parsedRef === undefined) {
+    return Promise.reject(new Error("inspect reference requires a runId"));
+  }
+
   const engineContext = await makeEngineForConfig(input);
   const inspected = await runWithBunContext(
     engineContext.engine.inspect({
       runId: decodeRunIdSync(parsedRef.runId),
-      spawnId:
-        parsedRef.spawnId === undefined ? undefined : decodeSpawnIdSync(parsedRef.spawnId),
+      spawnId: parsedRef.spawnId === undefined ? undefined : decodeSpawnIdSync(parsedRef.spawnId),
     }),
   );
 
@@ -466,7 +401,9 @@ export const inspectRun = async (
   }
 
   if (inspected.kind !== "spawn" || inspected.result === undefined) {
-    throw new Error("inspect --session requires a runId.spawnId reference with completed spawn result");
+    return Promise.reject(
+      new Error("inspect --session requires a runId.spawnId reference with completed spawn result"),
+    );
   }
 
   const resolvedConfig = await resolveConfig(input);
@@ -474,11 +411,15 @@ export const inspectRun = async (
     defaultDriver: resolvedConfig.config.defaultDriver,
     drivers: resolvedConfig.config.drivers,
   });
-  const run = await runWithBunContext(engineContext.engine.status(decodeRunIdSync(parsedRef.runId)));
+  const run = await runWithBunContext(
+    engineContext.engine.status(decodeRunIdSync(parsedRef.runId)),
+  );
   const resolvedDriver = await Runtime.runPromise(runtime)(driverRegistry.resolve(run.driver));
 
   if (resolvedDriver.runtime.resolveSession === undefined) {
-    throw new Error(`Driver ${resolvedDriver.name} does not support session inspection`);
+    return Promise.reject(
+      new Error(`Driver ${resolvedDriver.name} does not support session inspection`),
+    );
   }
 
   const sessionPointer = await Runtime.runPromise(runtime)(
@@ -497,7 +438,9 @@ export const inspectRun = async (
   } satisfies InspectSessionOutput;
 };
 
-export const cancelRun = async (input: CancelRunInput): Promise<{
+export const cancelRun = async (
+  input: CancelRunInput,
+): Promise<{
   runId: string;
   status: RunRecord["status"];
   alreadyTerminal: boolean;

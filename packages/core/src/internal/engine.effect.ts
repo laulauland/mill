@@ -3,7 +3,6 @@ import {
   makeEventEnvelope,
   type MillEvent,
   type SpawnCompleteEvent,
-  type SpawnErrorEvent,
   type SpawnMilestoneEvent,
   type SpawnStartEvent,
   type SpawnToolCallEvent,
@@ -112,10 +111,9 @@ export interface MillEngine {
     RunSyncOutput["run"],
     RunNotFoundError | PersistenceError | LifecycleInvariantError | WaitTimeoutError
   >;
-  readonly list: (status?: RunSyncOutput["run"]["status"]) => Effect.Effect<
-    ReadonlyArray<RunSyncOutput["run"]>,
-    PersistenceError
-  >;
+  readonly list: (
+    status?: RunSyncOutput["run"]["status"],
+  ) => Effect.Effect<ReadonlyArray<RunSyncOutput["run"]>, PersistenceError>;
   readonly watch: (runId: RunId) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError>;
   readonly watchRaw: (runId: RunId) => Stream.Stream<string, RunNotFoundError | PersistenceError>;
   readonly inspect: (
@@ -172,9 +170,8 @@ const synchronizeAppendState = (
   runId: RunId,
 ): Effect.Effect<LifecycleGuardState, PersistenceError | LifecycleInvariantError> =>
   Effect.gen(function* () {
-    const persistedEvents = yield* Effect.mapError(
-      runStore.readEvents(runId),
-      (error) => toPersistenceError(runId, error),
+    const persistedEvents = yield* Effect.mapError(runStore.readEvents(runId), (error) =>
+      toPersistenceError(runId, error),
     );
 
     let lifecycleState = initialLifecycleGuardState;
@@ -952,7 +949,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
       ),
 
     watchRaw: (runId) =>
-      Stream.unwrapScoped(Effect.zipRight(runStore.getRun(runId), Effect.succeed(watchRawLive(runId)))),
+      Stream.unwrapScoped(
+        Effect.zipRight(runStore.getRun(runId), Effect.succeed(watchRawLive(runId))),
+      ),
 
     inspect: (ref) =>
       Effect.gen(function* () {
@@ -1011,13 +1010,19 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           const sequenceRef = yield* Ref.make(maxSequence);
 
           yield* Effect.catchTag(
-            appendTier1Event(lifecycleStateRef, sequenceRef, runStore, runId, (sequence, timestamp) => ({
-              ...makeEventEnvelope(runId, sequence, timestamp),
-              type: "run:cancelled",
-              payload: {
-                reason,
-              },
-            })),
+            appendTier1Event(
+              lifecycleStateRef,
+              sequenceRef,
+              runStore,
+              runId,
+              (sequence, timestamp) => ({
+                ...makeEventEnvelope(runId, sequence, timestamp),
+                type: "run:cancelled",
+                payload: {
+                  reason,
+                },
+              }),
+            ),
             "LifecycleInvariantError",
             () => Effect.void,
           );

@@ -47,7 +47,9 @@ export interface RunStore {
   readonly getResult: (
     runId: RunId,
   ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError>;
-  readonly listRuns: (status?: RunRecord["status"]) => Effect.Effect<ReadonlyArray<RunRecord>, PersistenceError>;
+  readonly listRuns: (
+    status?: RunRecord["status"],
+  ) => Effect.Effect<ReadonlyArray<RunRecord>, PersistenceError>;
 }
 
 export interface MakeRunStoreInput {
@@ -241,7 +243,9 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
               return undefined;
             }
 
-            const maybeRun = yield* Effect.either(storeGetRun(input.runsDirectory, decodedRunId.right));
+            const maybeRun = yield* Effect.either(
+              storeGetRun(input.runsDirectory, decodedRunId.right),
+            );
 
             if (maybeRun._tag === "Left") {
               return undefined;

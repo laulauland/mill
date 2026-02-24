@@ -418,15 +418,19 @@ describe("MillEngine sync lifecycle", () => {
 
       const watchTier1Effect = Effect.scoped(
         Stream.runCollect(
-          Stream.takeUntil(engine.watch(runId), (event) =>
-            event.type === "run:complete" ||
-            event.type === "run:failed" ||
-            event.type === "run:cancelled",
+          Stream.takeUntil(
+            engine.watch(runId),
+            (event) =>
+              event.type === "run:complete" ||
+              event.type === "run:failed" ||
+              event.type === "run:cancelled",
           ),
         ),
       );
 
-      const watchRawEffect = Effect.scoped(Stream.runCollect(Stream.take(engine.watchRaw(runId), 2)));
+      const watchRawEffect = Effect.scoped(
+        Stream.runCollect(Stream.take(engine.watchRaw(runId), 2)),
+      );
 
       const executionEffect = engine.runSync({
         runId,
@@ -460,7 +464,7 @@ describe("MillEngine sync lifecycle", () => {
       expect(rawEvents[0]).toContain("raw:scout");
 
       const eventsFile = await readFile(join(runsDirectory, runId, "events.ndjson"), "utf-8");
-      expect(eventsFile.includes("\"type\":\"final\"")).toBe(false);
+      expect(eventsFile.includes('"type":"final"')).toBe(false);
     } finally {
       await rm(runsDirectory, { recursive: true, force: true });
     }

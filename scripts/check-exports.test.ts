@@ -32,12 +32,20 @@ describe("check-exports", () => {
 
       await writeFile(
         join(workspaceRoot, "packages", "core", "package.json"),
-        JSON.stringify({ name: "@fixture/core", exports: { ".": "./src/public/index.api.ts" } }, null, 2),
+        JSON.stringify(
+          { name: "@fixture/core", exports: { ".": "./src/public/index.api.ts" } },
+          null,
+          2,
+        ),
         "utf-8",
       );
       await writeFile(
         join(workspaceRoot, "tools", "kit", "package.json"),
-        JSON.stringify({ name: "@fixture/kit", exports: { ".": "./src/public/index.api.ts" } }, null, 2),
+        JSON.stringify(
+          { name: "@fixture/kit", exports: { ".": "./src/public/index.api.ts" } },
+          null,
+          2,
+        ),
         "utf-8",
       );
 
@@ -58,7 +66,11 @@ describe("check-exports", () => {
     try {
       await writeFile(
         join(workspaceRoot, "package.json"),
-        JSON.stringify({ name: "mill-fixture", private: true, workspaces: ["packages/*"] }, null, 2),
+        JSON.stringify(
+          { name: "mill-fixture", private: true, workspaces: ["packages/*"] },
+          null,
+          2,
+        ),
         "utf-8",
       );
       await mkdir(join(workspaceRoot, "packages", "core"), { recursive: true });
@@ -101,7 +113,11 @@ describe("check-exports", () => {
     try {
       await writeFile(
         join(workspaceRoot, "package.json"),
-        JSON.stringify({ name: "mill-fixture", private: true, workspaces: ["packages/*"] }, null, 2),
+        JSON.stringify(
+          { name: "mill-fixture", private: true, workspaces: ["packages/*"] },
+          null,
+          2,
+        ),
         "utf-8",
       );
       await mkdir(join(workspaceRoot, "packages", "core"), { recursive: true });

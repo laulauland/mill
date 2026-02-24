@@ -25,6 +25,12 @@ const DiscoveryEnvelope = Schema.parseJson(
         models: Schema.Array(Schema.String),
       }),
     }),
+    executors: Schema.Record({
+      key: Schema.String,
+      value: Schema.Struct({
+        description: Schema.String,
+      }),
+    }),
     authoring: Schema.Struct({
       instructions: Schema.String,
     }),
@@ -130,29 +136,58 @@ const ListEnvelope = Schema.parseJson(
   ),
 );
 
+const EventTypeEnvelope = Schema.parseJson(
+  Schema.Struct({
+    type: Schema.String,
+  }),
+);
+
 const commandOutput = (command: Command.Command): Promise<string> =>
   Runtime.runPromise(runtime)(Effect.provide(Command.string(command), BunContext.layer));
 
 const commandExitCode = (command: Command.Command): Promise<number> =>
   Runtime.runPromise(runtime)(Effect.provide(Command.exitCode(command), BunContext.layer));
 
-describe("mill --help --json (e2e)", () => {
+describe("mill discovery/help (e2e)", () => {
   it("returns discovery contract payload on stdout", async () => {
     const output = await commandOutput(
-      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "--help", "--json"),
+      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "discovery", "--json"),
     );
 
     const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(output);
     expect(payload.discoveryVersion).toBe(1);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect(payload.drivers.default?.models).toEqual([
+    expect(payload.drivers.pi?.models).toEqual([
       "openai/gpt-5.3-codex",
       "anthropic/claude-sonnet-4-6",
     ]);
     expect(payload.drivers.claude?.models).toEqual(["anthropic/claude-sonnet-4-6"]);
     expect(payload.drivers.codex?.models).toEqual(["openai/gpt-5.3-codex"]);
+    expect(payload.executors.direct?.description).toBe("Local direct executor");
+    expect(payload.executors.vm).toBeUndefined();
     expect(payload.authoring.instructions.length).toBeGreaterThan(0);
     expect(payload.async.submit).toBe("mill run <program.ts> --json");
+  });
+
+  it("prints top-level help via built-in --help", async () => {
+    const output = await commandOutput(
+      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "--help"),
+    );
+
+    expect(output).toContain("USAGE");
+    expect(output).toContain("$ mill");
+    expect(output).toContain("COMMANDS");
+    expect(output).not.toContain("Effect-first");
+  });
+
+  it("prints per-command help via built-in --help", async () => {
+    const output = await commandOutput(
+      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "run", "--help"),
+    );
+
+    expect(output).toContain("$ run [--json] [--sync]");
+    expect(output).toContain("--driver");
+    expect(output).toContain("--executor");
   });
 });
 
@@ -188,7 +223,7 @@ describe("mill run/status/wait (e2e)", () => {
           "--driver",
           "codex",
           "--executor",
-          "vm",
+          "direct",
           "--runs-dir",
           runsDirectory,
         ),
@@ -196,7 +231,7 @@ describe("mill run/status/wait (e2e)", () => {
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runOutput);
       expect(runPayload.run.driver).toBe("codex");
-      expect(runPayload.run.executor).toBe("vm");
+      expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.spawns[0]?.driver).toBe("codex");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -304,7 +339,7 @@ describe("mill run/status/wait (e2e)", () => {
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line) as { readonly type: string })
+        .map((line) => Schema.decodeUnknownSync(EventTypeEnvelope)(line))
         .filter(
           (event) =>
             event.type === "run:complete" ||
@@ -358,7 +393,7 @@ describe("mill run/status/wait (e2e)", () => {
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runOutput);
       expect(runPayload.run.status).toBe("complete");
-      expect(runPayload.run.driver).toBe("default");
+      expect(runPayload.run.driver).toBe("pi");
       expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
       expect(runPayload.result.spawns).toHaveLength(2);
@@ -486,6 +521,24 @@ describe("mill run/status/wait (e2e)", () => {
       expect(cancelPayload.runId).toBe(cancelRun.runId);
       expect(cancelPayload.status).toBe("cancelled");
 
+      const waitCancelledOutput = await commandOutput(
+        Command.make(
+          "bun",
+          "run",
+          "packages/cli/src/bin/mill.ts",
+          "wait",
+          cancelRun.runId,
+          "--timeout",
+          "8",
+          "--json",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const waitCancelled = Schema.decodeUnknownSync(StatusEnvelope)(waitCancelledOutput);
+      expect(waitCancelled.status).toBe("cancelled");
+
       const waitCompleteOutput = await commandOutput(
         Command.make(
           "bun",
@@ -524,7 +577,7 @@ describe("mill run/status/wait (e2e)", () => {
 
       expect(watchLines.length).toBeGreaterThan(0);
       const watchTerminalCount = watchLines
-        .map((line) => JSON.parse(line) as { readonly type: string })
+        .map((line) => Schema.decodeUnknownSync(EventTypeEnvelope)(line))
         .filter(
           (event) =>
             event.type === "run:complete" ||
@@ -546,7 +599,8 @@ describe("mill run/status/wait (e2e)", () => {
         ),
       );
 
-      const inspectedCancelled = Schema.decodeUnknownSync(InspectRunEnvelope)(inspectCancelledOutput);
+      const inspectedCancelled =
+        Schema.decodeUnknownSync(InspectRunEnvelope)(inspectCancelledOutput);
       expect(inspectedCancelled.run.status).toBe("cancelled");
       expect(
         inspectedCancelled.events.filter((event) => event.type === "run:cancelled"),
@@ -610,7 +664,7 @@ describe("mill run/status/wait (e2e)", () => {
           id: runId,
           status: "running",
           programPath: "/tmp/program.ts",
-          driver: "default",
+          driver: "pi",
           executor: "direct",
           createdAt: "2026-02-23T20:00:00.000Z",
           updatedAt: "2026-02-23T20:00:00.000Z",
