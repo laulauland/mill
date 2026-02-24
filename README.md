@@ -1,6 +1,6 @@
 # mill
 
-A runtime for executing TypeScript programs that spawn and coordinate AI agents. Write plain TS with `await` and `Promise.all` — mill handles the lifecycle, persistence, and observability.
+A runtime for executing TypeScript programs that can spawn agents. Write plain TS with `await` and `Promise.all` — mill handles the lifecycle, persistence, and observability.
 
 ## What you can do
 
@@ -10,7 +10,7 @@ A runtime for executing TypeScript programs that spawn and coordinate AI agents.
 
 **Swap agent backends** — drivers are generic adapters. Ship with pi, Claude, and Codex drivers. Write your own by implementing a codec that parses process output into structured events.
 
-**Observe everything** — structured NDJSON event log per run, real-time streaming via `mill watch`, and full session replay via `mill inspect --session`.
+**Observe everything** — structured NDJSON event log per run, real-time streaming via `mill watch`, and full session replay via `mill inspect --session`. Use the built-in `mill watch` or build a TUI around it.
 
 ## Quick example
 
@@ -27,6 +27,7 @@ const plan = await mill.spawn({
   agent: "planner",
   systemPrompt: "You turn findings into an execution-ready plan.",
   prompt: `Create remediation steps from:\n\n${scan.text}`,
+  model: "anthropic/claude-opus-4.6",
 });
 
 console.log(plan.text);
