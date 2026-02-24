@@ -24,9 +24,9 @@ let done = false;
 
 while (!done && iteration < maxIterations) {
   iteration++;
-  factory.observe.log("info", `Iteration ${iteration}`, { maxIterations });
+  mill.observe.log("info", `Iteration ${iteration}`, { maxIterations });
 
-  const result = await factory.spawn({
+  const result = await mill.spawn({
     agent: "worker",
     systemPrompt: "You are fixing issues iteratively",
     prompt: "Fix the next issue",
@@ -38,7 +38,7 @@ while (!done && iteration < maxIterations) {
   done = result.exitCode === 0 && result.text.includes("all clean");
 
   if (result.exitCode !== 0) {
-    factory.observe.log("error", "Agent failed", { iteration, error: result.errorMessage });
+    mill.observe.log("error", "Agent failed", { iteration, error: result.errorMessage });
     break;
   }
 }
@@ -63,16 +63,16 @@ while (iteration < maxIterations) {
   });
 
   if (lintResult.status === 0) {
-    factory.observe.log("info", "Lint clean!", { iterations: iteration });
+    mill.observe.log("info", "Lint clean!", { iterations: iteration });
     break;
   }
 
-  factory.observe.log("info", `Iteration ${iteration}`, {
+  mill.observe.log("info", `Iteration ${iteration}`, {
     exitCode: lintResult.status,
     errorCount: (lintResult.stdout.match(/error/gi) || []).length,
   });
 
-  const result = await factory.spawn({
+  const result = await mill.spawn({
     agent: "linter",
     systemPrompt: `You fix lint errors iteratively.
 Run 'npm run lint' to see current errors.
@@ -84,7 +84,7 @@ Make minimal, focused changes.`,
   });
 
   if (result.exitCode !== 0) {
-    factory.observe.log("error", "Agent failed", { iteration });
+    mill.observe.log("error", "Agent failed", { iteration });
     break;
   }
 }
@@ -123,7 +123,7 @@ while (iteration < maxIterations) {
   const errorCount = (lintResult.stdout.match(/error/gi) || []).length;
 
   if (lintResult.status === 0) {
-    factory.observe.log("info", "All issues fixed!", {
+    mill.observe.log("info", "All issues fixed!", {
       iterations: iteration,
       fixedIssues: progress.fixedIssues,
     });
@@ -139,11 +139,11 @@ while (iteration < maxIterations) {
 
   // Exit if stagnant
   if (progress.stagnantIterations >= 3) {
-    factory.observe.log("warning", "No progress for 3 iterations", { errorCount });
+    mill.observe.log("warning", "No progress for 3 iterations", { errorCount });
     break;
   }
 
-  factory.observe.log("info", `Iteration ${iteration}`, {
+  mill.observe.log("info", `Iteration ${iteration}`, {
     errorCount,
     lastErrorCount: progress.lastErrorCount,
     fixed: progress.fixedIssues.length,
@@ -151,7 +151,7 @@ while (iteration < maxIterations) {
 
   progress.lastErrorCount = errorCount;
 
-  const result = await factory.spawn({
+  const result = await mill.spawn({
     agent: "fixer",
     systemPrompt: `You fix lint errors iteratively.
 Track your progress and avoid repeating unsuccessful approaches.
@@ -193,11 +193,11 @@ while (iteration < maxIterations) {
   });
 
   if (testResult.status === 0) {
-    factory.observe.log("info", "Tests passing!", { iterations: iteration });
+    mill.observe.log("info", "Tests passing!", { iterations: iteration });
     break;
   }
 
-  factory.observe.log("info", `Iteration ${iteration}`, {
+  mill.observe.log("info", `Iteration ${iteration}`, {
     exitCode: testResult.status,
     timeout: testResult.signal === "SIGTERM",
   });
@@ -207,7 +207,7 @@ while (iteration < maxIterations) {
     .join("\n")
     .slice(-5000); // Last 5KB to avoid huge prompt payloads
 
-  const result = await factory.spawn({
+  const result = await mill.spawn({
     agent: "test-fixer",
     systemPrompt: `You fix failing tests iteratively.
 Analyze test output, identify the root cause, and make minimal fixes.
@@ -219,7 +219,7 @@ Focus on one failure at a time if there are multiple.`,
   });
 
   if (result.exitCode !== 0) {
-    factory.observe.log("error", "Agent failed", { iteration });
+    mill.observe.log("error", "Agent failed", { iteration });
     break;
   }
 }
@@ -257,16 +257,16 @@ let iteration = 0;
 while (iteration < maxIterations) {
   const nextTask = tasks.find((t) => !t.completed);
   if (!nextTask) {
-    factory.observe.log("info", "All tasks completed!", { iterations: iteration });
+    mill.observe.log("info", "All tasks completed!", { iterations: iteration });
     break;
   }
 
   iteration++;
-  factory.observe.log("info", `Iteration ${iteration}: ${nextTask.id}`, {
+  mill.observe.log("info", `Iteration ${iteration}: ${nextTask.id}`, {
     remaining: tasks.filter((t) => !t.completed).length,
   });
 
-  const result = await factory.spawn({
+  const result = await mill.spawn({
     agent: "implementer",
     systemPrompt: `You implement PRD tasks iteratively.
 Read the PRD at ${prdPath}.
@@ -281,7 +281,7 @@ Mark tasks complete by updating ${tasksPath}.`,
   });
 
   if (result.exitCode !== 0) {
-    factory.observe.log("error", "Agent failed", { iteration, task: nextTask.id });
+    mill.observe.log("error", "Agent failed", { iteration, task: nextTask.id });
     break;
   }
 
@@ -336,7 +336,7 @@ while (iteration < maxIterations) {
   });
 
   if (checkResult.status === 0) {
-    factory.observe.log("info", "Check passed!", { iterations: iteration });
+    mill.observe.log("info", "Check passed!", { iterations: iteration });
     break;
   }
 
@@ -344,24 +344,24 @@ while (iteration < maxIterations) {
   const currentOutput = checkResult.stdout + checkResult.stderr;
   if (currentOutput === lastCheckOutput) {
     stagnantCount++;
-    factory.observe.log("warning", "No change detected", { stagnantCount });
+    mill.observe.log("warning", "No change detected", { stagnantCount });
   } else {
     stagnantCount = 0;
   }
   lastCheckOutput = currentOutput;
 
   if (stagnantCount >= maxStagnantIterations) {
-    factory.observe.log("error", "Stagnant iterations exceeded", { stagnantCount });
+    mill.observe.log("error", "Stagnant iterations exceeded", { stagnantCount });
     break;
   }
 
-  factory.observe.log("info", `Iteration ${iteration}`, {
+  mill.observe.log("info", `Iteration ${iteration}`, {
     stagnantCount,
     failedCount,
     max: maxIterations,
   });
 
-  const result = await factory.spawn({
+  const result = await mill.spawn({
     agent: "worker",
     systemPrompt: "You are fixing issues iteratively",
     prompt: "Continue fixing issues",
@@ -371,10 +371,10 @@ while (iteration < maxIterations) {
 
   if (result.exitCode !== 0) {
     failedCount++;
-    factory.observe.log("error", "Agent failed", { iteration, failedCount });
+    mill.observe.log("error", "Agent failed", { iteration, failedCount });
 
     if (failedCount >= maxFailedIterations) {
-      factory.observe.log("error", "Failed iterations exceeded", { failedCount });
+      mill.observe.log("error", "Failed iterations exceeded", { failedCount });
       break;
     }
   } else {
@@ -429,7 +429,7 @@ Current errors: ${errorCount}
 Observability is critical for debugging loops:
 
 ```typescript
-factory.observe.log("info", "Loop state", {
+mill.observe.log("info", "Loop state", {
   iteration,
   errorCount,
   stagnantCount,
@@ -468,7 +468,7 @@ Not ideal for:
 - Tasks requiring deep context across iterations
 - Complex multi-step reasoning within a single problem
 - When the agent needs to remember detailed discussions
-- Parallel work (use `Promise.all` with `factory.spawn` instead)
+- Parallel work (use `Promise.all` with `mill.spawn` instead)
 
 ## Advanced: Nested Loops
 
@@ -478,13 +478,13 @@ You can nest Ralph Loops for hierarchical work:
 const modules = ["src/auth", "src/api", "src/db"];
 
 for (const module of modules) {
-  factory.observe.log("info", `Processing module: ${module}`);
+  mill.observe.log("info", `Processing module: ${module}`);
 
   let iteration = 0;
   while (iteration < 10) {
     iteration++;
 
-    const result = await factory.spawn({
+    const result = await mill.spawn({
       agent: "module-fixer",
       systemPrompt: `Fix issues in ${module}`,
       prompt: "Run checks and fix issues",
@@ -506,7 +506,7 @@ for (const module of modules) {
 
 The Ralph Loop is a simple but powerful pattern:
 
-- **While loop** around `await factory.spawn()`
+- **While loop** around `await mill.spawn()`
 - **Filesystem persistence** between iterations
 - **Bash exit conditions** for authoritative checks
 - **Progress tracking** to detect stagnation

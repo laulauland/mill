@@ -1,49 +1,49 @@
 import { describe, expect, it } from "bun:test";
-import { Effect } from "effect";
 import { runWithRuntime } from "../public/test-runtime.api";
 import { decodePiProcessOutput } from "./pi.codec";
 
 describe("pi codec terminal sequencing", () => {
-  it("rejects duplicate terminal agent_end lines deterministically", async () => {
+  it("uses the last agent_end payload when multiple terminal events are emitted", async () => {
     const output = [
       JSON.stringify({ type: "session", id: "session-test" }),
-      JSON.stringify({ type: "agent_end", messages: [] }),
-      JSON.stringify({ type: "agent_end", messages: [] }),
+      JSON.stringify({
+        type: "agent_end",
+        messages: [{ role: "assistant", content: [{ type: "text", text: "first" }] }],
+      }),
+      JSON.stringify({
+        type: "agent_end",
+        messages: [{ role: "assistant", content: [{ type: "text", text: "second" }] }],
+      }),
     ].join("\n");
 
-    const decodeError = await runWithRuntime(
-      Effect.flip(
-        decodePiProcessOutput(output, {
-          agent: "scout",
-          model: "openai/gpt-5.3-codex",
-          spawnId: "spawn_test",
-        }),
-      ),
+    const decoded = await runWithRuntime(
+      decodePiProcessOutput(output, {
+        agent: "scout",
+        model: "openai/gpt-5.3-codex",
+        spawnId: "spawn_test",
+      }),
     );
 
-    expect(decodeError).toMatchObject({
-      _tag: "PiCodecError",
-    });
+    expect(decoded.result.text).toBe("second");
   });
 
-  it("rejects non-terminal lines emitted after terminal agent_end", async () => {
+  it("tolerates non-terminal retry events emitted after agent_end", async () => {
     const output = [
-      JSON.stringify({ type: "agent_end", messages: [] }),
-      JSON.stringify({ type: "tool_execution_start", toolName: "bash" }),
+      JSON.stringify({
+        type: "agent_end",
+        messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+      }),
+      JSON.stringify({ type: "auto_retry_start" }),
     ].join("\n");
 
-    const decodeError = await runWithRuntime(
-      Effect.flip(
-        decodePiProcessOutput(output, {
-          agent: "scout",
-          model: "openai/gpt-5.3-codex",
-          spawnId: "spawn_test",
-        }),
-      ),
+    const decoded = await runWithRuntime(
+      decodePiProcessOutput(output, {
+        agent: "scout",
+        model: "openai/gpt-5.3-codex",
+        spawnId: "spawn_test",
+      }),
     );
 
-    expect(decodeError).toMatchObject({
-      _tag: "PiCodecError",
-    });
+    expect(decoded.result.text).toBe("done");
   });
 });

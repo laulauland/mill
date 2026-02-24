@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -6,7 +7,7 @@ import type { RunSummary, ExecutionResult, UsageStats } from "./types.js";
 
 /**
  * Filesystem scanner for standalone --mill mode.
- * Reads run.json files from ~/.pi/agent/sessions/&lt;session-dir&gt;/.factory/&lt;run-id&gt;/run.json
+ * Reads run.json files from ~/.pi/agent/sessions/<session-dir>/.mill/<run-id>/run.json
  */
 
 /** Convert a cwd path to the session directory name pi uses. */
@@ -22,6 +23,11 @@ interface RunJsonData {
   task?: string;
   startedAt?: number;
   completedAt?: number;
+  mill?: {
+    command?: string;
+    args?: string[];
+    runsDir?: string;
+  };
   results?: Array<{
     agent: string;
     task: string;
@@ -37,7 +43,10 @@ interface RunJsonData {
 }
 
 /** Parse a single run.json into a RunRecord (without promise/abort). */
-function parseRunJson(data: RunJsonData): Omit<RunRecord, "promise" | "abort"> {
+function parseRunJson(
+  data: RunJsonData,
+  artifactsDir: string,
+): Omit<RunRecord, "promise" | "abort"> {
   const status: RunStatus = data.status ?? "done";
   const results: ExecutionResult[] = (data.results ?? []).map((r) => ({
     taskId: "",
@@ -67,7 +76,20 @@ function parseRunJson(data: RunJsonData): Omit<RunRecord, "promise" | "abort"> {
     status,
     results,
     error: data.error as RunSummary["error"],
-    metadata: { task: data.task },
+    metadata: {
+      task: data.task,
+      millCommand: data.mill?.command,
+      millArgs: data.mill?.args,
+      millRunsDir: data.mill?.runsDir,
+    },
+    observability: {
+      status,
+      events: [],
+      artifacts: [],
+      artifactsDir,
+      startedAt: data.startedAt ?? Date.now(),
+      endedAt: data.completedAt,
+    },
   };
 
   return {
@@ -87,7 +109,7 @@ export function getSessionsBase(): string {
 }
 
 /**
- * Scan all run.json files under a session's .factory directory.
+ * Scan all run.json files under a session's .mill directory.
  * If sessionDirName is provided, scans only that session.
  * If not provided, scans all sessions.
  */
@@ -100,17 +122,17 @@ export function scanRuns(
   const sessionDirs = sessionDirName ? [sessionDirName] : listSessionDirs(sessionsBase);
 
   for (const dir of sessionDirs) {
-    const factoryDir = path.join(sessionsBase, dir, ".factory");
-    if (!fs.existsSync(factoryDir)) continue;
+    const millDir = path.join(sessionsBase, dir, ".mill");
+    if (!fs.existsSync(millDir)) continue;
 
     try {
-      for (const entry of fs.readdirSync(factoryDir)) {
-        const runJsonPath = path.join(factoryDir, entry, "run.json");
+      for (const entry of fs.readdirSync(millDir)) {
+        const runJsonPath = path.join(millDir, entry, "run.json");
         if (!fs.existsSync(runJsonPath)) continue;
         try {
           const raw = fs.readFileSync(runJsonPath, "utf-8");
           const data: RunJsonData = JSON.parse(raw);
-          records.push(parseRunJson(data));
+          records.push(parseRunJson(data, path.join(millDir, entry)));
         } catch {
           // Skip malformed run.json files
         }
@@ -145,20 +167,50 @@ export function cancelByPidFile(outputDir: string, taskId: string): boolean {
 }
 
 /**
- * Cancel all running subagents for a run by scanning for PID files in the run's sessions directory.
- * Returns the number of processes signalled.
+ * Cancel a run using metadata from run.json (preferred), with PID-kill fallback.
+ * Returns the number of cancellation actions attempted.
  */
 export function cancelRunByPidFiles(artifactsDir: string): number {
-  const sessionsDir = path.join(artifactsDir, "sessions");
   let cancelled = 0;
+
   try {
-    if (!fs.existsSync(sessionsDir)) return 0;
+    const runJsonPath = path.join(artifactsDir, "run.json");
+    if (fs.existsSync(runJsonPath)) {
+      const data: RunJsonData = JSON.parse(fs.readFileSync(runJsonPath, "utf-8"));
+      if (typeof data.runId === "string" && data.runId.length > 0) {
+        const command = data.mill?.command?.trim() || "mill";
+        const args = [...(data.mill?.args ?? []), "cancel", data.runId];
+        if (data.mill?.runsDir && data.mill.runsDir.trim().length > 0) {
+          args.push("--runs-dir", data.mill.runsDir);
+        }
+
+        const result = spawnSync(command, args, {
+          stdio: "ignore",
+          shell: false,
+        });
+
+        if (result.status === 0) {
+          cancelled++;
+          return cancelled;
+        }
+      }
+    }
+  } catch {
+    // fall through to PID fallback
+  }
+
+  const sessionsDir = path.join(artifactsDir, "sessions");
+  try {
+    if (!fs.existsSync(sessionsDir)) return cancelled;
     for (const entry of fs.readdirSync(sessionsDir)) {
       if (!entry.endsWith(".pid")) continue;
       const taskId = entry.replace(/\.pid$/, "");
       if (cancelByPidFile(sessionsDir, taskId)) cancelled++;
     }
-  } catch {}
+  } catch {
+    // ignore fallback failures
+  }
+
   return cancelled;
 }
 

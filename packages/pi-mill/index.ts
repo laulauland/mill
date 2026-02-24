@@ -24,6 +24,11 @@ function writeRunJson(summary: RunSummary): void {
       runId: summary.runId,
       status: summary.status,
       task: (summary.metadata as any)?.task,
+      mill: {
+        command: (summary.metadata as any)?.millCommand,
+        args: (summary.metadata as any)?.millArgs,
+        runsDir: (summary.metadata as any)?.millRunsDir,
+      },
       startedAt: summary.observability?.startedAt,
       completedAt: summary.observability?.endedAt ?? Date.now(),
       results: summary.results.map((r) => ({
@@ -42,12 +47,22 @@ function writeRunJson(summary: RunSummary): void {
 }
 
 /** Write a partial run.json so external monitors (pi --mill) can see active runs. */
-function writeRunningMarker(runId: string, task: string, artifactsDir: string): void {
+function writeRunningMarker(
+  runId: string,
+  task: string,
+  artifactsDir: string,
+  millConfig: { command: string; args: string[]; runsDir?: string },
+): void {
   try {
     const data = {
       runId,
       status: "running",
       task,
+      mill: {
+        command: millConfig.command,
+        args: millConfig.args,
+        runsDir: millConfig.runsDir,
+      },
       startedAt: Date.now(),
       results: [],
     };
@@ -252,14 +267,15 @@ function renderExpanded(summary: RunSummary, theme: any): Container {
 function loadHistoricalRuns(ctx: ExtensionContext, registry: RunRegistry): void {
   const sessionDir = ctx.sessionManager.getSessionDir();
   if (!sessionDir) return;
-  const factoryDir = path.join(sessionDir, ".factory");
-  if (!fs.existsSync(factoryDir)) return;
+  const millDir = path.join(sessionDir, ".mill");
+  if (!fs.existsSync(millDir)) return;
   try {
-    for (const entry of fs.readdirSync(factoryDir)) {
-      const runJsonPath = path.join(factoryDir, entry, "run.json");
+    for (const entry of fs.readdirSync(millDir)) {
+      const runJsonPath = path.join(millDir, entry, "run.json");
       if (!fs.existsSync(runJsonPath)) continue;
       try {
         const data = JSON.parse(fs.readFileSync(runJsonPath, "utf-8"));
+        const artifactsDir = path.join(millDir, entry);
         registry.loadHistorical({
           runId: data.runId,
           status: data.status ?? "done",
@@ -268,7 +284,20 @@ function loadHistoricalRuns(ctx: ExtensionContext, registry: RunRegistry): void 
             status: data.status ?? "done",
             results: data.results ?? [],
             error: data.error,
-            metadata: { task: data.task },
+            metadata: {
+              task: data.task,
+              millCommand: data.mill?.command,
+              millArgs: data.mill?.args,
+              millRunsDir: data.mill?.runsDir,
+            },
+            observability: {
+              status: data.status ?? "done",
+              events: [],
+              artifacts: [],
+              artifactsDir,
+              startedAt: data.startedAt ?? Date.now(),
+              endedAt: data.completedAt,
+            },
           },
           startedAt: data.startedAt ?? Date.now(),
           completedAt: data.completedAt,
@@ -297,7 +326,7 @@ export const config: ExtensionConfig = {
   millRunsDir: undefined,
   /** Extra text appended to the tool description. Use for model selection hints, project conventions, etc. */
   prompt:
-    "Use openai/gpt-5.3-codex for most subagent operations, especially if they entail making changes across multiple files. If you need to search you can use faster models like cerebras/zai-glm-4.7. If you need to look at and reason over images (a screenshot is referenced) use google-gemini-cli/gemini-3-flash-preview to see the changes.",
+    "Use openai-codex/gpt-5.3-codex for most subagent operations, especially if they entail making changes across multiple files. If you need to search you can use faster models like cerebras/zai-glm-4.7. If you need to look at and reason over images (a screenshot is referenced) use google-gemini-cli/gemini-3-flash-preview to see the changes.",
 };
 
 // ────────────────────────────────────────────────────────────────────────
@@ -393,7 +422,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
-    // Don't cancel active runs — children are detached and will continue
+    // Don't cancel active runs on extension shutdown.
     stopPolling();
   });
 
@@ -428,16 +457,16 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description: [
       "Spawn subagents for delegated or orchestrated work.",
-      "Execution backend: mill (mill run --sync --json). Configure drivers/executors/models via mill.config.ts.",
+      "Execution backend: mill async APIs (submit + watch + inspect). Configure drivers/executors/models via mill.config.ts.",
       `Enabled models: ${modelsText}`,
-      "Write a TypeScript script. `factory` is a global (like `process` or `console`). Use factory.spawn() to orchestrate agents.",
-      "factory.spawn() returns a Promise<ExecutionResult>. Use `await` for sequential, `Promise.all` for parallel.",
+      "Write a TypeScript script. `mill` is a global (like `process` or `console`). Use mill.spawn() to orchestrate agents.",
+      "mill.spawn() returns a Promise<ExecutionResult>. Use `await` for sequential, `Promise.all` for parallel.",
       "Each spawn needs: agent, systemPrompt, prompt, model. cwd defaults to process.cwd().",
       "systemPrompt defines WHO the agent is (behavior, principles, methodology). prompt defines WHAT it should do now (specific files, specific work). Don't put task details in systemPrompt.",
       "Context flow: each subagent gets the parent session path and can use search_thread to explore it. Each subagent's session is persisted and available via result.sessionPath. Result text is auto-populated on result.text.",
       "Async by default: returns immediately with a runId. Results are delivered via notification when complete. Do NOT poll or check for results — just continue with other work and the notification will arrive automatically.",
       "Model selection: use provider/model-id format (e.g. 'anthropic/claude-opus-4-6', 'cerebras/zai-glm-4.7'). Match model capability to task complexity. Use smaller/faster models for simple tasks, stronger models for complex reasoning. Vary your choices across the enabled models — don't default to one.",
-      "Available types: Factory, ExecutionResult, SpawnInput, UsageStats.",
+      "Available types: Mill, ExecutionResult, SpawnInput, UsageStats.",
       ...(config.prompt ? [config.prompt] : []),
     ].join(" "),
     parameters: SubagentSchema,
@@ -490,9 +519,8 @@ export default function (pi: ExtensionAPI) {
 
       const abort = new AbortController();
 
-      // Don't wire the parent tool signal — subagent runs are detached and
-      // should survive turn cancellation. Use "c" in /mill or pi --mill
-      // to explicitly cancel a run.
+      // Don't wire the parent tool signal — subagent runs should survive turn
+      // cancellation. Use "c" in /mill or pi --mill to explicitly cancel a run.
 
       const promise = executeProgram({
         ctx,
@@ -522,7 +550,13 @@ export default function (pi: ExtensionAPI) {
 
       // Write running marker so external monitors (pi --mill) see active runs
       const runArtifactsDir = observability.get(runId)?.artifactsDir;
-      if (runArtifactsDir) writeRunningMarker(runId, params.task, runArtifactsDir);
+      if (runArtifactsDir) {
+        writeRunningMarker(runId, params.task, runArtifactsDir, {
+          command: config.millCommand,
+          args: config.millArgs,
+          runsDir: config.millRunsDir,
+        });
+      }
 
       // Wire completion: update observability, widget, and notify
       promise.then(
@@ -539,7 +573,12 @@ export default function (pi: ExtensionAPI) {
             const fullSummary = {
               ...summary,
               observability: observability.toSummary(runId),
-              metadata: { task: params.task },
+              metadata: {
+                task: params.task,
+                millCommand: config.millCommand,
+                millArgs: config.millArgs,
+                millRunsDir: config.millRunsDir,
+              },
             };
             registry.complete(runId, fullSummary);
             widget.update(registry.getVisible(), ctx);
@@ -560,7 +599,12 @@ export default function (pi: ExtensionAPI) {
               results: [],
               error: details,
               observability: observability.toSummary(runId),
-              metadata: { task: params.task },
+              metadata: {
+                task: params.task,
+                millCommand: config.millCommand,
+                millArgs: config.millArgs,
+                millRunsDir: config.millRunsDir,
+              },
             };
             registry.fail(runId, details);
             notifyCompletion(pi, registry, failedSummary);
@@ -585,7 +629,7 @@ export default function (pi: ExtensionAPI) {
       ];
       if (artifactsDir) {
         lines.push(`Artifacts: ${artifactsDir}`);
-        lines.push(`Status: ${artifactsDir}/run.json (written on completion)`);
+        lines.push(`Status: ${artifactsDir}/run.json (running marker + final summary)`);
         lines.push(`Sessions: ${artifactsDir}/sessions/`);
       }
       return {

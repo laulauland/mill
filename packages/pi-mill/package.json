@@ -1,12 +1,39 @@
 {
-  "name": "@mill/pi-mill",
-  "version": "0.0.0",
-  "description": "Pi extension for subagent orchestration powered by mill",
+  "name": "pi-mill",
+  "version": "0.1.0",
+  "description": "Pi extension package that routes subagent execution through mill",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi",
+    "extension",
+    "mill"
   ],
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/laulauland/mill/tree/main/packages/pi-mill",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laulauland/mill.git",
+    "directory": "packages/pi-mill"
+  },
+  "bugs": {
+    "url": "https://github.com/laulauland/mill/issues"
+  },
+  "files": [
+    "*.ts",
+    "executors",
+    ".pi-skills",
+    "README.md",
+    "package.json",
+    "scripts"
+  ],
+  "scripts": {
+    "clean": "rm -rf .pi-skills",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'",
+    "migrate:runs": "node ./scripts/migrate-factory-to-mill.mjs",
+    "prepack": "node ./scripts/sync-skills.mjs"
+  },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",
     "@mariozechner/pi-ai": "*",
@@ -19,7 +46,7 @@
       "./index.ts"
     ],
     "skills": [
-      "./skills"
+      "./.pi-skills/mill/SKILL.md"
     ]
   }
 }

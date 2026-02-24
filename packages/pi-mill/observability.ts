@@ -34,7 +34,7 @@ export class ObservabilityStore {
     };
     if (withArtifacts) {
       const base = sessionDir
-        ? path.join(sessionDir, ".factory", runId)
+        ? path.join(sessionDir, ".mill", runId)
         : fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-observe-"));
       fs.mkdirSync(base, { recursive: true });
       record.artifactsDir = base;

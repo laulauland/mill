@@ -86,7 +86,7 @@ Resolved in order: `./mill.config.ts` → walk up to repo root → `~/.mill/conf
 | `@mill/driver-pi` | Process driver for pi agent |
 | `@mill/driver-claude` | Driver for Claude |
 | `@mill/driver-codex` | Driver for Codex |
-| `@mill/pi-mill` | Pi extension integrating mill as execution backend |
+| `pi-mill` | Pi extension integrating mill as execution backend |
 
 ## Architecture
 

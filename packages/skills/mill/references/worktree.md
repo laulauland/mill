@@ -70,13 +70,13 @@ try {
       throw new Error(`Failed to create workspace ${t.name}: ${result.stderr}`);
     }
 
-    factory.observe.log("info", `Created workspace: ${t.name}`, { path: wtPath });
+    mill.observe.log("info", `Created workspace: ${t.name}`, { path: wtPath });
   }
 
   // 2. Install dependencies in each worktree
   await Promise.all(
     worktrees.map((wt, i) =>
-      factory.spawn({
+      mill.spawn({
         agent: "installer",
         systemPrompt:
           "Install project dependencies. Run the appropriate install command (npm install, pnpm install, bun install, etc.) and verify it succeeds.",
@@ -91,7 +91,7 @@ try {
   // 3. Dispatch parallel agents
   const results = await Promise.all(
     tasks.map((t, i) =>
-      factory.spawn({
+      mill.spawn({
         agent: t.name,
         systemPrompt: t.systemPrompt,
         prompt: t.prompt,
@@ -105,13 +105,13 @@ try {
   // 4. Check results
   const failed = results.filter((r) => r.exitCode !== 0);
   if (failed.length > 0) {
-    factory.observe.log("warning", "Some agents failed", {
+    mill.observe.log("warning", "Some agents failed", {
       failed: failed.map((r) => r.agent),
     });
   }
 
   // 5. Merge results back
-  const mergeResult = await factory.spawn({
+  const mergeResult = await mill.spawn({
     agent: "merger",
     systemPrompt: `You merge parallel workstream results using jj.
 Use 'jj log' to see all changes across workspaces.
@@ -131,7 +131,7 @@ Use jj to combine the changes into the main workspace.`,
   const summaryContent = results
     .map((r) => `## ${r.agent}\n**Status:** ${r.exitCode === 0 ? "pass" : "fail"}\n\n${r.text}`)
     .join("\n\n---\n\n");
-  factory.observe.artifact("worktree-report.md", summaryContent);
+  mill.observe.artifact("worktree-report.md", summaryContent);
 } finally {
   // 7. Cleanup — always runs
   for (const wt of worktrees) {
@@ -143,7 +143,7 @@ Use jj to combine the changes into the main workspace.`,
     if (fs.existsSync(wt)) {
       fs.rmSync(wt, { recursive: true, force: true });
     }
-    factory.observe.log("info", `Cleaned up workspace`, { path: wt });
+    mill.observe.log("info", `Cleaned up workspace`, { path: wt });
   }
 }
 ```
@@ -233,13 +233,13 @@ try {
       throw new Error(`Failed to create worktree ${t.name}: ${result.stderr}`);
     }
 
-    factory.observe.log("info", `Created worktree: ${t.name}`, { path: wtPath, branch });
+    mill.observe.log("info", `Created worktree: ${t.name}`, { path: wtPath, branch });
   }
 
   // 2. Install dependencies
   await Promise.all(
     worktrees.map((wt, i) =>
-      factory.spawn({
+      mill.spawn({
         agent: "installer",
         systemPrompt: "Install project dependencies.",
         prompt: "Run the install command for this project (npm install, etc.)",
@@ -253,7 +253,7 @@ try {
   // 3. Dispatch agents
   const results = await Promise.all(
     tasks.map((t, i) =>
-      factory.spawn({
+      mill.spawn({
         agent: t.name,
         systemPrompt: t.systemPrompt,
         prompt: `${t.prompt}\n\nCommit your changes to the current branch when complete.`,
@@ -269,7 +269,7 @@ try {
     .map((r, i) => ({ result: r, worktree: worktrees[i] }))
     .filter(({ result }) => result.exitCode === 0);
 
-  await factory.spawn({
+  await mill.spawn({
     agent: "merger",
     systemPrompt: `You merge git branches from parallel workstreams.
 Merge each feature branch into ${baseBranch}.
@@ -359,7 +359,7 @@ try {
   // Install deps in parallel
   await Promise.all(
     worktrees.map((wt, i) =>
-      factory.spawn({
+      mill.spawn({
         agent: "installer",
         systemPrompt: "Install deps.",
         prompt: "npm install",
@@ -373,7 +373,7 @@ try {
   // Parallel implementation
   const results = await Promise.all(
     tasks.map((t, i) =>
-      factory.spawn({
+      mill.spawn({
         agent: t.name,
         systemPrompt: t.systemPrompt,
         prompt: t.prompt,
@@ -386,7 +386,7 @@ try {
 
   // Synthesize — merge and verify
   const context = results.map((r) => `[${r.agent}]\n${r.text}`).join("\n\n");
-  const synthesis = await factory.spawn({
+  const synthesis = await mill.spawn({
     agent: "integrator",
     systemPrompt: `You integrate parallel workstreams.
 1. Use jj to merge all workspace changes into the main workspace.
@@ -446,7 +446,7 @@ Agents shouldn't waste tokens figuring out dependency installation. Do it as a s
 // Dedicated install step
 await Promise.all(
   worktrees.map((wt) =>
-    factory.spawn({
+    mill.spawn({
       agent: "installer",
       systemPrompt: "Install dependencies.",
       prompt: "npm install",
@@ -459,7 +459,7 @@ await Promise.all(
 // Then dispatch real work
 await Promise.all(
   tasks.map((t, i) =>
-    factory.spawn({
+    mill.spawn({
       agent: t.name,
       systemPrompt: t.systemPrompt,
       prompt: t.prompt,
@@ -507,7 +507,7 @@ Good for:
 Not ideal for:
 
 - Tasks that heavily overlap in the same files
-- Read-only analysis (just use `Promise.all` with `factory.spawn` and same `cwd`)
+- Read-only analysis (just use `Promise.all` with `mill.spawn` and same `cwd`)
 - Very small changes (worktree overhead isn't worth it)
 - Repos with huge `node_modules` or build artifacts (disk cost)
 

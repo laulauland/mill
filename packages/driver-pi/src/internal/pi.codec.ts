@@ -77,8 +77,6 @@ const decodeJsonLine = (line: string): Effect.Effect<JsonRecord, PiCodecError> =
           ),
   );
 
-const isTerminalEvent = (eventType: string | undefined): boolean => eventType === "agent_end";
-
 export const decodePiProcessOutput = (
   output: string,
   input: DecodePiProcessInput,
@@ -100,23 +98,7 @@ export const decodePiProcessOutput = (
     for (const decoded of decodedLines) {
       const eventType = readString(decoded, "type");
 
-      if (terminalSeen && !isTerminalEvent(eventType)) {
-        return yield* Effect.fail(
-          new PiCodecError({
-            message: `Non-terminal line ${eventType ?? "unknown"} emitted after terminal agent_end.`,
-          }),
-        );
-      }
-
-      if (isTerminalEvent(eventType)) {
-        if (terminalSeen) {
-          return yield* Effect.fail(
-            new PiCodecError({
-              message: "Duplicate terminal agent_end lines are not allowed.",
-            }),
-          );
-        }
-
+      if (eventType === "agent_end") {
         terminalSeen = true;
 
         const messages = decoded.messages;

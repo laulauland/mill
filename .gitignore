@@ -3,3 +3,4 @@ packages/*/node_modules/
 .bun/
 dist/
 implement.factory.ts
+packages/pi-mill/.pi-skills/

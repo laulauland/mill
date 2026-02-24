@@ -131,13 +131,35 @@ interface MillSpawnResult {
   errorMessage?: string;
 }
 
-interface MillRunSyncPayload {
+interface MillRunSubmitPayload {
+  runId?: string;
+}
+
+interface MillRunInspectPayload {
   run?: {
     status?: string;
   };
   result?: {
+    status?: string;
+    errorMessage?: string;
     spawns?: ReadonlyArray<MillSpawnResult>;
   };
+}
+
+interface MillWatchEvent {
+  type?: string;
+  payload?: {
+    message?: string;
+    toolName?: string;
+  };
+}
+
+interface CommandCapture {
+  code: number;
+  stdout: string;
+  stderr: string;
+  combined: string;
+  aborted: boolean;
 }
 
 function newUsage() {
@@ -173,6 +195,138 @@ const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefi
   return undefined;
 };
 
+const parseJsonObjectFromLine = (line: string): Record<string, unknown> | undefined => {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (typeof parsed === "object" && parsed !== null) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // ignore
+  }
+
+  return undefined;
+};
+
+const formatCommand = (command: string, args: ReadonlyArray<string>): string =>
+  [command, ...args].join(" ");
+
+const appendCommandLog = (
+  logPath: string,
+  command: string,
+  args: ReadonlyArray<string>,
+  output: CommandCapture,
+): void => {
+  const header = [
+    `> ${formatCommand(command, args)}`,
+    `exit=${output.code}${output.aborted ? " (aborted)" : ""}`,
+  ].join("\n");
+  const body = output.combined.trim();
+  const chunk = `${header}${body.length > 0 ? `\n${body}` : ""}\n\n`;
+  fs.appendFileSync(logPath, chunk, "utf-8");
+};
+
+const runCommandCapture = (input: {
+  command: string;
+  args: ReadonlyArray<string>;
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  onLine?: (line: string, stream: "stdout" | "stderr") => void;
+}): Promise<CommandCapture> =>
+  new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+    let aborted = input.signal?.aborted ?? false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const flushLines = (which: "stdout" | "stderr") => {
+      let buffer = which === "stdout" ? stdoutBuffer : stderrBuffer;
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex < 0) break;
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.length > 0) input.onLine?.(line, which);
+      }
+      if (which === "stdout") stdoutBuffer = buffer;
+      else stderrBuffer = buffer;
+    };
+
+    const flushTail = () => {
+      const outTail = stdoutBuffer.trim();
+      if (outTail.length > 0) input.onLine?.(outTail, "stdout");
+      const errTail = stderrBuffer.trim();
+      if (errTail.length > 0) input.onLine?.(errTail, "stderr");
+      stdoutBuffer = "";
+      stderrBuffer = "";
+    };
+
+    const child = spawn(input.command, [...input.args], {
+      cwd: input.cwd,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: input.env,
+    });
+
+    const abortChild = () => {
+      aborted = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (!child.killed) child.kill("SIGKILL");
+      }, 3000);
+    };
+
+    if (input.signal?.aborted) {
+      abortChild();
+    } else {
+      input.signal?.addEventListener("abort", abortChild, { once: true });
+    }
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stdout += text;
+      stdoutBuffer += text;
+      flushLines("stdout");
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderr += text;
+      stderrBuffer += text;
+      flushLines("stderr");
+    });
+
+    child.on("error", (error) => {
+      if (killTimer) clearTimeout(killTimer);
+      input.signal?.removeEventListener("abort", abortChild);
+      const errorText = error instanceof Error ? error.message : String(error);
+      resolve({
+        code: 1,
+        stdout,
+        stderr: `${stderr}${stderr.length > 0 ? "\n" : ""}${errorText}`,
+        combined: [stdout, stderr, errorText].filter((part) => part.trim().length > 0).join("\n"),
+        aborted,
+      });
+    });
+
+    child.on("close", (exitCode) => {
+      if (killTimer) clearTimeout(killTimer);
+      input.signal?.removeEventListener("abort", abortChild);
+      flushTail();
+      const code = exitCode ?? 1;
+      resolve({
+        code,
+        stdout,
+        stderr,
+        combined: [stdout, stderr].filter((part) => part.trim().length > 0).join("\n"),
+        aborted,
+      });
+    });
+  });
+
 function writeMillProgram(input: {
   systemPrompt: string;
   prompt: string;
@@ -194,14 +348,19 @@ function writeMillProgram(input: {
 }
 
 const decodeMillResult = (
-  payload: MillRunSyncPayload,
+  payload: MillRunInspectPayload,
   fallback: { agent: string; modelId: string; prompt: string },
 ): ExecutionResult => {
   const spawns = payload.result?.spawns;
   if (!Array.isArray(spawns) || spawns.length === 0) {
+    const failedStatus = payload.result?.status ?? payload.run?.status;
+    const message = payload.result?.errorMessage;
     throw new FactoryError({
       code: "RUNTIME",
-      message: "mill run completed without spawn results.",
+      message:
+        message && message.length > 0
+          ? `mill run ${failedStatus ?? "unknown"}: ${message}`
+          : "mill run completed without spawn results.",
       recoverable: false,
     });
   }
@@ -209,7 +368,7 @@ const decodeMillResult = (
   const selectedSpawn =
     spawns.find((spawn) => spawn.agent === fallback.agent) ?? spawns[0] ?? ({} as MillSpawnResult);
 
-  const runStatus = payload.run?.status;
+  const runStatus = payload.result?.status ?? payload.run?.status;
   const derivedExitCode =
     typeof selectedSpawn.exitCode === "number"
       ? selectedSpawn.exitCode
@@ -227,11 +386,28 @@ const decodeMillResult = (
     usage: newUsage(),
     model: selectedSpawn.model ?? fallback.modelId,
     stopReason: selectedSpawn.stopReason,
-    errorMessage: selectedSpawn.errorMessage,
+    errorMessage: selectedSpawn.errorMessage ?? payload.result?.errorMessage,
     step: undefined,
     text: selectedSpawn.text ?? "",
     sessionPath: selectedSpawn.sessionRef,
   };
+};
+
+const extractRunId = (payload: Record<string, unknown>): string | undefined => {
+  const direct = payload.runId;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+
+  const nestedRun = payload.run;
+  if (typeof nestedRun === "object" && nestedRun !== null) {
+    const nestedId = (nestedRun as { id?: unknown }).id;
+    if (typeof nestedId === "string" && nestedId.length > 0) {
+      return nestedId;
+    }
+  }
+
+  return undefined;
 };
 
 export function spawnSubagent(input: SpawnInput): Promise<ExecutionResult> {
@@ -250,7 +426,6 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const stdoutPath = path.join(outputDir, `${input.taskId}.stdout.log`);
-  const pidPath = path.join(outputDir, `${input.taskId}.pid`);
 
   const result: ExecutionResult = {
     taskId: input.taskId,
@@ -280,89 +455,198 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     modelId: input.modelId,
   });
 
-  const args = [...input.millArgs, "run", tempProgram.filePath, "--sync", "--json"];
-  if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
-    args.push("--runs-dir", input.millRunsDir);
-  }
+  const childDepth = parseInt(process.env.PI_FACTORY_DEPTH || "0", 10) + 1;
+  const childEnv = { ...process.env, PI_FACTORY_DEPTH: String(childDepth) };
 
-  let aborted = false;
+  let aborted = input.signal?.aborted ?? false;
+  const handleAbort = () => {
+    aborted = true;
+  };
+  input.signal?.addEventListener("abort", handleAbort, { once: true });
+
+  let submittedRunId: string | undefined;
+  let cancelRequested = false;
+
+  const requestRunCancel = async (): Promise<void> => {
+    if (cancelRequested || submittedRunId === undefined) return;
+    cancelRequested = true;
+    const cancelArgs = [...input.millArgs, "cancel", submittedRunId, "--json"];
+    if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
+      cancelArgs.push("--runs-dir", input.millRunsDir);
+    }
+
+    const cancelled = await runCommandCapture({
+      command: input.millCommand,
+      args: cancelArgs,
+      cwd: input.cwd,
+      env: process.env,
+    });
+    appendCommandLog(stdoutPath, input.millCommand, cancelArgs, cancelled);
+  };
 
   try {
-    const code = await new Promise<number>((resolve) => {
-      const stdoutFd = fs.openSync(stdoutPath, "w");
-      const childDepth = parseInt(process.env.PI_FACTORY_DEPTH || "0", 10) + 1;
-      const proc = spawn(input.millCommand, args, {
-        cwd: input.cwd,
-        detached: true,
-        stdio: ["ignore", stdoutFd, stdoutFd],
-        shell: false,
-        env: { ...process.env, PI_FACTORY_DEPTH: String(childDepth) },
-      });
-      proc.unref();
-      fs.closeSync(stdoutFd);
+    const submitArgs = [...input.millArgs, "run", tempProgram.filePath, "--json"];
+    if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
+      submitArgs.push("--runs-dir", input.millRunsDir);
+    }
 
-      if (proc.pid != null) {
-        fs.writeFileSync(pidPath, String(proc.pid), "utf-8");
-      }
-
-      let killTimer: ReturnType<typeof setTimeout> | undefined;
-      const kill = () => {
-        aborted = true;
-        proc.kill("SIGTERM");
-        killTimer = setTimeout(() => {
-          if (!proc.killed) proc.kill("SIGKILL");
-        }, 3000);
-      };
-
-      if (input.signal?.aborted) {
-        kill();
-      }
-      input.signal?.addEventListener("abort", kill, { once: true });
-
-      proc.on("close", (exitCode) => {
-        if (killTimer) clearTimeout(killTimer);
-        try {
-          fs.unlinkSync(pidPath);
-        } catch {
-          // ignore
-        }
-        resolve(exitCode ?? 1);
-      });
-
-      proc.on("error", () => {
-        if (killTimer) clearTimeout(killTimer);
-        try {
-          fs.unlinkSync(pidPath);
-        } catch {
-          // ignore
-        }
-        resolve(1);
-      });
+    const submitted = await runCommandCapture({
+      command: input.millCommand,
+      args: submitArgs,
+      cwd: input.cwd,
+      env: childEnv,
+      signal: input.signal,
     });
+    appendCommandLog(stdoutPath, input.millCommand, submitArgs, submitted);
 
-    const output = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, "utf-8") : "";
-    const parsed = parseJsonObjectFromText(output) as MillRunSyncPayload | undefined;
+    if (submitted.aborted || aborted) {
+      throw new FactoryError({ code: "CANCELLED", message: "Subagent aborted.", recoverable: true });
+    }
 
-    if (!parsed) {
-      result.stderr = output.trim();
-      if (aborted) {
-        throw new FactoryError({
-          code: "CANCELLED",
-          message: "Subagent aborted.",
-          recoverable: true,
-        });
-      }
+    if (submitted.code !== 0) {
       throw new FactoryError({
         code: "RUNTIME",
         message:
-          result.stderr.length > 0
-            ? `mill output was not valid JSON:\n${result.stderr}`
-            : "mill output was empty.",
+          submitted.combined.trim().length > 0
+            ? `mill run failed:\n${submitted.combined.trim()}`
+            : "mill run failed.",
         recoverable: false,
       });
     }
 
-    const decoded = decodeMillResult(parsed, {
+    const submitPayload = parseJsonObjectFromText(
+      [submitted.stdout, submitted.stderr].join("\n"),
+    ) as MillRunSubmitPayload | Record<string, unknown> | undefined;
+    if (!submitPayload) {
+      throw new FactoryError({
+        code: "RUNTIME",
+        message: "mill run did not return JSON submission payload.",
+        recoverable: false,
+      });
+    }
+
+    submittedRunId = extractRunId(submitPayload as Record<string, unknown>);
+    if (!submittedRunId) {
+      throw new FactoryError({
+        code: "RUNTIME",
+        message: "mill run submission payload is missing runId.",
+        recoverable: false,
+      });
+    }
+
+    input.obs.push(input.runId, "info", `spawn_submitted:${input.taskId}`, {
+      taskId: input.taskId,
+      childRunId: submittedRunId,
+    });
+
+    let terminalEvent: string | undefined;
+    const watchArgs = [...input.millArgs, "watch", submittedRunId, "--json"];
+    if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
+      watchArgs.push("--runs-dir", input.millRunsDir);
+    }
+
+    const watched = await runCommandCapture({
+      command: input.millCommand,
+      args: watchArgs,
+      cwd: input.cwd,
+      env: process.env,
+      signal: input.signal,
+      onLine: (line, stream) => {
+        const event = parseJsonObjectFromLine(line) as MillWatchEvent | undefined;
+        if (!event || typeof event.type !== "string") {
+          if (stream === "stderr") {
+            input.obs.push(input.runId, "warning", `watch:${input.taskId}`, { line });
+          }
+          return;
+        }
+
+        if (event.type === "spawn:milestone") {
+          input.obs.push(input.runId, "info", `spawn:milestone:${input.taskId}`, {
+            message: event.payload?.message,
+          });
+        }
+
+        if (event.type === "spawn:tool_call") {
+          input.obs.push(input.runId, "info", `spawn:tool_call:${input.taskId}`, {
+            toolName: event.payload?.toolName,
+          });
+        }
+
+        if (
+          event.type === "run:complete" ||
+          event.type === "run:failed" ||
+          event.type === "run:cancelled"
+        ) {
+          terminalEvent = event.type;
+        }
+      },
+    });
+    appendCommandLog(stdoutPath, input.millCommand, watchArgs, watched);
+
+    if (watched.aborted || aborted) {
+      await requestRunCancel();
+      throw new FactoryError({ code: "CANCELLED", message: "Subagent aborted.", recoverable: true });
+    }
+
+    if (watched.code !== 0) {
+      throw new FactoryError({
+        code: "RUNTIME",
+        message:
+          watched.combined.trim().length > 0
+            ? `mill watch failed:\n${watched.combined.trim()}`
+            : "mill watch failed.",
+        recoverable: false,
+      });
+    }
+
+    if (terminalEvent === "run:cancelled") {
+      throw new FactoryError({
+        code: "CANCELLED",
+        message: "Subagent run was cancelled.",
+        recoverable: true,
+      });
+    }
+
+    const inspectArgs = [...input.millArgs, "inspect", submittedRunId, "--json"];
+    if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
+      inspectArgs.push("--runs-dir", input.millRunsDir);
+    }
+
+    const inspected = await runCommandCapture({
+      command: input.millCommand,
+      args: inspectArgs,
+      cwd: input.cwd,
+      env: process.env,
+      signal: input.signal,
+    });
+    appendCommandLog(stdoutPath, input.millCommand, inspectArgs, inspected);
+
+    if (inspected.aborted || aborted) {
+      await requestRunCancel();
+      throw new FactoryError({ code: "CANCELLED", message: "Subagent aborted.", recoverable: true });
+    }
+
+    if (inspected.code !== 0) {
+      throw new FactoryError({
+        code: "RUNTIME",
+        message:
+          inspected.combined.trim().length > 0
+            ? `mill inspect failed:\n${inspected.combined.trim()}`
+            : "mill inspect failed.",
+        recoverable: false,
+      });
+    }
+
+    const parsed = parseJsonObjectFromText([inspected.stdout, inspected.stderr].join("\n"));
+    if (!parsed) {
+      throw new FactoryError({
+        code: "RUNTIME",
+        message: "mill inspect output was not valid JSON.",
+        recoverable: false,
+      });
+    }
+
+    const decoded = decodeMillResult(parsed as MillRunInspectPayload, {
       agent: input.agent,
       modelId: input.modelId,
       prompt: input.prompt,
@@ -376,19 +660,12 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     result.errorMessage = decoded.errorMessage;
     result.text = decoded.text;
     result.sessionPath = decoded.sessionPath;
-    result.stderr = code === 0 ? "" : output.trim();
-
-    if (aborted) {
-      throw new FactoryError({
-        code: "CANCELLED",
-        message: "Subagent aborted.",
-        recoverable: true,
-      });
-    }
+    result.stderr = "";
 
     input.onProgress?.({ ...result, messages: [] });
     return result;
   } finally {
+    input.signal?.removeEventListener("abort", handleAbort);
     try {
       fs.rmSync(tempProgram.dir, { recursive: true, force: true });
     } catch {
@@ -397,7 +674,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
   }
 }
 
-// ── Factory (program runtime) ──────────────────────────────────────────
+// ── Mill runtime (program host API) ─────────────────────────────────────
 
 export interface RuntimeSpawnInput {
   agent: string;
@@ -410,7 +687,7 @@ export interface RuntimeSpawnInput {
   signal?: AbortSignal;
 }
 
-export interface Factory {
+export interface MillRuntime {
   runId: string;
   spawn(input: RuntimeSpawnInput): SpawnPromise;
   shutdown(cancelRunning?: boolean): Promise<void>;
@@ -431,7 +708,7 @@ function validateModelSelector(model: string, agent: string): string {
   return model;
 }
 
-export function createFactory(
+export function createMillRuntime(
   ctx: ExtensionContext,
   runId: string,
   obs: ObservabilityStore,
@@ -444,7 +721,7 @@ export function createFactory(
     millArgs?: string[];
     millRunsDir?: string;
   },
-): Factory {
+): MillRuntime {
   let spawnCounter = 0;
   const runtimeAbort = new AbortController();
   const activeTasks = new Map<
@@ -456,7 +733,7 @@ export function createFactory(
   const millArgs = options?.millArgs ?? [];
   const millRunsDir = options?.millRunsDir ?? process.env.PI_FACTORY_MILL_RUNS_DIR;
 
-  const factory: Factory = {
+  const millRuntime: MillRuntime = {
     runId,
 
     spawn({ agent, systemPrompt, prompt, cwd, model, tools, step, signal }) {
@@ -545,7 +822,7 @@ export function createFactory(
     },
   };
 
-  return factory;
+  return millRuntime;
 }
 
 // ── Preflight typecheck ────────────────────────────────────────────────

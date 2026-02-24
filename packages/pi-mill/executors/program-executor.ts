@@ -4,7 +4,7 @@ import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-
 import { FactoryError, toErrorDetails } from "../errors.js";
 import type { ObservabilityStore } from "../observability.js";
 import {
-  createFactory,
+  createMillRuntime,
   patchConsole,
   patchPromiseAll,
   prepareProgramModule,
@@ -197,7 +197,7 @@ export async function executeProgram(input: {
     });
   };
 
-  let runtime: ReturnType<typeof createFactory> | null = null;
+  let runtime: ReturnType<typeof createMillRuntime> | null = null;
   try {
     // Write program source as early as possible so failed preflight/confirmation runs
     // still keep a legible copy of the attempted program.
@@ -227,7 +227,7 @@ export async function executeProgram(input: {
     emit("running");
     obs.push(runId, "info", "program:start", { codeBytes: code.length });
 
-    runtime = createFactory(ctx, runId, obs, {
+    runtime = createMillRuntime(ctx, runId, obs, {
       defaultSignal: input.signal,
       onTaskUpdate: (result) => {
         resultsByTask.set(result.taskId, result);
@@ -244,9 +244,14 @@ export async function executeProgram(input: {
     const restorePromise = patchPromiseAll(obs, runId);
     const restoreConsole = patchConsole(obs, runId);
 
-    // Inject the factory global
-    const prev = (globalThis as any).factory;
-    (globalThis as any).factory = runtime;
+    // Inject runtime global.
+    const prevMill = (globalThis as any).mill;
+    const restoreGlobals = () => {
+      if (prevMill === undefined) delete (globalThis as any).mill;
+      else (globalThis as any).mill = prevMill;
+    };
+
+    (globalThis as any).mill = runtime;
 
     let importPromise: Promise<unknown>;
     try {
@@ -254,9 +259,7 @@ export async function executeProgram(input: {
       // Prevent unhandled rejection if importPromise rejects before being awaited
       importPromise.catch(() => {});
     } catch (e) {
-      // Restore immediately on synchronous throw
-      if (prev === undefined) delete (globalThis as any).factory;
-      else (globalThis as any).factory = prev;
+      restoreGlobals();
       restorePromise();
       restoreConsole();
       throw e;
@@ -264,8 +267,7 @@ export async function executeProgram(input: {
 
     if (input.signal) {
       if (input.signal.aborted) {
-        if (prev === undefined) delete (globalThis as any).factory;
-        else (globalThis as any).factory = prev;
+        restoreGlobals();
         restorePromise();
         restoreConsole();
         throw new FactoryError({
@@ -284,8 +286,7 @@ export async function executeProgram(input: {
         await Promise.race([importPromise, cancelled]);
       } finally {
         if (onAbort) input.signal?.removeEventListener("abort", onAbort);
-        if (prev === undefined) delete (globalThis as any).factory;
-        else (globalThis as any).factory = prev;
+        restoreGlobals();
         restorePromise();
         restoreConsole();
       }
@@ -293,8 +294,7 @@ export async function executeProgram(input: {
       try {
         await importPromise;
       } finally {
-        if (prev === undefined) delete (globalThis as any).factory;
-        else (globalThis as any).factory = prev;
+        restoreGlobals();
         restorePromise();
         restoreConsole();
       }

@@ -524,15 +524,16 @@ export class FactoryMonitor implements Component {
     if (matchesKey(data, "c")) {
       const run = runs[this.selectedRunIndex];
       if (run && run.status === "running") {
-        if (this.registry) {
-          // In-session: use abort controller via registry
+        const artifactsDir = run.summary.observability?.artifactsDir;
+
+        if (this.registry && run.abort) {
+          // In-session active run: cancel through abort controller.
           this.registry.cancel(run.runId);
-        } else {
-          // Standalone mode: kill by PID files
-          const artifactsDir = run.summary.observability?.artifactsDir;
-          if (artifactsDir) {
-            cancelRunByPidFiles(artifactsDir);
-          }
+        } else if (artifactsDir) {
+          // Historical/standalone: cancel through persisted run metadata.
+          cancelRunByPidFiles(artifactsDir);
+        } else if (this.registry) {
+          this.registry.cancel(run.runId);
         }
       }
       return;

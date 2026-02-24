@@ -17,8 +17,9 @@ const PI_JSON_FIXTURE_SCRIPT =
   "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'fixture:'+prompt}],model,stopReason:'stop'}]}));";
 
 const DUPLICATE_TERMINAL_SCRIPT =
-  "console.log(JSON.stringify({type:'agent_end',messages:[]}));" +
-  "console.log(JSON.stringify({type:'agent_end',messages:[]}));";
+  "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'first'}]}]}));" +
+  "console.log(JSON.stringify({type:'auto_retry_start'}));" +
+  "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'second'}]}]}));";
 
 describe("createPiDriverRegistration", () => {
   it("supports explicit model catalog overrides via codec", async () => {
@@ -99,7 +100,7 @@ describe("createPiDriverRegistration", () => {
     expect(session.pointer.length).toBeGreaterThan(0);
   });
 
-  it("rejects malformed duplicate terminal output fixtures", async () => {
+  it("accepts retry-style output and uses the last terminal payload", async () => {
     const driver = createPiDriverRegistration({
       process: {
         command: "bun",
@@ -114,24 +115,20 @@ describe("createPiDriverRegistration", () => {
       return;
     }
 
-    const spawnError = await Runtime.runPromise(runtime)(
+    const output = await Runtime.runPromise(runtime)(
       Effect.provide(
-        Effect.flip(
-          driver.runtime.spawn({
-            runId: "run_driver_duplicate",
-            spawnId: "spawn_driver_duplicate",
-            agent: "scout",
-            systemPrompt: "You are concise.",
-            prompt: "Say hello",
-            model: "openai/gpt-5.3-codex",
-          }),
-        ),
+        driver.runtime.spawn({
+          runId: "run_driver_duplicate",
+          spawnId: "spawn_driver_duplicate",
+          agent: "scout",
+          systemPrompt: "You are concise.",
+          prompt: "Say hello",
+          model: "openai/gpt-5.3-codex",
+        }),
         BunContext.layer,
       ),
     );
 
-    expect(spawnError).toMatchObject({
-      _tag: "PiProcessDriverError",
-    });
+    expect(output.result.text).toBe("second");
   });
 });

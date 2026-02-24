@@ -43,7 +43,7 @@ interface SpawnInput {
   signal?: AbortSignal;
 }
 
-interface Factory {
+interface Mill {
   runId: string;
   spawn(input: SpawnInput): Promise<ExecutionResult>;
   shutdown(cancelRunning?: boolean): Promise<void>;
@@ -53,7 +53,8 @@ interface Factory {
   };
 }
 
-declare const factory: Factory;
+/** Runtime API inside pi-mill programs. */
+declare const mill: Mill;
 declare const process: {
   cwd(): string;
   env: Record<string, string | undefined>;

@@ -1,0 +1,23 @@
+{
+  "name": "pi-mill-skills",
+  "version": "0.1.0",
+  "description": "Shared skill bundle for pi-mill",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "skills",
+    "mill"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "pi-mill",
+    "README.md",
+    "package.json"
+  ],
+  "pi": {
+    "skills": [
+      "./mill"
+    ]
+  }
+}

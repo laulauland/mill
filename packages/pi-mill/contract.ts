@@ -5,7 +5,7 @@ export const SubagentSchema = Type.Object({
   task: Type.String({ description: "Label/description for this program run." }),
   code: Type.String({
     description:
-      "TypeScript script using the `factory` global. Use factory.spawn() to orchestrate agents. The script runs as a top-level module — use await and Promise.all directly.",
+      "TypeScript script using the `mill` global. Use mill.spawn() to orchestrate agents. The script runs as a top-level module — use await and Promise.all directly.",
   }),
 });
 
