@@ -1,33 +1,26 @@
 # mill
 
-A runtime for executing TypeScript programs that can spawn agents. Write plain TS with `await` and `Promise.all` — mill handles the lifecycle, persistence, and observability.
+A simple TypeScript runtime for orchestrating subagent work. The orchestrator writes a short program that spawns agents — you review it before it runs.
 
-## What you can do
+## How it works
 
-**Orchestrate agents in plain TypeScript** — no DSL, no YAML, just sequential and parallel `await` calls with a single injected `mill.spawn()` API.
-
-**Run async by default** — `mill run` returns a `runId` immediately and executes in a detached worker. Attach later with `watch`, `wait`, or `inspect`.
-
-**Swap agent backends** — drivers are generic adapters. Ship with pi, Claude, and Codex drivers. Write your own by implementing a codec that parses process output into structured events.
-
-**Observe everything** — structured NDJSON event log per run, real-time streaming via `mill watch`, and full session replay via `mill inspect --session`. Use the built-in `mill watch` or build a TUI around it.
+You talk to your main agent (in Pi, Claude Code, OpenCode etc.). When work needs to be farmed out, it writes a mill program: a TypeScript file that spawns subagents with specific instructions. You see the code before it executes.
 
 ## Quick example
 
 ```ts
-// review.ts
-const scan = await mill.spawn({
-  agent: "scout",
-  systemPrompt: "You are a code risk analyst.",
-  prompt: "Review src/auth and summarize top security risks.",
-  model: "openai/gpt-5.3-codex",
+const analysis = await mill.spawn({
+  agent: "analyzer",
+  systemPrompt: "Map key risks and unknowns.",
+  prompt: "Analyze the auth module and summarize weak points.",
+  model: "anthropic/claude-sonnet-4-5",
 });
 
 const plan = await mill.spawn({
   agent: "planner",
-  systemPrompt: "You turn findings into an execution-ready plan.",
-  prompt: `Create remediation steps from:\n\n${scan.text}`,
-  model: "anthropic/claude-opus-4.6",
+  systemPrompt: "Turn findings into a concrete implementation plan.",
+  prompt: `Use this analysis to propose fixes:\n\n${analysis.text}`,
+  model: "anthropic/claude-opus-4-6",
 });
 
 console.log(plan.text);
@@ -55,84 +48,51 @@ mill init [--global]          generate starter config (local or ~/.mill/config.t
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
 
-### Help & authoring guidance
+## FAQ
 
-- `mill` or `mill --help`: prints root help with authoring guidance
-- `mill <command> --help`: prints command help with authoring guidance
-- If resolved config overrides `authoring.instructions`, help uses that text.
-- Otherwise help falls back to built-in static guidance (`systemPrompt` = WHO, `prompt` = WHAT).
+**Couldn't I just do this with bash and claude -p?**
+Yes — that's the point. The orchestrator can use any language to express a plan. TypeScript is optional; it's just easy to read and lets mill hook into the spawn calls to offer structured output, event logs, and session replay.
+
+**How is this different from Claude Code tasks?**
+Tasks are scoped to Claude Code. Mill programs are portable across drivers — same program can spawn Claude, Codex, or pi subagents. The program is also a readable artifact you confirm before execution, not an internal dispatch.
+
+**Do I have to write the programs myself?**
+No. The orchestrator writes them. You review and confirm.
 
 ## Configuration
 
-```ts
-// mill.config.ts (local)
-// ~/.mill/config.ts (global)
-export default {
-  authoring: {
-    instructions:
-      "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation).",
-  },
-};
-```
+`mill.config.ts` gives the orchestrator precise instructions — model preferences per task type, driver selection, authoring conventions. The orchestrator reads the config and makes choices accordingly.
 
-`mill init` creates `./mill.config.ts`.
-`mill init --global` creates `~/.mill/config.ts`.
+```bash
+mill init                # creates ./mill.config.ts
+mill init --global       # creates ~/.mill/config.ts
+```
 
 Resolved in order: `./mill.config.ts` → walk up to repo root → `~/.mill/config.ts` → built-in defaults.
 
-## Packages
+## Drivers
 
-| Package               | Purpose                                            |
-| --------------------- | -------------------------------------------------- |
-| `@mill/core`          | Engine, run lifecycle, public API, config loader   |
-| `@mill/cli`           | CLI commands wrapping core                         |
-| `@mill/driver-pi`     | Process driver for pi agent                        |
-| `@mill/driver-claude` | Driver for Claude                                  |
-| `@mill/driver-codex`  | Driver for Codex                                   |
-| `pi-mill`             | Pi extension integrating mill as execution backend |
+Drivers translate `mill.spawn()` into whatever protocol the agent needs. Ships with Claude, Codex, and pi drivers. Write your own by implementing a codec that parses process output into structured events.
 
-## Architecture
+| Package               | Purpose                                    |
+| --------------------- | ------------------------------------------ |
+| `@mill/core`          | Engine, lifecycle, API, config             |
+| `@mill/cli`           | CLI commands                               |
+| `@mill/driver-claude` | Claude driver                              |
+| `@mill/driver-codex`  | Codex driver                               |
+| `@mill/driver-pi`     | Pi driver                                  |
+| `pi-mill`             | Pi extension for mill as execution backend |
 
-```
-mill program (TS)
-  → executor (direct | vm)
-    → engine (lifecycle, API injection, events, persistence)
-      → driver (generic process/http adapter + codec)
-        → agent process
-```
+## Internals
 
-Layers are orthogonal: executor decides _where_ the program runs, driver decides _how_ spawns invoke agents, extensions add hooks and extra API surface.
+Built on [Effect](https://effect.website). Public API is Promise-based (`src/public/**/*.api.ts`). Engine, drivers, and persistence are Effect-first with Schema-validated domain types.
 
-### Run storage
-
-```
-~/.mill/runs/<runId>/
-  run.json             metadata (status is canonical)
-  events.ndjson        append-only structured event log
-  result.json          final output
-  program.ts           copied source
-  worker.pid           detached worker pid (best effort)
-  logs/worker.log      worker lifecycle breadcrumbs
-  logs/cancel.log      cancel/kill lifecycle breadcrumbs
-  sessions/<spawn>.jsonl  per-spawn pi session transcripts (pi driver)
-```
-
-For operations/debugging conventions, see `docs/references/mill-v0-operations-and-troubleshooting.md`.
-
-### Internals
-
-Built on [Effect](https://effect.website). The public API (`src/public/**/*.api.ts`) exposes Promise-based contracts. Everything else — engine, drivers, persistence — is Effect-first with Schema-validated domain types. `Runtime.runPromise` is the only bridge between the two worlds.
+Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON event log, results, per-spawn session transcripts.
 
 ## Development
 
 ```bash
 bun install
-bun test                    # run tests
-bun run check               # full pipeline: ast-grep + lint + format + typecheck + test
-bun run typecheck            # tsgo --noEmit
-bun run lint:ast-grep        # structural guardrails
-bun run lint:boundary        # public/internal boundary enforcement
-bun run format               # oxfmt
+bun test
+bun run check         # ast-grep + lint + format + typecheck + test
 ```
-
-Toolchain: ast-grep (structural rules), oxlint, oxfmt, tsgo, bun test.
