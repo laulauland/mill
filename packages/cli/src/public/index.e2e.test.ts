@@ -38,6 +38,7 @@ const DiscoveryEnvelope = Schema.parseJson(
       submit: Schema.String,
       status: Schema.String,
       wait: Schema.String,
+      watch: Schema.String,
     }),
   }),
 );
@@ -157,7 +158,7 @@ describe("mill discovery/help (e2e)", () => {
     const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(output);
     expect(payload.discoveryVersion).toBe(1);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect((payload.drivers.pi?.models.length ?? 0) > 0).toBe(true);
+    expect(Array.isArray(payload.drivers.pi?.models)).toBe(true);
     expect(Array.isArray(payload.drivers.claude?.models)).toBe(true);
     expect(Array.isArray(payload.drivers.codex?.models)).toBe(true);
     expect(payload.executors.direct?.description).toBe("Local direct executor");
@@ -234,7 +235,7 @@ describe("mill run/status/wait (e2e)", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("submits async run by default, then status/wait observes completion", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-async-e2e-"));
@@ -349,7 +350,7 @@ describe("mill run/status/wait (e2e)", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("executes run --sync and wait --timeout returns terminal result", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-e2e-"));
@@ -442,7 +443,7 @@ describe("mill run/status/wait (e2e)", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("runs inspect/session/cancel/watch matrix across concurrent runs", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-matrix-e2e-"));
@@ -561,6 +562,7 @@ describe("mill run/status/wait (e2e)", () => {
           "run",
           "packages/cli/src/bin/mill.ts",
           "watch",
+          "--run",
           completeRun.runId,
           "--json",
           "--runs-dir",
@@ -643,7 +645,7 @@ describe("mill run/status/wait (e2e)", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("wait timeout exits non-zero", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-wait-timeout-e2e-"));

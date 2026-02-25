@@ -25,6 +25,7 @@ export interface CreateRunInput {
   readonly executor?: string;
   readonly timestamp: string;
   readonly status?: RunRecord["status"];
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface RunStore {
@@ -119,6 +120,7 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
         executor: createInput.executor ?? "direct",
         createdAt: createInput.timestamp,
         updatedAt: createInput.timestamp,
+        metadata: createInput.metadata,
         paths,
       };
 

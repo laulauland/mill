@@ -148,7 +148,11 @@ export const decodeCodexProcessOutput = (
         continue;
       }
 
-      if (eventType === "item.started" || eventType === "item.completed" || eventType === "item.updated") {
+      if (
+        eventType === "item.started" ||
+        eventType === "item.completed" ||
+        eventType === "item.updated"
+      ) {
         const item = decoded.item;
 
         if (!isRecord(item)) {

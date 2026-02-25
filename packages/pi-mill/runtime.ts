@@ -146,14 +146,6 @@ interface MillRunInspectPayload {
   };
 }
 
-interface MillWatchEvent {
-  type?: string;
-  payload?: {
-    message?: string;
-    toolName?: string;
-  };
-}
-
 interface CommandCapture {
   code: number;
   stdout: string;
@@ -190,19 +182,6 @@ const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefi
     } catch {
       continue;
     }
-  }
-
-  return undefined;
-};
-
-const parseJsonObjectFromLine = (line: string): Record<string, unknown> | undefined => {
-  try {
-    const parsed = JSON.parse(line) as unknown;
-    if (typeof parsed === "object" && parsed !== null) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // ignore
   }
 
   return undefined;
@@ -410,6 +389,23 @@ const extractRunId = (payload: Record<string, unknown>): string | undefined => {
   return undefined;
 };
 
+const extractRunStatus = (payload: Record<string, unknown>): string | undefined => {
+  const direct = payload.status;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+
+  const nestedRun = payload.run;
+  if (typeof nestedRun === "object" && nestedRun !== null) {
+    const nestedStatus = (nestedRun as { status?: unknown }).status;
+    if (typeof nestedStatus === "string" && nestedStatus.length > 0) {
+      return nestedStatus;
+    }
+  }
+
+  return undefined;
+};
+
 export function spawnSubagent(input: SpawnInput): Promise<ExecutionResult> {
   return runSubagentProcess(input);
 }
@@ -485,7 +481,21 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
   };
 
   try {
-    const submitArgs = [...input.millArgs, "run", tempProgram.filePath, "--json"];
+    const metadata = JSON.stringify({
+      source: "pi-mill",
+      parentRunId: input.runId,
+      parentTaskId: input.taskId,
+      parentAgent: input.agent,
+    });
+
+    const submitArgs = [
+      ...input.millArgs,
+      "run",
+      tempProgram.filePath,
+      "--json",
+      "--meta-json",
+      metadata,
+    ];
     if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
       submitArgs.push("--runs-dir", input.millRunsDir);
     }
@@ -500,7 +510,11 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     appendCommandLog(stdoutPath, input.millCommand, submitArgs, submitted);
 
     if (submitted.aborted || aborted) {
-      throw new FactoryError({ code: "CANCELLED", message: "Subagent aborted.", recoverable: true });
+      throw new FactoryError({
+        code: "CANCELLED",
+        message: "Subagent aborted.",
+        recoverable: true,
+      });
     }
 
     if (submitted.code !== 0) {
@@ -539,71 +553,56 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
       childRunId: submittedRunId,
     });
 
-    let terminalEvent: string | undefined;
-    const watchArgs = [...input.millArgs, "watch", submittedRunId, "--json"];
+    const waitArgs = [...input.millArgs, "wait", submittedRunId, "--timeout", "31536000", "--json"];
     if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
-      watchArgs.push("--runs-dir", input.millRunsDir);
+      waitArgs.push("--runs-dir", input.millRunsDir);
     }
 
-    const watched = await runCommandCapture({
+    const waited = await runCommandCapture({
       command: input.millCommand,
-      args: watchArgs,
+      args: waitArgs,
       cwd: input.cwd,
       env: process.env,
       signal: input.signal,
-      onLine: (line, stream) => {
-        const event = parseJsonObjectFromLine(line) as MillWatchEvent | undefined;
-        if (!event || typeof event.type !== "string") {
-          if (stream === "stderr") {
-            input.obs.push(input.runId, "warning", `watch:${input.taskId}`, { line });
-          }
-          return;
-        }
-
-        if (event.type === "spawn:milestone") {
-          input.obs.push(input.runId, "info", `spawn:milestone:${input.taskId}`, {
-            message: event.payload?.message,
-          });
-        }
-
-        if (event.type === "spawn:tool_call") {
-          input.obs.push(input.runId, "info", `spawn:tool_call:${input.taskId}`, {
-            toolName: event.payload?.toolName,
-          });
-        }
-
-        if (
-          event.type === "run:complete" ||
-          event.type === "run:failed" ||
-          event.type === "run:cancelled"
-        ) {
-          terminalEvent = event.type;
-        }
-      },
     });
-    appendCommandLog(stdoutPath, input.millCommand, watchArgs, watched);
+    appendCommandLog(stdoutPath, input.millCommand, waitArgs, waited);
 
-    if (watched.aborted || aborted) {
+    if (waited.aborted || aborted) {
       await requestRunCancel();
-      throw new FactoryError({ code: "CANCELLED", message: "Subagent aborted.", recoverable: true });
+      throw new FactoryError({
+        code: "CANCELLED",
+        message: "Subagent aborted.",
+        recoverable: true,
+      });
     }
 
-    if (watched.code !== 0) {
+    if (waited.code !== 0) {
       throw new FactoryError({
         code: "RUNTIME",
         message:
-          watched.combined.trim().length > 0
-            ? `mill watch failed:\n${watched.combined.trim()}`
-            : "mill watch failed.",
+          waited.combined.trim().length > 0
+            ? `mill wait failed:\n${waited.combined.trim()}`
+            : "mill wait failed.",
         recoverable: false,
       });
     }
 
-    if (terminalEvent === "run:cancelled") {
+    const waitPayload = parseJsonObjectFromText([waited.stdout, waited.stderr].join("\n"));
+    const terminalStatus = waitPayload ? extractRunStatus(waitPayload) : undefined;
+
+    if (terminalStatus === "cancelled") {
       throw new FactoryError({
         code: "CANCELLED",
         message: "Subagent run was cancelled.",
         recoverable: true,
+      });
+    }
+
+    if (terminalStatus === "failed") {
+      throw new FactoryError({
+        code: "RUNTIME",
+        message: "Subagent run failed before inspect.",
+        recoverable: false,
       });
     }
 
@@ -623,7 +622,11 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
 
     if (inspected.aborted || aborted) {
       await requestRunCancel();
-      throw new FactoryError({ code: "CANCELLED", message: "Subagent aborted.", recoverable: true });
+      throw new FactoryError({
+        code: "CANCELLED",
+        message: "Subagent aborted.",
+        recoverable: true,
+      });
     }
 
     if (inspected.code !== 0) {

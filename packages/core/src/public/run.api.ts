@@ -31,6 +31,7 @@ interface BaseRunInput extends ResolveConfigOptions {
 export interface SubmitRunInput extends BaseRunInput {
   readonly programPath: string;
   readonly launchWorker: (input: LaunchWorkerInput) => Promise<void>;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface RunProgramSyncInput extends SubmitRunInput {
@@ -50,8 +51,15 @@ export interface WaitForRunInput extends GetRunStatusInput {
   readonly timeoutSeconds: number;
 }
 
-export interface WatchRunInput extends GetRunStatusInput {
+export interface WatchRunInput extends Omit<
+  GetRunStatusInput,
+  "runId" | "pathExists" | "loadConfigModule"
+> {
+  readonly runId?: string;
   readonly raw?: boolean;
+  readonly sinceTimeIso?: string;
+  readonly pathExists?: (path: string) => Promise<boolean>;
+  readonly loadConfigModule?: (path: string) => Promise<unknown>;
   readonly onEvent: (line: string) => void;
 }
 
@@ -214,6 +222,16 @@ const parseInspectRef = (
 const isRunTerminalEvent = (eventType: string): boolean =>
   eventType === "run:complete" || eventType === "run:failed" || eventType === "run:cancelled";
 
+const isSinceTimeIso = (value: string): boolean => {
+  const parsed = Date.parse(value);
+
+  if (Number.isNaN(parsed)) {
+    return false;
+  }
+
+  return new Date(parsed).toISOString() === value;
+};
+
 export interface InspectSessionOutput extends DriverSessionPointer {
   readonly runId: string;
   readonly spawnId: string;
@@ -230,6 +248,7 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
     engineContext.engine.submit({
       runId,
       programPath,
+      metadata: input.metadata,
     }),
   );
 
@@ -344,7 +363,32 @@ export const waitForRun = async (input: WaitForRunInput): Promise<RunRecord> => 
 };
 
 export const watchRun = async (input: WatchRunInput): Promise<void> => {
+  if (input.sinceTimeIso !== undefined && !isSinceTimeIso(input.sinceTimeIso)) {
+    return Promise.reject(
+      new Error(`Invalid --since-time value '${input.sinceTimeIso}'. Expected ISO timestamp.`),
+    );
+  }
+
   const engineContext = await makeEngineForConfig(input);
+
+  if (input.runId === undefined) {
+    if (input.raw === true) {
+      return Promise.reject(new Error("watch --raw requires a runId."));
+    }
+
+    await runWithBunContext(
+      Effect.scoped(
+        Stream.runForEach(engineContext.engine.watchAll(input.sinceTimeIso), (event) =>
+          Effect.sync(() => {
+            input.onEvent(JSON.stringify(event));
+          }),
+        ),
+      ),
+    );
+
+    return;
+  }
+
   const runId = decodeRunIdSync(input.runId);
 
   if (input.raw === true) {
@@ -364,12 +408,14 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     return;
   }
 
+  const watchStream = Stream.filter(engineContext.engine.watch(runId), (event) =>
+    input.sinceTimeIso === undefined ? true : event.timestamp >= input.sinceTimeIso,
+  );
+
   await runWithBunContext(
     Effect.scoped(
       Stream.runForEach(
-        Stream.takeUntil(engineContext.engine.watch(runId), (event) =>
-          isRunTerminalEvent(event.type),
-        ),
+        Stream.takeUntil(watchStream, (event) => isRunTerminalEvent(event.type)),
         (event) =>
           Effect.sync(() => {
             input.onEvent(JSON.stringify(event));

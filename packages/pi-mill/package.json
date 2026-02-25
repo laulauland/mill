@@ -3,30 +3,30 @@
   "version": "0.1.1",
   "description": "Pi extension package that routes subagent execution through mill",
   "keywords": [
-    "pi-package",
-    "pi",
     "extension",
-    "mill"
+    "mill",
+    "pi",
+    "pi-package"
   ],
-  "license": "MIT",
-  "type": "module",
   "homepage": "https://github.com/laulauland/mill/tree/main/packages/pi-mill",
+  "bugs": {
+    "url": "https://github.com/laulauland/mill/issues"
+  },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/laulauland/mill.git",
     "directory": "packages/pi-mill"
   },
-  "bugs": {
-    "url": "https://github.com/laulauland/mill/issues"
-  },
   "files": [
     "*.ts",
-    "executors",
     ".pi-skills",
-    "README.md",
+    "executors",
     "package.json",
+    "README.md",
     "scripts"
   ],
+  "type": "module",
   "scripts": {
     "clean": "rm -rf .pi-skills",
     "build": "echo 'nothing to build'",

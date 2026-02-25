@@ -63,6 +63,7 @@ export const createDiscoveryPayload = async (
       submit: "mill run <program.ts> --json",
       status: "mill status <runId> --json",
       wait: "mill wait <runId> --timeout 30 --json",
+      watch: "mill watch [--run <runId>] [--since-time <ISO-8601>] --json",
     },
   };
 };

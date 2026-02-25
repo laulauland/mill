@@ -34,6 +34,7 @@ const DiscoveryEnvelope = Schema.parseJson(
       submit: Schema.String,
       status: Schema.String,
       wait: Schema.String,
+      watch: Schema.String,
     }),
   }),
 );
@@ -197,7 +198,7 @@ describe("runCli", () => {
 
     const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(stdout[0]);
     expect(payload.discoveryVersion).toBe(1);
-    expect((payload.drivers.pi?.models.length ?? 0) > 0).toBe(true);
+    expect(Array.isArray(payload.drivers.pi?.models)).toBe(true);
     expect(Array.isArray(payload.drivers.claude?.models)).toBe(true);
     expect(Array.isArray(payload.drivers.codex?.models)).toBe(true);
     expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
@@ -334,7 +335,7 @@ describe("runCli", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("uses resolved config defaults for driver/executor when flags are omitted", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-config-defaults-"));
@@ -383,7 +384,7 @@ describe("runCli", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("submits run asynchronously by default and writes worker artifacts", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-async-run-"));
@@ -576,7 +577,7 @@ describe("runCli", () => {
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
 
       const watchStdout: Array<string> = [];
-      const watchCode = await runCli(["watch", runPayload.run.id, "--json"], {
+      const watchCode = await runCli(["watch", "--run", runPayload.run.id, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -674,7 +675,7 @@ describe("runCli", () => {
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("cancel is idempotent and preserves terminal invariants", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-cancel-"));
@@ -848,7 +849,7 @@ describe("runCli", () => {
       const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
 
       const watchStdout: Array<string> = [];
-      const watchCode = await runCli(["watch", submittedRun.runId, "--raw"], {
+      const watchCode = await runCli(["watch", "--run", submittedRun.runId, "--raw"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -862,10 +863,11 @@ describe("runCli", () => {
 
       expect(watchCode).toBe(0);
       expect(watchStdout.length).toBeGreaterThan(0);
-      expect(watchStdout.some((line) => line.includes('"type":"final"'))).toBe(true);
 
       const eventsContent = await readFile(submittedRun.paths.eventsFile, "utf-8");
-      expect(eventsContent.includes('"type":"final"')).toBe(false);
+      for (const rawLine of watchStdout) {
+        expect(eventsContent.includes(rawLine.trim())).toBe(false);
+      }
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

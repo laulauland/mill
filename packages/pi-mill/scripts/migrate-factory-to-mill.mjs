@@ -124,9 +124,9 @@ if (!exists(sessionsDir) || !isDirectory(sessionsDir)) {
   process.exit(1);
 }
 
-const sessionEntries = fs.readdirSync(sessionsDir).filter((entry) =>
-  isDirectory(path.join(sessionsDir, entry)),
-);
+const sessionEntries = fs
+  .readdirSync(sessionsDir)
+  .filter((entry) => isDirectory(path.join(sessionsDir, entry)));
 
 for (const sessionName of sessionEntries) {
   stat.sessionsScanned += 1;
@@ -140,9 +140,9 @@ for (const sessionName of sessionEntries) {
     continue;
   }
 
-  const runEntries = fs.readdirSync(sourceRoot).filter((entry) =>
-    isDirectory(path.join(sourceRoot, entry)),
-  );
+  const runEntries = fs
+    .readdirSync(sourceRoot)
+    .filter((entry) => isDirectory(path.join(sourceRoot, entry)));
 
   if (runEntries.length === 0) {
     continue;

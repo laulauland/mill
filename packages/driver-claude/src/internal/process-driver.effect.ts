@@ -20,10 +20,7 @@ const normalizeClaudeModel = (model: string): string => {
   return parts[parts.length - 1] ?? model;
 };
 
-const commandForSpawn = (
-  config: DriverProcessConfig,
-  input: DriverSpawnInput,
-): Command.Command => {
+const commandForSpawn = (config: DriverProcessConfig, input: DriverSpawnInput): Command.Command => {
   const command = Command.make(
     config.command,
     ...config.args,

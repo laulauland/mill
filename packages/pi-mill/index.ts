@@ -81,8 +81,6 @@ interface ExtensionConfig {
   prompt: string;
 }
 
-
-
 function readEnabledModelsFallback(): string[] {
   try {
     const p = path.join(os.homedir(), ".pi", "agent", "settings.json");
@@ -283,7 +281,8 @@ export default function (pi: ExtensionAPI) {
   // Model discovery is deferred to avoid a boot cycle:
   // pi → mill discovery → pi --list-models → pi (with extensions) → mill discovery → …
   const enabledModels = readEnabledModelsFallback();
-  const modelsText = enabledModels.length > 0 ? enabledModels.join(", ") : "(use mill discovery to list)";
+  const modelsText =
+    enabledModels.length > 0 ? enabledModels.join(", ") : "(use mill discovery to list)";
 
   // Keep a reference to the current context for widget/notification updates
   let currentCtx: ExtensionContext | undefined;

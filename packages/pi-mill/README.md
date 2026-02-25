@@ -88,13 +88,13 @@ export const config = {
 };
 ```
 
-| Option | Description |
-|---|---|
-| `maxDepth` | Subagent nesting limit. `1` = agents can spawn subagents, but those subagents cannot spawn their own. `0` = disabled. |
-| `millCommand` | Executable name or path for mill. |
-| `millArgs` | Extra args prepended to every mill invocation. |
-| `millRunsDir` | Override for `--runs-dir`. |
-| `prompt` | Additional guidance appended to the tool description (model selection hints, project conventions, etc). |
+| Option        | Description                                                                                                           |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `maxDepth`    | Subagent nesting limit. `1` = agents can spawn subagents, but those subagents cannot spawn their own. `0` = disabled. |
+| `millCommand` | Executable name or path for mill.                                                                                     |
+| `millArgs`    | Extra args prepended to every mill invocation.                                                                        |
+| `millRunsDir` | Override for `--runs-dir`.                                                                                            |
+| `prompt`      | Additional guidance appended to the tool description (model selection hints, project conventions, etc).               |
 
 ## Context flow
 

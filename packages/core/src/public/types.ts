@@ -157,6 +157,7 @@ export interface DiscoveryPayload {
     readonly submit: string;
     readonly status: string;
     readonly wait: string;
+    readonly watch: string;
   };
 }
 

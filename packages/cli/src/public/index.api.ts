@@ -2,6 +2,7 @@ import { Args, CliConfig, Command as CliCommand, Options, ValidationError } from
 import * as PlatformCommand from "@effect/platform/Command";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
+import * as Schema from "@effect/schema/Schema";
 import { Effect, Option, Runtime, Scope } from "effect";
 import {
   cancelRun,
@@ -122,6 +123,23 @@ const optionalTextOption = (name: string) => Options.text(name).pipe(Options.opt
 const fromOption = <A>(value: Option.Option<A>): A | undefined =>
   Option.isSome(value) ? value.value : undefined;
 
+const MetadataJson = Schema.parseJson(
+  Schema.Record({
+    key: Schema.String,
+    value: Schema.String,
+  }),
+);
+
+const parseMetadataJson = (raw: string): Readonly<Record<string, string>> | undefined => {
+  const parsed = Schema.decodeUnknownSync(MetadataJson)(raw);
+
+  if (Object.keys(parsed).length === 0) {
+    return undefined;
+  }
+
+  return parsed;
+};
+
 const toCliEffect = (program: Promise<number>) =>
   Effect.flatMap(
     Effect.promise(() => program),
@@ -149,6 +167,7 @@ interface RunCommandInput {
   readonly runsDir: Option.Option<string>;
   readonly driver: Option.Option<string>;
   readonly executor: Option.Option<string>;
+  readonly metaJson: Option.Option<string>;
 }
 
 const runCommand = async (
@@ -156,6 +175,18 @@ const runCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
+  const metadataText = fromOption(command.metaJson);
+  let metadata: Readonly<Record<string, string>> | undefined;
+
+  if (metadataText !== undefined) {
+    try {
+      metadata = parseMetadataJson(metadataText);
+    } catch (error) {
+      io.stderr(`Invalid --meta-json payload: ${formatUnknownError(error)}`);
+      return 1;
+    }
+  }
+
   const runInput = {
     defaults: defaultConfig,
     programPath: command.program,
@@ -167,6 +198,7 @@ const runCommand = async (
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
     launchWorker: options.launchWorker ?? launchDetachedWorker,
+    metadata,
   } as const;
 
   if (command.sync) {
@@ -403,7 +435,8 @@ const waitCommand = async (
 };
 
 interface WatchCommandInput {
-  readonly runId: string;
+  readonly run: Option.Option<string>;
+  readonly sinceTime: Option.Option<string>;
   readonly json: boolean;
   readonly raw: boolean;
   readonly runsDir: Option.Option<string>;
@@ -417,7 +450,8 @@ const watchCommand = async (
 ): Promise<number> => {
   await watchRun({
     defaults: defaultConfig,
-    runId: command.runId,
+    runId: fromOption(command.run),
+    sinceTimeIso: fromOption(command.sinceTime),
     raw: command.raw,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
@@ -570,6 +604,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),
       executor: optionalTextOption("executor"),
+      metaJson: optionalTextOption("meta-json"),
     },
     (command) => toCliEffect(runCommand(command, options, io)),
   ).pipe(CliCommand.withDescription("Run a mill program."));
@@ -613,14 +648,19 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   const watch = CliCommand.make(
     "watch",
     {
-      runId: Args.text({ name: "runId" }),
+      run: optionalTextOption("run"),
+      sinceTime: optionalTextOption("since-time"),
       json: Options.boolean("json"),
       raw: Options.boolean("raw"),
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(watchCommand(command, options, io)),
-  ).pipe(CliCommand.withDescription("Stream run events."));
+  ).pipe(
+    CliCommand.withDescription(
+      "Stream run events. Use --run <runId> for scoped watch, omit for global watch.",
+    ),
+  );
 
   const inspect = CliCommand.make(
     "inspect",
@@ -693,7 +733,7 @@ Commands:
   run <program.ts>              Run a mill program
   status <runId>                Show run state
   wait <runId> --timeout <s>    Wait for terminal state
-  watch <runId>                 Stream run events
+  watch [--run <runId>]         Stream run events (global if --run omitted)
   inspect <ref>                 Inspect run or spawn detail
   cancel <runId>                Cancel a running execution
   ls                            List runs

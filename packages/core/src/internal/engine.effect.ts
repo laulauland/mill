@@ -33,6 +33,7 @@ import {
   publishRawEvent,
   publishTier1Event,
   watchRawLive,
+  watchTier1GlobalLive,
   watchTier1Live,
 } from "./observer-hub.effect";
 
@@ -52,6 +53,7 @@ export class WaitTimeoutError extends Data.TaggedError("WaitTimeoutError")<{
 export interface RunSubmitInput {
   readonly runId: RunId;
   readonly programPath: string;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface RunSyncInput extends RunSubmitInput {
@@ -115,6 +117,7 @@ export interface MillEngine {
     status?: RunSyncOutput["run"]["status"],
   ) => Effect.Effect<ReadonlyArray<RunSyncOutput["run"]>, PersistenceError>;
   readonly watch: (runId: RunId) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError>;
+  readonly watchAll: (sinceTimeIso?: string) => Stream.Stream<MillEvent, PersistenceError>;
   readonly watchRaw: (runId: RunId) => Stream.Stream<string, RunNotFoundError | PersistenceError>;
   readonly inspect: (
     ref: InspectRef,
@@ -377,6 +380,40 @@ const toTimeoutMillis = (timeout: number | string): number => {
 const isRunTerminalStatus = (status: RunSyncOutput["run"]["status"]): boolean =>
   status === "complete" || status === "failed" || status === "cancelled";
 
+const isSinceTimeIso = (value: string): boolean => {
+  const parsed = Date.parse(value);
+
+  if (Number.isNaN(parsed)) {
+    return false;
+  }
+
+  return new Date(parsed).toISOString() === value;
+};
+
+const isEventAtOrAfter = (event: MillEvent, sinceTimeIso: string | undefined): boolean => {
+  if (sinceTimeIso === undefined) {
+    return true;
+  }
+
+  return event.timestamp >= sinceTimeIso;
+};
+
+const compareMillEvents = (left: MillEvent, right: MillEvent): number => {
+  const byTime = left.timestamp.localeCompare(right.timestamp);
+
+  if (byTime !== 0) {
+    return byTime;
+  }
+
+  const byRun = left.runId.localeCompare(right.runId);
+
+  if (byRun !== 0) {
+    return byRun;
+  }
+
+  return left.sequence - right.sequence;
+};
+
 const waitForRunTerminal = (
   runStore: RunStore,
   runId: RunId,
@@ -385,6 +422,13 @@ const waitForRunTerminal = (
   RunNotFoundError | PersistenceError | LifecycleInvariantError
 > =>
   Effect.gen(function* () {
+    // Check if run is already terminal before entering polling loop
+    const initialRun = yield* runStore.getRun(runId);
+
+    if (isRunTerminalStatus(initialRun.status)) {
+      return initialRun;
+    }
+
     let observedEvents = 0;
     let terminalObserved = false;
     let lifecycleState = initialLifecycleGuardState;
@@ -516,6 +560,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           executor: input.executorName,
           timestamp: submittedAt,
           status: "pending",
+          metadata: submitInput.metadata,
         });
       }),
 
@@ -539,6 +584,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             executor: input.executorName,
             timestamp: startedAt,
             status: "running",
+            metadata: runInput.metadata,
           });
         }
 
@@ -946,6 +992,37 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         Effect.map(runStore.readEvents(runId), (persistedEvents) =>
           Stream.concat(Stream.fromIterable(persistedEvents), watchTier1Live(runId)),
         ),
+      ),
+
+    watchAll: (sinceTimeIso) =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          if (sinceTimeIso !== undefined && !isSinceTimeIso(sinceTimeIso)) {
+            return Stream.fail(
+              new PersistenceError({
+                path: "watch.since-time",
+                message: `Invalid --since-time value '${sinceTimeIso}'. Expected ISO timestamp.`,
+              }),
+            );
+          }
+
+          const runs = yield* runStore.listRuns();
+          const eventsByRun = yield* Effect.forEach(runs, (run) => runStore.readEvents(run.id), {
+            concurrency: "unbounded",
+          });
+
+          const persistedEvents = eventsByRun
+            .flat()
+            .filter((event) => isEventAtOrAfter(event, sinceTimeIso))
+            .sort(compareMillEvents);
+
+          const persistedStream = Stream.fromIterable(persistedEvents);
+          const liveStream = Stream.filter(watchTier1GlobalLive(), (event) =>
+            isEventAtOrAfter(event, sinceTimeIso),
+          );
+
+          return Stream.concat(persistedStream, liveStream);
+        }),
       ),
 
     watchRaw: (runId) =>

@@ -24,6 +24,12 @@ export const RunPaths = Schema.Struct({
 });
 export type RunPaths = Schema.Schema.Type<typeof RunPaths>;
 
+export const RunMetadata = Schema.Record({
+  key: Schema.String,
+  value: Schema.String,
+});
+export type RunMetadata = Schema.Schema.Type<typeof RunMetadata>;
+
 export const RunRecord = Schema.Struct({
   id: RunId,
   status: RunStatus,
@@ -32,6 +38,7 @@ export const RunRecord = Schema.Struct({
   executor: Schema.NonEmptyString,
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  metadata: Schema.optional(RunMetadata),
   paths: RunPaths,
 });
 export type RunRecord = Schema.Schema.Type<typeof RunRecord>;

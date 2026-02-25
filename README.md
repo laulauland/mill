@@ -79,14 +79,14 @@ Resolved in order: `./mill.config.ts` → walk up to repo root → `~/.mill/conf
 
 ## Packages
 
-| Package | Purpose |
-|---|---|
-| `@mill/core` | Engine, run lifecycle, public API, config loader |
-| `@mill/cli` | CLI commands wrapping core |
-| `@mill/driver-pi` | Process driver for pi agent |
-| `@mill/driver-claude` | Driver for Claude |
-| `@mill/driver-codex` | Driver for Codex |
-| `pi-mill` | Pi extension integrating mill as execution backend |
+| Package               | Purpose                                            |
+| --------------------- | -------------------------------------------------- |
+| `@mill/core`          | Engine, run lifecycle, public API, config loader   |
+| `@mill/cli`           | CLI commands wrapping core                         |
+| `@mill/driver-pi`     | Process driver for pi agent                        |
+| `@mill/driver-claude` | Driver for Claude                                  |
+| `@mill/driver-codex`  | Driver for Codex                                   |
+| `pi-mill`             | Pi extension integrating mill as execution backend |
 
 ## Architecture
 
@@ -98,7 +98,7 @@ mill program (TS)
         → agent process
 ```
 
-Layers are orthogonal: executor decides *where* the program runs, driver decides *how* spawns invoke agents, extensions add hooks and extra API surface.
+Layers are orthogonal: executor decides _where_ the program runs, driver decides _how_ spawns invoke agents, extensions add hooks and extra API surface.
 
 ### Run storage
 
