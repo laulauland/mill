@@ -180,6 +180,18 @@ Implement async-by-default submission with private worker process semantics.
 - `bun test packages/cli/src/bin`
 - `bun test packages/driver-pi/src`
 
+**Status (2026-02-25)**
+
+- ✅ Implemented `runDetachedWorker` in `packages/core/src/runtime/worker.effect.ts` for detached execution lifecycle.
+- ✅ CLI `run` command submits asynchronously by default and returns `runId` immediately with `pending`/`running` status.
+- ✅ Private `_worker` command path exists with contract `mill _worker --run-id <id> --program <path> --runs-dir <dir>` and performs idempotent `finalizeTerminal`.
+- ✅ Worker writes program copy (`program.ts`), program host artifacts (`program-host.ts`, `program-host.marker`), and worker log (`logs/worker.log`) to run directory.
+- ✅ `--sync` mode implemented as `submitRun` + `waitForRun` composition with shared lifecycle logic.
+- ✅ Detached worker stdio configured to `ignore` for non-blocking async submission.
+- ✅ Added integration/e2e coverage for async submit -> status -> wait completion flow.
+- ✅ Verified worker process detachment and run directory artifact persistence.
+- ✅ Re-ran slice-specific tests; worker lifecycle passes.
+
 ---
 
 ## S5 — Driver/Executor Selection + Extension API Injection
@@ -213,6 +225,17 @@ Reach configurable runtime composition while preserving strict boundary contract
 - `bun test packages/core/src/internal`
 - `bun test packages/cli/src`
 - `bun test packages/driver-pi/src packages/driver-claude/src packages/driver-codex/src`
+
+**Status (2026-02-25)**
+
+- ✅ Implemented driver and executor registries (`makeDriverRegistry`, `makeExecutorRegistry`) in core.
+- ✅ CLI resolves configured defaults and honors explicit `--driver` and `--executor` overrides.
+- ✅ Extension API methods are injected onto `globalThis.mill` via program host with proper `Runtime.runPromise` bridging.
+- ✅ Extension hook failures emit `extension:error` events without crashing the run.
+- ✅ Discovery payload includes registered driver models and authoring guidance from config.
+- ✅ `mill init` command creates scaffold `mill.config.ts` with all three drivers and direct executor.
+- ✅ Added unit/integration/e2e coverage for driver/executor selection and extension injection.
+- ✅ Re-ran targeted verification tests for S5 functionality.
 
 ---
 
