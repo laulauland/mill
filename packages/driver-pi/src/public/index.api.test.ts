@@ -21,6 +21,10 @@ const DUPLICATE_TERMINAL_SCRIPT =
   "console.log(JSON.stringify({type:'auto_retry_start'}));" +
   "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'second'}]}]}));";
 
+const ERROR_TERMINAL_SCRIPT =
+  "console.log(JSON.stringify({type:'session',id:'session-test'}));" +
+  "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[],stopReason:'error',errorMessage:'context_length_exceeded'}]}));";
+
 describe("createPiDriverRegistration", () => {
   it("supports explicit model catalog overrides via codec", async () => {
     const driver = createPiDriverRegistration({
@@ -132,5 +136,40 @@ describe("createPiDriverRegistration", () => {
     );
 
     expect(output.result.text).toBe("second");
+  });
+
+  it("marks terminal stopReason=error payloads as failed", async () => {
+    const driver = createPiDriverRegistration({
+      process: {
+        command: "bun",
+        args: ["-e", ERROR_TERMINAL_SCRIPT],
+      },
+      models: ["openai/gpt-5.3-codex"],
+    });
+
+    expect(driver.runtime).toBeDefined();
+
+    if (driver.runtime === undefined) {
+      return;
+    }
+
+    const output = await Runtime.runPromise(runtime)(
+      Effect.provide(
+        driver.runtime.spawn({
+          runId: "run_driver_error",
+          runDirectory: "/tmp/run_driver_error",
+          spawnId: "spawn_driver_error",
+          agent: "scout",
+          systemPrompt: "You are concise.",
+          prompt: "Say hello",
+          model: "openai/gpt-5.3-codex",
+        }),
+        BunContext.layer,
+      ),
+    );
+
+    expect(output.result.exitCode).toBe(1);
+    expect(output.result.stopReason).toBe("error");
+    expect(output.result.errorMessage).toBe("context_length_exceeded");
   });
 });

@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { highlightCode, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import { FactoryError, toErrorDetails } from "../errors.js";
+import { MillError, toErrorDetails } from "../errors.js";
 import type { ObservabilityStore } from "../observability.js";
 import {
   createMillRuntime,
@@ -206,7 +206,7 @@ export async function executeProgram(input: {
     // Preflight typecheck — catch type errors before showing confirmation dialog
     const typeErrors = await preflightTypecheck(code);
     if (typeErrors) {
-      throw new FactoryError({
+      throw new MillError({
         code: "INVALID_INPUT",
         message: `Type errors in program code:\n${typeErrors}`,
         recoverable: true,
@@ -216,7 +216,7 @@ export async function executeProgram(input: {
     if (!input.skipConfirmation) {
       const confirmation = await confirmExecution(ctx, code);
       if (!confirmation.approved) {
-        throw new FactoryError({
+        throw new MillError({
           code: "CONFIRMATION_REJECTED",
           message: confirmation.reason ? `Cancelled: ${confirmation.reason}` : "Cancelled by user.",
           recoverable: true,
@@ -270,7 +270,7 @@ export async function executeProgram(input: {
         restoreGlobals();
         restorePromise();
         restoreConsole();
-        throw new FactoryError({
+        throw new MillError({
           code: "CANCELLED",
           message: "Cancelled before execution.",
           recoverable: true,
@@ -279,7 +279,7 @@ export async function executeProgram(input: {
       let onAbort: (() => void) | undefined;
       const cancelled = new Promise<never>((_resolve, reject) => {
         onAbort = () =>
-          reject(new FactoryError({ code: "CANCELLED", message: "Cancelled.", recoverable: true }));
+          reject(new MillError({ code: "CANCELLED", message: "Cancelled.", recoverable: true }));
         input.signal?.addEventListener("abort", onAbort, { once: true });
       });
       try {

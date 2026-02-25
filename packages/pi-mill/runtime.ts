@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { FactoryError } from "./errors.js";
+import { MillError } from "./errors.js";
 import type { ObservabilityStore } from "./observability.js";
 import type { ExecutionResult } from "./types.js";
 
@@ -334,7 +334,7 @@ const decodeMillResult = (
   if (!Array.isArray(spawns) || spawns.length === 0) {
     const failedStatus = payload.result?.status ?? payload.run?.status;
     const message = payload.result?.errorMessage;
-    throw new FactoryError({
+    throw new MillError({
       code: "RUNTIME",
       message:
         message && message.length > 0
@@ -355,6 +355,23 @@ const decodeMillResult = (
         ? 0
         : 1;
 
+  const errorMessage = selectedSpawn.errorMessage ?? payload.result?.errorMessage;
+  const stopReason = selectedSpawn.stopReason;
+
+  if (derivedExitCode !== 0 || stopReason === "error" || (errorMessage?.length ?? 0) > 0) {
+    const reason =
+      errorMessage ??
+      (stopReason !== undefined && stopReason.length > 0
+        ? `stopReason=${stopReason}`
+        : `exitCode=${derivedExitCode}`);
+
+    throw new MillError({
+      code: "RUNTIME",
+      message: `Subagent '${selectedSpawn.agent ?? fallback.agent}' failed: ${reason}`,
+      recoverable: false,
+    });
+  }
+
   return {
     taskId: "",
     agent: selectedSpawn.agent ?? fallback.agent,
@@ -364,8 +381,8 @@ const decodeMillResult = (
     stderr: "",
     usage: newUsage(),
     model: selectedSpawn.model ?? fallback.modelId,
-    stopReason: selectedSpawn.stopReason,
-    errorMessage: selectedSpawn.errorMessage ?? payload.result?.errorMessage,
+    stopReason,
+    errorMessage,
     step: undefined,
     text: selectedSpawn.text ?? "",
     sessionPath: selectedSpawn.sessionRef,
@@ -510,7 +527,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     appendCommandLog(stdoutPath, input.millCommand, submitArgs, submitted);
 
     if (submitted.aborted || aborted) {
-      throw new FactoryError({
+      throw new MillError({
         code: "CANCELLED",
         message: "Subagent aborted.",
         recoverable: true,
@@ -518,7 +535,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     }
 
     if (submitted.code !== 0) {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message:
           submitted.combined.trim().length > 0
@@ -532,7 +549,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
       [submitted.stdout, submitted.stderr].join("\n"),
     ) as MillRunSubmitPayload | Record<string, unknown> | undefined;
     if (!submitPayload) {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message: "mill run did not return JSON submission payload.",
         recoverable: false,
@@ -541,7 +558,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
 
     submittedRunId = extractRunId(submitPayload as Record<string, unknown>);
     if (!submittedRunId) {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message: "mill run submission payload is missing runId.",
         recoverable: false,
@@ -569,7 +586,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
 
     if (waited.aborted || aborted) {
       await requestRunCancel();
-      throw new FactoryError({
+      throw new MillError({
         code: "CANCELLED",
         message: "Subagent aborted.",
         recoverable: true,
@@ -577,7 +594,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     }
 
     if (waited.code !== 0) {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message:
           waited.combined.trim().length > 0
@@ -591,7 +608,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     const terminalStatus = waitPayload ? extractRunStatus(waitPayload) : undefined;
 
     if (terminalStatus === "cancelled") {
-      throw new FactoryError({
+      throw new MillError({
         code: "CANCELLED",
         message: "Subagent run was cancelled.",
         recoverable: true,
@@ -599,7 +616,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     }
 
     if (terminalStatus === "failed") {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message: "Subagent run failed before inspect.",
         recoverable: false,
@@ -622,7 +639,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
 
     if (inspected.aborted || aborted) {
       await requestRunCancel();
-      throw new FactoryError({
+      throw new MillError({
         code: "CANCELLED",
         message: "Subagent aborted.",
         recoverable: true,
@@ -630,7 +647,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     }
 
     if (inspected.code !== 0) {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message:
           inspected.combined.trim().length > 0
@@ -642,7 +659,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
 
     const parsed = parseJsonObjectFromText([inspected.stdout, inspected.stderr].join("\n"));
     if (!parsed) {
-      throw new FactoryError({
+      throw new MillError({
         code: "RUNTIME",
         message: "mill inspect output was not valid JSON.",
         recoverable: false,
@@ -702,7 +719,7 @@ export interface MillRuntime {
 
 function validateModelSelector(model: string, agent: string): string {
   if (!model?.trim()) {
-    throw new FactoryError({
+    throw new MillError({
       code: "INVALID_INPUT",
       message: `Spawn for '${agent}' requires a non-empty 'model'.`,
       recoverable: true,
@@ -741,14 +758,14 @@ export function createMillRuntime(
 
     spawn({ agent, systemPrompt, prompt, cwd, model, tools, step, signal }) {
       if (!systemPrompt?.trim()) {
-        throw new FactoryError({
+        throw new MillError({
           code: "INVALID_INPUT",
           message: `Spawn for '${agent}' requires non-empty systemPrompt.`,
           recoverable: true,
         });
       }
       if (!prompt?.trim()) {
-        throw new FactoryError({
+        throw new MillError({
           code: "INVALID_INPUT",
           message: `Spawn for '${agent}' requires non-empty prompt.`,
           recoverable: true,
@@ -899,7 +916,7 @@ export async function preflightTypecheck(code: string): Promise<string | null> {
 
 export function prepareProgramModule(code: string): { modulePath: string } {
   if (!code.trim()) {
-    throw new FactoryError({
+    throw new MillError({
       code: "INVALID_INPUT",
       message: "Program code is empty.",
       recoverable: true,

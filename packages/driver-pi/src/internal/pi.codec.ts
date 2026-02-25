@@ -47,7 +47,9 @@ const extractTextFromContent = (content: unknown): string | undefined => {
   return textParts.join("\n");
 };
 
-const extractAssistantSummary = (message: unknown): { text?: string; stopReason?: string } => {
+const extractAssistantSummary = (
+  message: unknown,
+): { text?: string; stopReason?: string; errorMessage?: string } => {
   if (!isRecord(message)) {
     return {};
   }
@@ -55,6 +57,7 @@ const extractAssistantSummary = (message: unknown): { text?: string; stopReason?
   return {
     text: extractTextFromContent(message.content),
     stopReason: readString(message, "stopReason"),
+    errorMessage: readString(message, "errorMessage"),
   };
 };
 
@@ -93,6 +96,7 @@ export const decodePiProcessOutput = (
     let sessionRef: string | undefined;
     let responseText: string | undefined;
     let stopReason: string | undefined;
+    let errorMessage: string | undefined;
     let terminalSeen = false;
 
     for (const decoded of decodedLines) {
@@ -117,6 +121,10 @@ export const decodePiProcessOutput = (
 
           if (assistantSummary.stopReason !== undefined) {
             stopReason = assistantSummary.stopReason;
+          }
+
+          if (assistantSummary.errorMessage !== undefined) {
+            errorMessage = assistantSummary.errorMessage;
           }
         }
 
@@ -182,6 +190,10 @@ export const decodePiProcessOutput = (
         if (assistantSummary.stopReason !== undefined) {
           stopReason = assistantSummary.stopReason;
         }
+
+        if (assistantSummary.errorMessage !== undefined) {
+          errorMessage = assistantSummary.errorMessage;
+        }
       }
     }
 
@@ -193,6 +205,8 @@ export const decodePiProcessOutput = (
       );
     }
 
+    const exitCode = stopReason === "error" || errorMessage !== undefined ? 1 : 0;
+
     return {
       events,
       result: {
@@ -201,8 +215,9 @@ export const decodePiProcessOutput = (
         agent: input.agent,
         model: input.model,
         driver: "pi",
-        exitCode: 0,
+        exitCode,
         stopReason,
+        errorMessage,
       },
     } satisfies DriverSpawnOutput;
   });

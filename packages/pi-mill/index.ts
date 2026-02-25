@@ -459,7 +459,25 @@ export default function (pi: ExtensionAPI) {
         });
       }
 
-      // Wire completion: persist state first, then UI updates + notification.
+      const scheduleCompletionNotification = (summary: RunSummary): void => {
+        // Defer follow-up delivery to the next macrotask so very fast failures
+        // (e.g. immediate throw) don't race the originating tool turn.
+        setTimeout(() => {
+          try {
+            notifyCompletion(pi, registry, summary);
+          } catch (error) {
+            observability.push(runId, "warning", "notify_failed", { error: String(error) });
+          }
+
+          try {
+            widget.update(registry.getVisible(), ctx);
+          } catch {
+            /* ui may be unavailable */
+          }
+        }, 0);
+      };
+
+      // Wire completion: persist state first, then UI updates + async notification.
       promise.then(
         (summary) => {
           observability.setStatus(
@@ -496,17 +514,7 @@ export default function (pi: ExtensionAPI) {
             /* ui may be unavailable */
           }
 
-          try {
-            notifyCompletion(pi, registry, fullSummary);
-          } catch (error) {
-            observability.push(runId, "warning", "notify_failed", { error: String(error) });
-          }
-
-          try {
-            widget.update(registry.getVisible(), ctx);
-          } catch {
-            /* ui may be unavailable */
-          }
+          scheduleCompletionNotification(fullSummary);
         },
         (err) => {
           const details = toErrorDetails(err);
@@ -540,17 +548,7 @@ export default function (pi: ExtensionAPI) {
             /* ui may be unavailable */
           }
 
-          try {
-            notifyCompletion(pi, registry, failedSummary);
-          } catch (error) {
-            observability.push(runId, "warning", "notify_failed", { error: String(error) });
-          }
-
-          try {
-            widget.update(registry.getVisible(), ctx);
-          } catch {
-            /* ui may be unavailable */
-          }
+          scheduleCompletionNotification(failedSummary);
         },
       );
 

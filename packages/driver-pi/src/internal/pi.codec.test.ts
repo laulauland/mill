@@ -46,4 +46,42 @@ describe("pi codec terminal sequencing", () => {
 
     expect(decoded.result.text).toBe("done");
   });
+
+  it("marks stopReason=error payloads as failed spawn results", async () => {
+    const output = [
+      JSON.stringify({ type: "session", id: "session-test" }),
+      JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "context_length_exceeded",
+        },
+      }),
+      JSON.stringify({
+        type: "agent_end",
+        messages: [
+          {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "context_length_exceeded",
+          },
+        ],
+      }),
+    ].join("\n");
+
+    const decoded = await runWithRuntime(
+      decodePiProcessOutput(output, {
+        agent: "scout",
+        model: "openai/gpt-5.3-codex",
+        spawnId: "spawn_test",
+      }),
+    );
+
+    expect(decoded.result.exitCode).toBe(1);
+    expect(decoded.result.stopReason).toBe("error");
+    expect(decoded.result.errorMessage).toBe("context_length_exceeded");
+  });
 });

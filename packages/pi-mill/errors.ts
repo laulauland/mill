@@ -19,17 +19,17 @@ export interface ErrorDetails {
   meta?: Record<string, unknown>;
 }
 
-export class FactoryError extends Error {
+export class MillError extends Error {
   readonly details: ErrorDetails;
   constructor(details: ErrorDetails) {
     super(`${details.code}: ${details.message}`);
-    this.name = "FactoryError";
+    this.name = "MillError";
     this.details = details;
   }
 }
 
 export function toErrorDetails(error: unknown, fallback?: Partial<ErrorDetails>): ErrorDetails {
-  if (error instanceof FactoryError) return error.details;
+  if (error instanceof MillError) return error.details;
   return {
     code: fallback?.code ?? "RUNTIME",
     message: error instanceof Error ? error.message : String(error),
