@@ -1,4 +1,5 @@
 {
+  "historicalNote": "This file captures implementation planning history. S1 discovery references (mill --help --json, discovery command) are historical and not part of current CLI behavior.",
   "slices": [
     {
       "id": "S1",

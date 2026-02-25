@@ -5,40 +5,6 @@ import { join } from "node:path";
 import * as Schema from "@effect/schema/Schema";
 import { runCli } from "./index.api";
 
-const DiscoveryEnvelope = Schema.parseJson(
-  Schema.Struct({
-    discoveryVersion: Schema.Number,
-    programApi: Schema.Struct({
-      spawnRequired: Schema.Array(Schema.String),
-      spawnOptional: Schema.Array(Schema.String),
-      resultFields: Schema.Array(Schema.String),
-    }),
-    drivers: Schema.Record({
-      key: Schema.String,
-      value: Schema.Struct({
-        description: Schema.String,
-        modelFormat: Schema.String,
-        models: Schema.Array(Schema.String),
-      }),
-    }),
-    executors: Schema.Record({
-      key: Schema.String,
-      value: Schema.Struct({
-        description: Schema.String,
-      }),
-    }),
-    authoring: Schema.Struct({
-      instructions: Schema.String,
-    }),
-    async: Schema.Struct({
-      submit: Schema.String,
-      status: Schema.String,
-      wait: Schema.String,
-      watch: Schema.String,
-    }),
-  }),
-);
-
 const RunSyncEnvelope = Schema.parseJson(
   Schema.Struct({
     run: Schema.Struct({
@@ -174,7 +140,7 @@ const WatchEventEnvelope = Schema.parseJson(
 );
 
 describe("runCli", () => {
-  it("writes machine payload to stdout for discovery --json", async () => {
+  it("returns non-zero for removed discovery subcommand", async () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
@@ -192,18 +158,9 @@ describe("runCli", () => {
       },
     });
 
-    expect(code).toBe(0);
-    expect(stdout).toHaveLength(1);
+    expect(code).toBe(1);
+    expect(stdout).toHaveLength(0);
     expect(stderr).toHaveLength(0);
-
-    const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(stdout[0]);
-    expect(payload.discoveryVersion).toBe(1);
-    expect(Array.isArray(payload.drivers.pi?.models)).toBe(true);
-    expect(Array.isArray(payload.drivers.claude?.models)).toBe(true);
-    expect(Array.isArray(payload.drivers.codex?.models)).toBe(true);
-    expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect(payload.executors.direct?.description).toBe("Local direct executor");
-    expect(payload.executors.vm).toBeUndefined();
   });
 
   it("executes run --sync and resolves status for persisted runId", async () => {
@@ -940,7 +897,7 @@ describe("runCli", () => {
     }
   });
 
-  it("loads authoring instructions from resolved config into root help", async () => {
+  it("uses config authoring instructions in root help when configured", async () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
@@ -967,7 +924,38 @@ describe("runCli", () => {
 
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
-    expect(stdout[0]).toContain("CUSTOM_AUTHORING_INSTRUCTIONS");
+    expect(stdout[0]).toContain("Authoring:\n  CUSTOM_AUTHORING_INSTRUCTIONS");
+    expect(stdout[0]).not.toContain("systemPrompt = WHO the agent is");
+  });
+
+  it("falls back to static authoring guidance in root help when config omits authoring", async () => {
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    const code = await runCli([], {
+      cwd: "/workspace/repo",
+      homeDirectory: "/Users/tester",
+      pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
+      loadConfigModule: async () => ({
+        default: {
+          defaultDriver: "pi",
+        },
+      }),
+      io: {
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toHaveLength(0);
+    expect(stdout[0]).toContain("systemPrompt = WHO the agent is");
+    expect(stdout[0]).toContain("prompt       = WHAT to do now");
+    expect(stdout[0]).not.toContain("From config:");
   });
 
   it("loads authoring instructions from resolved config into command help", async () => {
@@ -1000,6 +988,36 @@ describe("runCli", () => {
     expect(stdout.join("\n")).toContain(
       "Authoring (from config): CUSTOM_AUTHORING_IN_COMMAND_HELP",
     );
+    expect(stdout.join("\n")).not.toContain("systemPrompt = WHO the agent is");
+  });
+
+  it("falls back to static authoring guidance in command help when config omits authoring", async () => {
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    const code = await runCli(["run", "--help"], {
+      cwd: "/workspace/repo",
+      homeDirectory: "/Users/tester",
+      pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
+      loadConfigModule: async () => ({
+        default: {
+          defaultDriver: "pi",
+        },
+      }),
+      io: {
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toHaveLength(0);
+    expect(stdout.join("\n")).toContain("Authoring:\n  systemPrompt = WHO the agent is");
+    expect(stdout.join("\n")).not.toContain("Authoring (from config):");
   });
 
   it("wait timeout is deterministic with typed JSON error contract", async () => {

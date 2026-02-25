@@ -6,7 +6,6 @@ import * as Schema from "@effect/schema/Schema";
 import { Effect, Option, Runtime, Scope } from "effect";
 import {
   cancelRun,
-  createDiscoveryPayload,
   defineConfig,
   getRunStatus,
   inspectRun,
@@ -610,27 +609,6 @@ const lsCommand = async (
   return 0;
 };
 
-interface DiscoveryCommandInput {
-  readonly json: boolean;
-}
-
-const discoveryCommand = async (
-  command: DiscoveryCommandInput,
-  options: RunCliOptions,
-  io: CliIo,
-): Promise<number> => {
-  const payload = await createDiscoveryPayload({
-    defaults: defaultConfig,
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
-  });
-
-  io.stdout(command.json ? JSON.stringify(payload) : JSON.stringify(payload, null, 2));
-  return 0;
-};
-
 const createCli = (options: RunCliOptions, io: CliIo) => {
   const run = CliCommand.make(
     "run",
@@ -745,34 +723,28 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
     ),
   );
 
-  const discovery = CliCommand.make(
-    "discovery",
-    {
-      json: Options.boolean("json"),
-    },
-    (command) => toCliEffect(discoveryCommand(command, options, io)),
-  ).pipe(CliCommand.withDescription("Emit discovery metadata for tooling."));
-
   return CliCommand.make("mill").pipe(
     CliCommand.withDescription("Mill orchestration runtime."),
-    CliCommand.withSubcommands([
-      run,
-      status,
-      wait,
-      watch,
-      inspect,
-      cancel,
-      ls,
-      init,
-      discovery,
-      worker,
-    ]),
+    CliCommand.withSubcommands([run, status, wait, watch, inspect, cancel, ls, init, worker]),
   );
 };
 
-const buildHelpText = (
-  authoringInstructions: string,
-): string => `mill - orchestration runtime for AI agents
+const STATIC_AUTHORING_HELP_LINES = [
+  "  systemPrompt = WHO the agent is (personality, methodology, output format)",
+  "  prompt       = WHAT to do now (specific files, concrete task)",
+] as const;
+
+type ResolvedAuthoringHelp =
+  | { readonly source: "static" }
+  | { readonly source: "config"; readonly instructions: string };
+
+const renderAuthoringHelp = (authoringHelp: ResolvedAuthoringHelp): string =>
+  authoringHelp.source === "config"
+    ? `Authoring:\n  ${authoringHelp.instructions}`
+    : `Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`;
+
+const buildHelpText = (authoringHelp: ResolvedAuthoringHelp): string =>
+  `mill - orchestration runtime for AI agents
 
 Usage: mill <command> [options]
 
@@ -785,7 +757,6 @@ Commands:
   cancel <runId>                Cancel a running execution
   ls                            List runs
   init [--global]               Create starter config (local or ~/.mill/config.ts)
-  discovery                     Emit discovery metadata
 
 Global options: --json, --driver <name>, --runs-dir <path>
 
@@ -809,10 +780,7 @@ Examples:
       mill.spawn({ agent: "perf", systemPrompt: "...", prompt: "Profile src/api/" }),
     ]);
 
-Authoring:
-  systemPrompt = WHO the agent is (personality, methodology, output format)
-  prompt       = WHAT to do now (specific files, concrete task)
-  From config: ${authoringInstructions}
+${renderAuthoringHelp(authoringHelp)}
 
 Run mill <command> --help for details.`;
 
@@ -827,7 +795,6 @@ const COMMAND_NAMES = new Set([
   "cancel",
   "ls",
   "init",
-  "discovery",
   "_worker",
 ]);
 
@@ -847,7 +814,9 @@ const isCommandHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   return argv.slice(1).some((argument) => HELP_FLAGS.has(argument));
 };
 
-const resolveAuthoringInstructionsForHelp = async (options: RunCliOptions): Promise<string> => {
+const resolveAuthoringHelpForHelp = async (
+  options: RunCliOptions,
+): Promise<ResolvedAuthoringHelp> => {
   try {
     const resolvedConfig = await resolveConfig({
       defaults: defaultConfig,
@@ -857,10 +826,23 @@ const resolveAuthoringInstructionsForHelp = async (options: RunCliOptions): Prom
       loadConfigModule: options.loadConfigModule,
     });
 
-    return resolvedConfig.config.authoring.instructions;
+    const instructions = resolvedConfig.config.authoring.instructions;
+    const hasAuthoringOverride =
+      resolvedConfig.source !== "defaults" && instructions !== defaultConfig.authoring.instructions;
+
+    if (hasAuthoringOverride) {
+      return {
+        source: "config",
+        instructions,
+      };
+    }
   } catch {
-    return defaultConfig.authoring.instructions;
+    // fall through to static authoring help
   }
+
+  return {
+    source: "static",
+  };
 };
 
 export const runCli = async (
@@ -871,14 +853,14 @@ export const runCli = async (
   const io = resolvedOptions.io ?? defaultIo;
 
   if (isHelpRequest(argv)) {
-    const authoringInstructions = await resolveAuthoringInstructionsForHelp(resolvedOptions);
-    io.stdout(buildHelpText(authoringInstructions));
+    const authoringHelp = await resolveAuthoringHelpForHelp(resolvedOptions);
+    io.stdout(buildHelpText(authoringHelp));
     return 0;
   }
 
   const commandHelpRequest = isCommandHelpRequest(argv);
-  const authoringInstructions = commandHelpRequest
-    ? await resolveAuthoringInstructionsForHelp(resolvedOptions)
+  const authoringHelp = commandHelpRequest
+    ? await resolveAuthoringHelpForHelp(resolvedOptions)
     : undefined;
 
   const command = createCli(resolvedOptions, io);
@@ -903,8 +885,12 @@ export const runCli = async (
   const compactHelp = CliConfig.layer({ showBuiltIns: false, showTypes: false });
   const exitCode = await runWithBunContext(Effect.provide(codeEffect, compactHelp));
 
-  if (commandHelpRequest && exitCode === 0 && authoringInstructions !== undefined) {
-    io.stdout(`Authoring (from config): ${authoringInstructions}`);
+  if (commandHelpRequest && exitCode === 0 && authoringHelp !== undefined) {
+    if (authoringHelp.source === "config") {
+      io.stdout(`Authoring (from config): ${authoringHelp.instructions}`);
+    } else {
+      io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`);
+    }
   }
 
   return exitCode;

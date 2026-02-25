@@ -45,35 +45,38 @@ mill run review.ts --sync    # or block until done
 mill run <program.ts> [--sync] [--json] [--driver <name>]
 mill status <runId>           show run state
 mill wait <runId> --timeout   block until complete/failed/cancelled
-mill watch <runId>            stream tier-1 events (NDJSON with --json)
+mill watch [--run <runId>]    stream tier-1 events (global if --run omitted)
 mill inspect <id>[.<spawnId>] inspect run or spawn detail
 mill inspect <id> --session   resolve full agent session via driver
 mill cancel <runId>           mark cancelled + kill worker process tree
 mill ls [--status <filter>]   list runs
-mill init                     generate starter mill.config.ts
+mill init [--global]          generate starter config (local or ~/.mill/config.ts)
 ```
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
 
+### Help & authoring guidance
+
+- `mill` or `mill --help`: prints root help with authoring guidance
+- `mill <command> --help`: prints command help with authoring guidance
+- If resolved config overrides `authoring.instructions`, help uses that text.
+- Otherwise help falls back to built-in static guidance (`systemPrompt` = WHO, `prompt` = WHAT).
+
 ## Configuration
 
 ```ts
-// mill.config.ts
-import { defineConfig, processDriver, piCodec } from "@mill/core";
-
-export default defineConfig({
-  defaultDriver: "pi",
-  defaultModel: "openai/gpt-5.3-codex",
-  defaultExecutor: "direct",
-  drivers: {
-    pi: processDriver({
-      command: "pi",
-      args: ["-p"],
-      codec: piCodec(),
-    }),
+// mill.config.ts (local)
+// ~/.mill/config.ts (global)
+export default {
+  authoring: {
+    instructions:
+      "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation).",
   },
-});
+};
 ```
+
+`mill init` creates `./mill.config.ts`.
+`mill init --global` creates `~/.mill/config.ts`.
 
 Resolved in order: `./mill.config.ts` → walk up to repo root → `~/.mill/config.ts` → built-in defaults.
 

@@ -1,6 +1,6 @@
 # mill v0 Product Spec (Sections 1–7)
 
-_Source: `SPEC.md` (verbatim split for cedar-style docs tree)._
+_Source: `SPEC.md`, updated to reflect current CLI behavior._
 
 ## 1) Product definition
 
@@ -62,23 +62,24 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
 ## 3) CLI surface (v0)
 
 ```bash
-mill run <program.ts> [--json] [--sync] [--driver <name>] [--executor <name>] [--confirm=false]
-mill status <runId> [--json]
-mill wait <runId> --timeout <seconds> [--json]
-mill watch <runId> [--json] [--raw]
-mill ls [--json] [--status <status>]
-mill inspect <runId>[.<spawnId>] [--json] [--session]
-mill cancel <runId> [--json]
-mill init
+mill run <program.ts> [--json] [--sync] [--runs-dir <path>] [--driver <name>] [--executor <name>] [--meta-json <json>]
+mill status <runId> [--json] [--runs-dir <path>] [--driver <name>]
+mill wait <runId> --timeout <seconds> [--json] [--runs-dir <path>] [--driver <name>]
+mill watch [--run <runId>] [--since-time <iso>] [--json] [--raw] [--runs-dir <path>] [--driver <name>]
+mill ls [--json] [--status <status>] [--runs-dir <path>] [--driver <name>]
+mill inspect <runId>[.<spawnId>] [--json] [--session] [--runs-dir <path>] [--driver <name>]
+mill cancel <runId> [--json] [--runs-dir <path>] [--driver <name>]
+mill init [--global]
 ```
 
-Discovery (for humans and agents):
+Help + authoring guidance:
 
-- `mill` (no subcommand): concise discovery card
-- `mill --help`: help text + authoring guidance
-- `mill --help --json`: machine-readable discovery payload
+- `mill` / `mill --help`: root help text with authoring guidance
+- `mill <command> --help`: command help text + authoring guidance
+- If resolved config overrides `authoring.instructions`, help uses that text.
+- Otherwise help falls back to static guidance (`systemPrompt` = WHO, `prompt` = WHAT).
 
-No other commands in v0.
+No `discovery` subcommand in v0.
 
 ### 3.1 Output mode contract
 
@@ -116,10 +117,9 @@ All layers are orthogonal:
 
 1. Resolve config
 2. Validate program path
-3. Optional interactive confirmation
-4. Allocate `runId`, create run directory, write initial metadata
-5. Start detached worker process
-6. Return immediately (`runId`, `status=running`, paths)
+3. Allocate `runId`, create run directory, write initial metadata
+4. Start detached worker process
+5. Return immediately (`runId`, `status=running`, paths)
 
 `--sync` blocks until completion (implemented as submit + wait internally).
 
@@ -149,38 +149,23 @@ pending -> running -> complete
 
 ## 6) Config contract (`mill.config.ts`)
 
+Minimal import-free config (works for both local and global config paths):
+
 ```ts
-import { defineConfig } from "@mill/core";
-
-export default defineConfig({
-  defaultDriver: "default",
-  defaultModel: "openai/gpt-5.3-codex",
-  defaultExecutor: "direct",
-
-  drivers: {
-    default: processDriver({
-      command: "pi",
-      args: ["-p"],
-      codec: piCodec(),
-      env: {},
-    }),
-  },
-
-  executors: {
-    direct: directExecutor(),
-    vm: vmExecutor({ runtime: "docker", image: "mill-sandbox:latest" }),
-  },
-
+export default {
+  // Optional overrides:
+  // defaultDriver: "pi",
+  // defaultExecutor: "direct",
+  // defaultModel: "openai-codex/gpt-5.3-codex",
   authoring: {
     instructions:
-      "Use systemPrompt for WHO and prompt for WHAT. Prefer cheaper models for search and stronger models for synthesis.",
+      "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation).",
   },
-
-  extensions: [
-    // optional
-  ],
-});
+};
 ```
+
+`mill init` writes `./mill.config.ts`.
+`mill init --global` writes `~/.mill/config.ts`.
 
 ### 6.1 Config resolution order
 
@@ -195,32 +180,17 @@ export default defineConfig({
 - Resolved env values are normalized into config/services and passed downward.
 - Runtime/domain modules must not read `process.env` directly.
 
-## 7) Discovery contract (`mill --help --json`)
+## 7) Authoring help contract
 
-`mill --help --json` MUST include enough info for an agent to author a program without extra docs:
+`mill` help output is the primary authoring guide for humans/agents.
 
-```json
-{
-  "discoveryVersion": 1,
-  "programApi": {
-    "spawnRequired": ["agent", "systemPrompt", "prompt"],
-    "spawnOptional": ["model"],
-    "resultFields": ["text", "sessionRef", "agent", "model", "driver", "exitCode", "stopReason"]
-  },
-  "drivers": {
-    "default": {
-      "description": "Local process driver",
-      "modelFormat": "provider/model-id",
-      "models": ["openai/gpt-5.3-codex", "anthropic/claude-sonnet-4-6"]
-    }
-  },
-  "authoring": {
-    "instructions": "...from config..."
-  },
-  "async": {
-    "submit": "mill run <program.ts> --json",
-    "status": "mill status <runId> --json",
-    "wait": "mill wait <runId> --timeout 30 --json"
-  }
-}
-```
+Behavior:
+
+1. `mill` and `mill --help` print root help + authoring guidance.
+2. `mill <command> --help` prints command help + authoring guidance.
+3. If resolved config provides a custom `authoring.instructions` override, that text replaces static guidance in help output.
+4. If config does not override authoring instructions, help falls back to static guidance:
+   - `systemPrompt` = WHO the agent is
+   - `prompt` = WHAT to do now
+
+There is no dedicated `discovery` subcommand in CLI v0.

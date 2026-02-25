@@ -189,7 +189,7 @@ Target platform services:
 src/
   public/
     mill.api.ts              # Promise-based user API
-    discovery.api.ts         # Promise-based CLI/discovery payload builders
+    discovery.api.ts         # Promise-based core discovery payload builders
     types.ts                 # user-facing interfaces allowed
   domain/
     run.schema.ts            # Schema-based domain models (no interfaces)

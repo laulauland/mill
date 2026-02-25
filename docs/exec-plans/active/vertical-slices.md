@@ -1,5 +1,7 @@
 # Vertical Slices Plan (v0)
 
+> Historical note (2026-02-25): this execution plan captures the implementation path. Some S1 discovery references (`mill --help --json`, `discovery` command) are historical and no longer match the current CLI surface.
+
 This plan sequences integrated, testable slices from highest-leverage foundation to full v0 behavior.
 
 Each slice intentionally spans:

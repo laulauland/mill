@@ -9,40 +9,6 @@ import { Effect, Runtime } from "effect";
 
 const runtime = Runtime.defaultRuntime;
 
-const DiscoveryEnvelope = Schema.parseJson(
-  Schema.Struct({
-    discoveryVersion: Schema.Number,
-    programApi: Schema.Struct({
-      spawnRequired: Schema.Array(Schema.String),
-      spawnOptional: Schema.Array(Schema.String),
-      resultFields: Schema.Array(Schema.String),
-    }),
-    drivers: Schema.Record({
-      key: Schema.String,
-      value: Schema.Struct({
-        description: Schema.String,
-        modelFormat: Schema.String,
-        models: Schema.Array(Schema.String),
-      }),
-    }),
-    executors: Schema.Record({
-      key: Schema.String,
-      value: Schema.Struct({
-        description: Schema.String,
-      }),
-    }),
-    authoring: Schema.Struct({
-      instructions: Schema.String,
-    }),
-    async: Schema.Struct({
-      submit: Schema.String,
-      status: Schema.String,
-      wait: Schema.String,
-      watch: Schema.String,
-    }),
-  }),
-);
-
 const RunSyncEnvelope = Schema.parseJson(
   Schema.Struct({
     run: Schema.Struct({
@@ -149,22 +115,13 @@ const commandOutput = (command: Command.Command): Promise<string> =>
 const commandExitCode = (command: Command.Command): Promise<number> =>
   Runtime.runPromise(runtime)(Effect.provide(Command.exitCode(command), BunContext.layer));
 
-describe("mill discovery/help (e2e)", () => {
-  it("returns discovery contract payload on stdout", async () => {
-    const output = await commandOutput(
+describe("mill help (e2e)", () => {
+  it("does not expose discovery subcommand", async () => {
+    const exitCode = await commandExitCode(
       Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "discovery", "--json"),
     );
 
-    const payload = Schema.decodeUnknownSync(DiscoveryEnvelope)(output);
-    expect(payload.discoveryVersion).toBe(1);
-    expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect(Array.isArray(payload.drivers.pi?.models)).toBe(true);
-    expect(Array.isArray(payload.drivers.claude?.models)).toBe(true);
-    expect(Array.isArray(payload.drivers.codex?.models)).toBe(true);
-    expect(payload.executors.direct?.description).toBe("Local direct executor");
-    expect(payload.executors.vm).toBeUndefined();
-    expect(payload.authoring.instructions.length).toBeGreaterThan(0);
-    expect(payload.async.submit).toBe("mill run <program.ts> --json");
+    expect(exitCode).toBe(1);
   });
 
   it("prints top-level help via built-in --help", async () => {
@@ -175,6 +132,7 @@ describe("mill discovery/help (e2e)", () => {
     expect(output).toContain("Usage: mill <command>");
     expect(output).toContain("Commands:");
     expect(output).toContain("run <program.ts>");
+    expect(output).not.toContain("discovery");
     expect(output).not.toContain("Effect-first");
   });
 
