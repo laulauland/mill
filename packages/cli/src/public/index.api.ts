@@ -12,6 +12,7 @@ import {
   inspectRun,
   listRuns,
   processDriver,
+  resolveConfig,
   runProgramSync,
   runWorker,
   submitRun,
@@ -96,6 +97,22 @@ const normalizePath = (path: string): string => {
 
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
+
+const dirname = (path: string): string => {
+  const normalized = normalizePath(path);
+
+  if (normalized === "/") {
+    return "/";
+  }
+
+  const index = normalized.lastIndexOf("/");
+
+  if (index <= 0) {
+    return "/";
+  }
+
+  return normalized.slice(0, index);
+};
 
 const workerPidPath = (runsDirectory: string, runId: string): string =>
   joinPath(joinPath(runsDirectory, runId), "worker.pid");
@@ -287,44 +304,42 @@ const workerCommand = async (
 };
 
 const INIT_CONFIG_TEMPLATE = [
-  'import { defineConfig, processDriver } from "@mill/core";',
-  'import { createPiDriverRegistration } from "@mill/driver-pi";',
-  'import { createClaudeDriverRegistration } from "@mill/driver-claude";',
-  'import { createCodexDriverRegistration } from "@mill/driver-codex";',
-  "",
-  "export default defineConfig({",
-  '  defaultDriver: "pi",',
-  '  defaultExecutor: "direct",',
-  '  defaultModel: "openai-codex/gpt-5.3-codex",',
-  "  drivers: {",
-  "    pi: processDriver(createPiDriverRegistration()),",
-  "    claude: processDriver(createClaudeDriverRegistration()),",
-  "    codex: processDriver(createCodexDriverRegistration()),",
-  "  },",
-  "  executors: {",
-  "    direct: {",
-  '      description: "Local direct executor",',
-  "      runtime: {",
-  '        name: "direct",',
-  "        runProgram: ({ execute }) => execute,",
-  "      },",
-  "    },",
-  "    // Future: add sandboxed executors here.",
-  "  },",
-  "  extensions: [],",
+  "export default {",
+  "  // Optional: override model/driver/executor defaults.",
+  '  // defaultModel: "openai-codex/gpt-5.3-codex",',
   "  authoring: {",
-  '    instructions: "Use systemPrompt for WHO and prompt for WHAT.",',
+  '    instructions: "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation). Prefer codex for synthesis, cerebras for fast retrieval.",',
   "  },",
-  "});",
+  "};",
 ].join("\n");
 
-const initCommand = async (options: RunCliOptions, io: CliIo): Promise<number> => {
+interface InitCommandInput {
+  readonly global: boolean;
+}
+
+const initCommand = async (
+  command: InitCommandInput,
+  options: RunCliOptions,
+  io: CliIo,
+): Promise<number> => {
   const cwd = options.cwd ?? process.cwd();
-  const configPath = `${cwd}/mill.config.ts`;
+  const homeDirectory = options.homeDirectory ?? process.env.HOME;
+
+  if (command.global && (homeDirectory === undefined || homeDirectory.length === 0)) {
+    io.stderr("Unable to resolve home directory for --global init.");
+    return 1;
+  }
+
+  const configPath = command.global
+    ? joinPath(homeDirectory as string, ".mill/config.ts")
+    : `${cwd}/mill.config.ts`;
 
   await runWithBunContext(
     Effect.flatMap(FileSystem.FileSystem, (fileSystem) =>
-      fileSystem.writeFileString(configPath, `${INIT_CONFIG_TEMPLATE}\n`),
+      Effect.zipRight(
+        fileSystem.makeDirectory(dirname(configPath), { recursive: true }),
+        fileSystem.writeFileString(configPath, `${INIT_CONFIG_TEMPLATE}\n`),
+      ),
     ),
   );
 
@@ -718,8 +733,16 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
     (command) => toCliEffect(lsCommand(command, options, io)),
   ).pipe(CliCommand.withDescription("List runs."));
 
-  const init = CliCommand.make("init", {}, () => toCliEffect(initCommand(options, io))).pipe(
-    CliCommand.withDescription("Create a starter mill.config.ts."),
+  const init = CliCommand.make(
+    "init",
+    {
+      global: Options.boolean("global"),
+    },
+    (command) => toCliEffect(initCommand(command, options, io)),
+  ).pipe(
+    CliCommand.withDescription(
+      "Create a starter config (local mill.config.ts or ~/.mill/config.ts with --global).",
+    ),
   );
 
   const discovery = CliCommand.make(
@@ -747,7 +770,9 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   );
 };
 
-const HELP_TEXT = `mill - orchestration runtime for AI agents
+const buildHelpText = (
+  authoringInstructions: string,
+): string => `mill - orchestration runtime for AI agents
 
 Usage: mill <command> [options]
 
@@ -759,7 +784,7 @@ Commands:
   inspect <ref>                 Inspect run or spawn detail
   cancel <runId>                Cancel a running execution
   ls                            List runs
-  init                          Create starter mill.config.ts
+  init [--global]               Create starter config (local or ~/.mill/config.ts)
   discovery                     Emit discovery metadata
 
 Global options: --json, --driver <name>, --runs-dir <path>
@@ -787,14 +812,55 @@ Examples:
 Authoring:
   systemPrompt = WHO the agent is (personality, methodology, output format)
   prompt       = WHAT to do now (specific files, concrete task)
-  Prefer cheaper models for search, stronger models for synthesis.
+  From config: ${authoringInstructions}
 
 Run mill <command> --help for details.`;
+
+const HELP_FLAGS = new Set(["--help", "-h"]);
+
+const COMMAND_NAMES = new Set([
+  "run",
+  "status",
+  "wait",
+  "watch",
+  "inspect",
+  "cancel",
+  "ls",
+  "init",
+  "discovery",
+  "_worker",
+]);
 
 const isHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   if (argv.length === 0) return true;
 
-  return argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
+  return argv.length === 1 && HELP_FLAGS.has(argv[0] ?? "");
+};
+
+const isCommandHelpRequest = (argv: ReadonlyArray<string>): boolean => {
+  const commandName = argv[0];
+
+  if (commandName === undefined || !COMMAND_NAMES.has(commandName)) {
+    return false;
+  }
+
+  return argv.slice(1).some((argument) => HELP_FLAGS.has(argument));
+};
+
+const resolveAuthoringInstructionsForHelp = async (options: RunCliOptions): Promise<string> => {
+  try {
+    const resolvedConfig = await resolveConfig({
+      defaults: defaultConfig,
+      cwd: options.cwd,
+      homeDirectory: options.homeDirectory,
+      pathExists: options.pathExists,
+      loadConfigModule: options.loadConfigModule,
+    });
+
+    return resolvedConfig.config.authoring.instructions;
+  } catch {
+    return defaultConfig.authoring.instructions;
+  }
 };
 
 export const runCli = async (
@@ -805,9 +871,15 @@ export const runCli = async (
   const io = resolvedOptions.io ?? defaultIo;
 
   if (isHelpRequest(argv)) {
-    io.stdout(HELP_TEXT);
+    const authoringInstructions = await resolveAuthoringInstructionsForHelp(resolvedOptions);
+    io.stdout(buildHelpText(authoringInstructions));
     return 0;
   }
+
+  const commandHelpRequest = isCommandHelpRequest(argv);
+  const authoringInstructions = commandHelpRequest
+    ? await resolveAuthoringInstructionsForHelp(resolvedOptions)
+    : undefined;
 
   const command = createCli(resolvedOptions, io);
   const run = CliCommand.run(command, {
@@ -829,6 +901,11 @@ export const runCli = async (
   );
 
   const compactHelp = CliConfig.layer({ showBuiltIns: false, showTypes: false });
+  const exitCode = await runWithBunContext(Effect.provide(codeEffect, compactHelp));
 
-  return runWithBunContext(Effect.provide(codeEffect, compactHelp));
+  if (commandHelpRequest && exitCode === 0 && authoringInstructions !== undefined) {
+    io.stdout(`Authoring (from config): ${authoringInstructions}`);
+  }
+
+  return exitCode;
 };

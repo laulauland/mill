@@ -873,7 +873,7 @@ describe("runCli", () => {
     }
   });
 
-  it("creates init skeleton in cwd", async () => {
+  it("creates minimal init skeleton in cwd", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-init-"));
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
@@ -897,12 +897,109 @@ describe("runCli", () => {
       expect(stdout[0]).toContain("mill.config.ts");
 
       const configSource = await readFile(join(tempDirectory, "mill.config.ts"), "utf-8");
-      expect(configSource).toContain("defineConfig");
-      expect(configSource).toContain("defaultExecutor");
-      expect(configSource).toContain("executors");
+      expect(configSource).toContain("export default {");
+      expect(configSource).toContain("authoring");
+      expect(configSource).not.toContain("defineConfig");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
+  });
+
+  it("creates minimal global init skeleton in ~/.mill/config.ts", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-init-global-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    try {
+      await mkdir(homeDirectory, { recursive: true });
+
+      const code = await runCli(["init", "--global"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        io: {
+          stdout: (line) => {
+            stdout.push(line);
+          },
+          stderr: (line) => {
+            stderr.push(line);
+          },
+        },
+      });
+
+      expect(code).toBe(0);
+      expect(stderr).toHaveLength(0);
+      expect(stdout[0]).toContain(join(homeDirectory, ".mill", "config.ts"));
+
+      const configSource = await readFile(join(homeDirectory, ".mill", "config.ts"), "utf-8");
+      expect(configSource).toContain("export default {");
+      expect(configSource).toContain("authoring");
+      expect(configSource).not.toContain("defineConfig");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads authoring instructions from resolved config into root help", async () => {
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    const code = await runCli([], {
+      cwd: "/workspace/repo",
+      homeDirectory: "/Users/tester",
+      pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
+      loadConfigModule: async () => ({
+        default: {
+          authoring: {
+            instructions: "CUSTOM_AUTHORING_INSTRUCTIONS",
+          },
+        },
+      }),
+      io: {
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toHaveLength(0);
+    expect(stdout[0]).toContain("CUSTOM_AUTHORING_INSTRUCTIONS");
+  });
+
+  it("loads authoring instructions from resolved config into command help", async () => {
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    const code = await runCli(["run", "--help"], {
+      cwd: "/workspace/repo",
+      homeDirectory: "/Users/tester",
+      pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
+      loadConfigModule: async () => ({
+        default: {
+          authoring: {
+            instructions: "CUSTOM_AUTHORING_IN_COMMAND_HELP",
+          },
+        },
+      }),
+      io: {
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toHaveLength(0);
+    expect(stdout.join("\n")).toContain(
+      "Authoring (from config): CUSTOM_AUTHORING_IN_COMMAND_HELP",
+    );
   });
 
   it("wait timeout is deterministic with typed JSON error contract", async () => {
