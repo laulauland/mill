@@ -12,6 +12,7 @@ import { RunRegistry } from "./registry.js";
 import { confirmExecution, executeProgram } from "./executors/program-executor.js";
 import { FactoryWidget } from "./widget.js";
 import { FactoryMonitor } from "./monitor.js";
+import { cwdToSessionDir, getSessionsBase, scanRuns } from "./scanner.js";
 import { registerMessageRenderer, notifyCompletion } from "./notify.js";
 import type { RunSummary } from "./types.js";
 
@@ -201,46 +202,11 @@ function renderExpanded(summary: RunSummary, theme: any): Container {
 function loadHistoricalRuns(ctx: ExtensionContext, registry: RunRegistry): void {
   const sessionDir = ctx.sessionManager.getSessionDir();
   if (!sessionDir) return;
-  const millDir = path.join(sessionDir, ".mill");
-  if (!fs.existsSync(millDir)) return;
-  try {
-    for (const entry of fs.readdirSync(millDir)) {
-      const runJsonPath = path.join(millDir, entry, "run.json");
-      if (!fs.existsSync(runJsonPath)) continue;
-      try {
-        const data = JSON.parse(fs.readFileSync(runJsonPath, "utf-8"));
-        const artifactsDir = path.join(millDir, entry);
-        registry.loadHistorical({
-          runId: data.runId,
-          status: data.status ?? "done",
-          summary: {
-            runId: data.runId,
-            status: data.status ?? "done",
-            results: data.results ?? [],
-            error: data.error,
-            metadata: {
-              task: data.task,
-              millCommand: data.mill?.command,
-              millArgs: data.mill?.args,
-              millRunsDir: data.mill?.runsDir,
-            },
-            observability: {
-              status: data.status ?? "done",
-              events: [],
-              artifacts: [],
-              artifactsDir,
-              startedAt: data.startedAt ?? Date.now(),
-              endedAt: data.completedAt,
-            },
-          },
-          startedAt: data.startedAt ?? Date.now(),
-          completedAt: data.completedAt,
-          acknowledged: true,
-          task: data.task,
-        });
-      } catch {}
-    }
-  } catch {}
+
+  const records = scanRuns(getSessionsBase(), cwdToSessionDir(sessionDir));
+  for (const record of records) {
+    registry.loadHistorical(record);
+  }
 }
 
 // ── Extension entry point ──────────────────────────────────────────────

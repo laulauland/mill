@@ -28,7 +28,6 @@ export const createPiDriverConfig = (): DriverProcessConfig => ({
     "--mode",
     "json",
     "--print",
-    "--no-session",
     "--no-extensions",
     "--no-skills",
     "--no-prompt-templates",

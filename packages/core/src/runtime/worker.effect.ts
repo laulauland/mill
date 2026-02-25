@@ -82,6 +82,7 @@ export const runDetachedWorker = (
     const workerLogPath = joinPath(runDirectory, "logs/worker.log");
 
     yield* appendWorkerLog(workerLogPath, `worker:start runId=${input.runId}`);
+    yield* Effect.logDebug("mill.worker:start", { runId: input.runId, runDirectory });
 
     if (isTerminalStatus(submittedRun.status)) {
       const existingResult = yield* input.engine.result(input.runId);
@@ -91,6 +92,10 @@ export const runDetachedWorker = (
           workerLogPath,
           `worker:terminal-noop runId=${input.runId} status=${submittedRun.status}`,
         );
+        yield* Effect.logDebug("mill.worker:terminal-noop", {
+          runId: input.runId,
+          status: submittedRun.status,
+        });
 
         return {
           run: submittedRun,
@@ -106,13 +111,17 @@ export const runDetachedWorker = (
         executeProgram: input.executeProgram,
       }),
       (error) =>
-        appendWorkerLog(
-          workerLogPath,
-          `worker:failed runId=${input.runId} message=${String(error)}`,
+        Effect.zipRight(
+          appendWorkerLog(
+            workerLogPath,
+            `worker:failed runId=${input.runId} message=${String(error)}`,
+          ),
+          Effect.logDebug("mill.worker:failed", { runId: input.runId, message: String(error) }),
         ),
     );
 
     yield* appendWorkerLog(workerLogPath, `worker:complete runId=${input.runId}`);
+    yield* Effect.logDebug("mill.worker:complete", { runId: input.runId });
 
     return runOutput;
   });

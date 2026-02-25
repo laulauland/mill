@@ -20,6 +20,7 @@ export interface SpawnOutput {
 
 export interface DriverSpawnInput {
   readonly runId: string;
+  readonly runDirectory: string;
   readonly spawnId: string;
   readonly agent: string;
   readonly systemPrompt: string;

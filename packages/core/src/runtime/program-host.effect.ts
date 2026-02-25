@@ -292,6 +292,12 @@ export const executeProgramInProcessHost = (
         Command.stderr("pipe"),
       );
 
+      yield* Effect.logDebug("mill.program-host:start", {
+        runId: input.runId,
+        hostProgramPath,
+        workingDirectory: input.workingDirectory,
+      });
+
       const processHandle = yield* Effect.mapError(
         Command.start(command),
         (error) =>
@@ -300,6 +306,11 @@ export const executeProgramInProcessHost = (
             message: `Unable to start Bun program host: ${toMessage(error)}`,
           }),
       );
+
+      yield* Effect.logDebug("mill.program-host:started", {
+        runId: input.runId,
+        pid: Number(processHandle.pid),
+      });
 
       const responseQueue = yield* Queue.unbounded<Uint8Array>();
 
@@ -322,6 +333,10 @@ export const executeProgramInProcessHost = (
                 kind: "result",
                 ok: false,
                 message: `Malformed program host payload: ${toMessage(decoded.left)}`,
+              });
+              yield* Effect.logDebug("mill.program-host:malformed-payload", {
+                runId: input.runId,
+                message: toMessage(decoded.left),
               });
               yield* Effect.ignore(processHandle.kill("SIGTERM"));
               return;
@@ -405,6 +420,12 @@ export const executeProgramInProcessHost = (
             message: `Program host process failed before completion: ${toMessage(error)}`,
           }),
       );
+
+      yield* Effect.logDebug("mill.program-host:exit", {
+        runId: input.runId,
+        pid: Number(processHandle.pid),
+        exitCode,
+      });
 
       yield* Queue.shutdown(responseQueue);
       yield* Effect.ignore(Fiber.join(stdinFiber));

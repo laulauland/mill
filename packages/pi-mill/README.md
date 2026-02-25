@@ -62,7 +62,7 @@ const [tests, docs] = await Promise.all([
 ]);
 ```
 
-Each `mill.spawn()` submits an async mill run (`mill run --json`) and then follows completion via mill APIs (`watch` + `inspect`). Model selection, driver routing, and execution behavior all come from your mill configuration.
+Each `mill.spawn()` submits an async mill run (`mill run --json`) and then follows completion via mill APIs (`wait` + `inspect`). Model selection, driver routing, and execution behavior all come from your mill configuration.
 
 Runs are **async by default** — the tool returns a `runId` immediately and delivers results via notification when complete.
 
@@ -98,4 +98,4 @@ export const config = {
 
 ## Context flow
 
-Each subagent receives the parent session path and can use `search_thread` to explore the orchestrator's conversation for context. Results (including each subagent's `sessionPath`) flow back to the orchestrator via `result.text`.
+Each subagent receives the parent session path and can use `search_thread` to explore the orchestrator's conversation for context. Results include each subagent's `sessionPath` (session reference, typically a `.jsonl` path for pi driver) for later inspection and context recovery.

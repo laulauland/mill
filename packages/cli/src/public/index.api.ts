@@ -86,6 +86,20 @@ const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunConte
 
 const millBinPath = decodeURIComponent(new URL("../bin/mill.ts", import.meta.url).pathname);
 
+const normalizePath = (path: string): string => {
+  if (path.length <= 1) {
+    return path;
+  }
+
+  return path.endsWith("/") ? path.slice(0, -1) : path;
+};
+
+const joinPath = (base: string, child: string): string =>
+  normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
+
+const workerPidPath = (runsDirectory: string, runId: string): string =>
+  joinPath(joinPath(runsDirectory, runId), "worker.pid");
+
 const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => {
   const workerCommand = PlatformCommand.make(
     process.execPath,
@@ -112,8 +126,16 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
   await runWithBunContext(
     Effect.gen(function* () {
       const detachedScope = yield* Scope.make();
+      const processHandle = yield* Scope.extend(
+        PlatformCommand.start(workerCommand),
+        detachedScope,
+      );
+      const fileSystem = yield* FileSystem.FileSystem;
+      const pidPath = workerPidPath(input.runsDirectory, input.runId);
+      const runDirectory = pidPath.slice(0, pidPath.lastIndexOf("/"));
 
-      yield* Scope.extend(PlatformCommand.start(workerCommand), detachedScope);
+      yield* fileSystem.makeDirectory(runDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(pidPath, `${Number(processHandle.pid)}\n`);
     }),
   );
 };

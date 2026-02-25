@@ -16,13 +16,17 @@ export function cwdToSessionDir(cwd: string): string {
   return "--" + cwd.slice(1).replace(/\//g, "-") + "--";
 }
 
-/** Shape of run.json on disk (written by writeRunJson in index.ts). */
+/**
+ * Shape of run.json on disk (written by writeRunJson in index.ts).
+ * Convention: status="running" is advisory; scanner reconciles it against canonical mill status.
+ */
 interface RunJsonData {
   runId: string;
-  status?: RunStatus;
+  status?: string;
   task?: string;
   startedAt?: number;
   completedAt?: number;
+  reconciledAt?: number;
   mill?: {
     command?: string;
     args?: string[];
@@ -42,12 +46,124 @@ interface RunJsonData {
   error?: { code: string; message: string; recoverable: boolean };
 }
 
+const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefined => {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .reverse();
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (typeof parsed === "object" && parsed !== null) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
+};
+
+const normalizeRunStatus = (status: string | undefined): RunStatus => {
+  if (status === undefined) {
+    return "done";
+  }
+
+  switch (status) {
+    case "done":
+    case "complete":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "running":
+    case "pending":
+      return "running";
+    default:
+      return "running";
+  }
+};
+
+const extractStatusFromMillPayload = (payload: Record<string, unknown>): string | undefined => {
+  const direct = payload.status;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
+  }
+
+  const nestedRun = payload.run;
+  if (typeof nestedRun === "object" && nestedRun !== null) {
+    const nestedStatus = (nestedRun as { status?: unknown }).status;
+    if (typeof nestedStatus === "string" && nestedStatus.length > 0) {
+      return nestedStatus;
+    }
+  }
+
+  return undefined;
+};
+
+const reconcileRunningStatus = (runJsonPath: string, data: RunJsonData): RunJsonData => {
+  if (normalizeRunStatus(data.status) !== "running") {
+    return data;
+  }
+
+  if (typeof data.runId !== "string" || data.runId.length === 0) {
+    return data;
+  }
+
+  const command = data.mill?.command?.trim() || "mill";
+  const args = [...(data.mill?.args ?? []), "status", data.runId, "--json"];
+
+  if (data.mill?.runsDir && data.mill.runsDir.trim().length > 0) {
+    args.push("--runs-dir", data.mill.runsDir);
+  }
+
+  const result = spawnSync(command, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+    encoding: "utf-8",
+  });
+
+  if (result.status !== 0) {
+    return data;
+  }
+
+  const payload = parseJsonObjectFromText(`${result.stdout}\n${result.stderr}`);
+  if (!payload) {
+    return data;
+  }
+
+  const canonicalStatus = normalizeRunStatus(extractStatusFromMillPayload(payload));
+
+  if (canonicalStatus === "running") {
+    return data;
+  }
+
+  const reconciled: RunJsonData = {
+    ...data,
+    status: canonicalStatus,
+    completedAt: data.completedAt ?? Date.now(),
+    reconciledAt: Date.now(),
+  };
+
+  try {
+    fs.writeFileSync(runJsonPath, `${JSON.stringify(reconciled, null, 2)}\n`, "utf-8");
+  } catch {
+    // best effort persistence; return reconciled in-memory snapshot regardless
+  }
+
+  return reconciled;
+};
+
 /** Parse a single run.json into a RunRecord (without promise/abort). */
 function parseRunJson(
   data: RunJsonData,
   artifactsDir: string,
 ): Omit<RunRecord, "promise" | "abort"> {
-  const status: RunStatus = data.status ?? "done";
+  const status: RunStatus = normalizeRunStatus(data.status);
   const results: ExecutionResult[] = (data.results ?? []).map((r) => ({
     taskId: "",
     agent: r.agent ?? "unknown",
@@ -132,7 +248,8 @@ export function scanRuns(
         try {
           const raw = fs.readFileSync(runJsonPath, "utf-8");
           const data: RunJsonData = JSON.parse(raw);
-          records.push(parseRunJson(data, path.join(millDir, entry)));
+          const reconciled = reconcileRunningStatus(runJsonPath, data);
+          records.push(parseRunJson(reconciled, path.join(millDir, entry)));
         } catch {
           // Skip malformed run.json files
         }

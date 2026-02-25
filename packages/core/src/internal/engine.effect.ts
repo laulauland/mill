@@ -149,6 +149,17 @@ const toMessage = (error: unknown): string => {
   return String(error);
 };
 
+const normalizePath = (path: string): string => {
+  if (path.length <= 1) {
+    return path;
+  }
+
+  return path.endsWith("/") ? path.slice(0, -1) : path;
+};
+
+const joinPath = (base: string, child: string): string =>
+  normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
+
 const nextSequence = (sequenceRef: Ref.Ref<number>): Effect.Effect<number> =>
   Ref.updateAndGet(sequenceRef, (current) => current + 1);
 
@@ -724,10 +735,19 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               }),
             );
 
+            yield* Effect.logDebug("mill.engine:spawn-driver-start", {
+              runId: runInput.runId,
+              spawnId,
+              driver: input.driver.name,
+              agent: spawnInput.agent,
+              model: spawnInput.model ?? input.defaultModel,
+            });
+
             const driverOutputExit = yield* Effect.exit(
               Effect.mapError(
                 input.driver.spawn({
                   runId: runInput.runId,
+                  runDirectory: joinPath(input.runsDirectory, runInput.runId),
                   spawnId,
                   agent: spawnInput.agent,
                   systemPrompt: spawnInput.systemPrompt,
@@ -744,6 +764,13 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
             if (Exit.isFailure(driverOutputExit)) {
               const failureMessage = Cause.pretty(driverOutputExit.cause);
+
+              yield* Effect.logDebug("mill.engine:spawn-driver-failed", {
+                runId: runInput.runId,
+                spawnId,
+                driver: input.driver.name,
+                message: failureMessage,
+              });
 
               yield* appendSpawnErrorEvent(
                 input.extensions,
@@ -763,6 +790,14 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 }),
               );
             }
+
+            yield* Effect.logDebug("mill.engine:spawn-driver-complete", {
+              runId: runInput.runId,
+              spawnId,
+              driver: input.driver.name,
+              rawLines: driverOutputExit.value.raw?.length ?? 0,
+              events: driverOutputExit.value.events.length,
+            });
 
             for (const rawLine of driverOutputExit.value.raw ?? []) {
               yield* publishRawEvent(runInput.runId, rawLine);
@@ -881,6 +916,15 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             );
 
             yield* Ref.update(spawnResultsRef, (items) => [...items, spawnResult]);
+
+            yield* Effect.logDebug("mill.engine:spawn-complete", {
+              runId: runInput.runId,
+              spawnId,
+              agent: spawnResult.agent,
+              model: spawnResult.model,
+              sessionRef: spawnResult.sessionRef,
+              exitCode: spawnResult.exitCode,
+            });
 
             return spawnResult;
           });
@@ -1061,7 +1105,18 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
       Effect.gen(function* () {
         const run = yield* runStore.getRun(runId);
 
+        yield* Effect.logDebug("mill.engine:cancel-requested", {
+          runId,
+          status: run.status,
+          reason,
+        });
+
         if (isRunTerminalStatus(run.status)) {
+          yield* Effect.logDebug("mill.engine:cancel-noop-terminal", {
+            runId,
+            status: run.status,
+          });
+
           return {
             run,
             alreadyTerminal: true,
@@ -1111,6 +1166,11 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           "LifecycleInvariantError",
           () => runStore.getRun(runId),
         );
+
+        yield* Effect.logDebug("mill.engine:cancelled", {
+          runId,
+          status: cancelledRun.status,
+        });
 
         return {
           run: cancelledRun,

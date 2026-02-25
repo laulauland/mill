@@ -38,6 +38,7 @@ describe("createClaudeDriverRegistration", () => {
       Effect.provide(
         driver.runtime.spawn({
           runId: "run_claude_test",
+          runDirectory: "/tmp/run_claude_test",
           spawnId: "spawn_claude_test",
           agent: "scout",
           systemPrompt: "You are concise.",

@@ -39,6 +39,7 @@ describe("createCodexDriverRegistration", () => {
       Effect.provide(
         driver.runtime.spawn({
           runId: "run_codex_test",
+          runDirectory: "/tmp/run_codex_test",
           spawnId: "spawn_codex_test",
           agent: "scout",
           systemPrompt: "You are concise.",

@@ -25,7 +25,7 @@ export interface ExecutionResult {
   step?: number;
   /** Final assistant text output, auto-populated on completion. */
   text: string;
-  /** Path to the subagent's session .jsonl file. Use search_thread to explore. */
+  /** Subagent session reference (session id or .jsonl path). Use search_thread to explore. */
   sessionPath?: string;
 }
 

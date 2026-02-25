@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Runtime, Stream } from "effect";
@@ -100,6 +102,9 @@ interface EngineContext {
 }
 
 const DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS = 60 * 60 * 24 * 365;
+const WORKER_PID_FILENAME = "worker.pid";
+const CANCEL_LOG_PATH = "logs/cancel.log";
+const PROCESS_EXIT_GRACE_MILLIS = 400;
 
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {
@@ -111,6 +116,212 @@ const normalizePath = (path: string): string => {
 
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
+
+const sleep = (millis: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, millis);
+  });
+
+const runDirectoryFor = (runsDirectory: string, runId: string): string =>
+  joinPath(runsDirectory, runId);
+
+const workerPidPathFor = (runDirectory: string): string =>
+  joinPath(runDirectory, WORKER_PID_FILENAME);
+
+const appendCancelLog = (runDirectory: string, message: string): void => {
+  const logPath = joinPath(runDirectory, CANCEL_LOG_PATH);
+  const logDirectory = logPath.slice(0, logPath.lastIndexOf("/"));
+  const timestamp = new Date().toISOString();
+
+  try {
+    fs.mkdirSync(logDirectory, { recursive: true });
+    fs.appendFileSync(logPath, `${timestamp} ${message}\n`, "utf-8");
+  } catch {
+    // best effort logging only
+  }
+};
+
+const readWorkerPid = (runDirectory: string): number | undefined => {
+  const pidPath = workerPidPathFor(runDirectory);
+
+  try {
+    const raw = fs.readFileSync(pidPath, "utf-8").trim();
+    const parsed = Number.parseInt(raw, 10);
+
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return undefined;
+    }
+
+    return parsed;
+  } catch {
+    return undefined;
+  }
+};
+
+const removeWorkerPidFile = (runDirectory: string): void => {
+  try {
+    fs.rmSync(workerPidPathFor(runDirectory), { force: true });
+  } catch {
+    // best effort cleanup only
+  }
+};
+
+const readProcessCommand = (pid: number): string | undefined => {
+  const output = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  if (output.status !== 0) {
+    return undefined;
+  }
+
+  const commandLine = output.stdout.trim();
+  return commandLine.length > 0 ? commandLine : undefined;
+};
+
+const readProcessTable = (): ReadonlyArray<{ pid: number; ppid: number }> => {
+  const output = spawnSync("ps", ["-ax", "-o", "pid=,ppid="], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  if (output.status !== 0) {
+    return [];
+  }
+
+  return output.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => line.split(/\s+/))
+    .map(([pidText, ppidText]) => ({
+      pid: Number.parseInt(pidText ?? "", 10),
+      ppid: Number.parseInt(ppidText ?? "", 10),
+    }))
+    .filter((entry) => Number.isInteger(entry.pid) && Number.isInteger(entry.ppid));
+};
+
+const descendantsFor = (
+  rootPid: number,
+  table: ReadonlyArray<{ pid: number; ppid: number }>,
+): number[] => {
+  const byParent = new Map<number, Array<number>>();
+
+  for (const entry of table) {
+    const children = byParent.get(entry.ppid);
+    if (children === undefined) {
+      byParent.set(entry.ppid, [entry.pid]);
+    } else {
+      children.push(entry.pid);
+    }
+  }
+
+  const descendants: Array<number> = [];
+  const stack: Array<number> = [...(byParent.get(rootPid) ?? [])];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) {
+      continue;
+    }
+
+    descendants.push(current);
+
+    const nested = byParent.get(current);
+    if (nested !== undefined) {
+      stack.push(...nested);
+    }
+  }
+
+  return descendants;
+};
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sendSignal = (pid: number, signal: NodeJS.Signals): boolean => {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const looksLikeMillWorkerCommand = (commandLine: string, runId: string): boolean => {
+  if (!commandLine.includes("_worker")) {
+    return false;
+  }
+
+  return commandLine.includes(`--run-id ${runId}`);
+};
+
+const terminateWorkerProcessTree = async (runsDirectory: string, runId: string): Promise<void> => {
+  const runDirectory = runDirectoryFor(runsDirectory, runId);
+  const workerPid = readWorkerPid(runDirectory);
+
+  if (workerPid === undefined) {
+    appendCancelLog(runDirectory, `cancel:kill skipped run=${runId} reason=no-worker-pid`);
+    return;
+  }
+
+  const commandLine = readProcessCommand(workerPid);
+
+  if (commandLine === undefined) {
+    appendCancelLog(
+      runDirectory,
+      `cancel:kill stale-pid run=${runId} pid=${workerPid} reason=command-missing`,
+    );
+    removeWorkerPidFile(runDirectory);
+    return;
+  }
+
+  if (!looksLikeMillWorkerCommand(commandLine, runId)) {
+    appendCancelLog(
+      runDirectory,
+      `cancel:kill skipped run=${runId} pid=${workerPid} reason=pid-mismatch command=${commandLine}`,
+    );
+    return;
+  }
+
+  const table = readProcessTable();
+  const descendants = descendantsFor(workerPid, table);
+  const targets = [...new Set([...descendants, workerPid])];
+
+  const termCount = targets.reduce(
+    (count, pid) => (sendSignal(pid, "SIGTERM") ? count + 1 : count),
+    0,
+  );
+
+  appendCancelLog(
+    runDirectory,
+    `cancel:kill term-sent run=${runId} pid=${workerPid} targets=${targets.length} signaled=${termCount}`,
+  );
+
+  await sleep(PROCESS_EXIT_GRACE_MILLIS);
+
+  const survivors = targets.filter((pid) => isProcessAlive(pid));
+  const killCount = survivors.reduce(
+    (count, pid) => (sendSignal(pid, "SIGKILL") ? count + 1 : count),
+    0,
+  );
+
+  appendCancelLog(
+    runDirectory,
+    `cancel:kill kill-sent run=${runId} pid=${workerPid} survivors=${survivors.length} signaled=${killCount}`,
+  );
+
+  if (!isProcessAlive(workerPid)) {
+    removeWorkerPidFile(runDirectory);
+  }
+};
 
 const resolveProgramPath = (cwd: string, programPath: string): string =>
   programPath.startsWith("/") ? normalizePath(programPath) : joinPath(cwd, programPath);
@@ -305,37 +516,46 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
   const programPath = resolveProgramPath(cwd, input.programPath);
   const programSource = await runWithBunContext(readProgramSource(programPath));
   const engineContext = await makeEngineForConfig(input);
+  const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
+  const workerPidPath = workerPidPathFor(runDirectory);
 
-  return runWithBunContext(
-    runDetachedWorker({
-      engine: engineContext.engine,
-      runId: decodeRunIdSync(input.runId),
-      programPath,
-      runsDirectory: engineContext.runsDirectory,
-      executeProgram: (spawn) =>
-        Effect.mapError(
-          engineContext.selectedExecutorRuntime.runProgram({
-            runId: input.runId,
-            programPath,
-            execute: executeProgramInProcessHost({
+  fs.mkdirSync(runDirectory, { recursive: true });
+  fs.writeFileSync(workerPidPath, `${process.pid}\n`, "utf-8");
+
+  try {
+    return await runWithBunContext(
+      runDetachedWorker({
+        engine: engineContext.engine,
+        runId: decodeRunIdSync(input.runId),
+        programPath,
+        runsDirectory: engineContext.runsDirectory,
+        executeProgram: (spawn) =>
+          Effect.mapError(
+            engineContext.selectedExecutorRuntime.runProgram({
               runId: input.runId,
-              runDirectory: joinPath(engineContext.runsDirectory, input.runId),
-              workingDirectory: cwd,
               programPath,
-              programSource,
-              executorName: engineContext.selectedExecutorName,
-              extensions: engineContext.selectedExtensions,
-              spawn,
+              execute: executeProgramInProcessHost({
+                runId: input.runId,
+                runDirectory: joinPath(engineContext.runsDirectory, input.runId),
+                workingDirectory: cwd,
+                programPath,
+                programSource,
+                executorName: engineContext.selectedExecutorName,
+                extensions: engineContext.selectedExtensions,
+                spawn,
+              }),
             }),
-          }),
-          (error) =>
-            new ProgramExecutionError({
-              runId: input.runId,
-              message: String(error),
-            }),
-        ),
-    }),
-  );
+            (error) =>
+              new ProgramExecutionError({
+                runId: input.runId,
+                message: String(error),
+              }),
+          ),
+      }),
+    );
+  } finally {
+    removeWorkerPidFile(runDirectory);
+  }
 };
 
 export const getRunStatus = async (input: GetRunStatusInput): Promise<RunRecord> => {
@@ -495,6 +715,8 @@ export const cancelRun = async (
   const cancelled = await runWithBunContext(
     engineContext.engine.cancel(decodeRunIdSync(input.runId), input.reason),
   );
+
+  await terminateWorkerProcessTree(engineContext.runsDirectory, input.runId);
 
   return {
     runId: cancelled.run.id,

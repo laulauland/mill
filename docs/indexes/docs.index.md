@@ -5,6 +5,7 @@
 - Product spec: `docs/product-specs/mill-v0-product-spec.md`
 - Architecture & boundaries: `docs/design-docs/mill-v0-architecture-and-boundaries.md`
 - Toolchain, invariants, non-goals, order: `docs/references/mill-v0-toolchain-and-invariants.md`
+- Operations runbook: `docs/references/mill-v0-operations-and-troubleshooting.md`
 
 ## Execution plans
 

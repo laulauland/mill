@@ -53,6 +53,7 @@ describe("createPiDriverRegistration", () => {
       Effect.provide(
         driver.runtime.spawn({
           runId: "run_driver_test",
+          runDirectory: "/tmp/run_driver_test",
           spawnId: "spawn_driver_test",
           agent: "scout",
           systemPrompt: "You are concise.",
@@ -64,7 +65,7 @@ describe("createPiDriverRegistration", () => {
     );
 
     expect(output.events.some((event) => event.type === "tool_call")).toBe(true);
-    expect(output.result.sessionRef).toBe("session-test");
+    expect(output.result.sessionRef).toBe("/tmp/run_driver_test/sessions/spawn_driver_test.jsonl");
     expect(output.result.agent).toBe("scout");
     expect(output.result.model).toBe("openai/gpt-5.3-codex");
     expect(output.result.text).toBe("fixture:Say hello");
@@ -119,6 +120,7 @@ describe("createPiDriverRegistration", () => {
       Effect.provide(
         driver.runtime.spawn({
           runId: "run_driver_duplicate",
+          runDirectory: "/tmp/run_driver_duplicate",
           spawnId: "spawn_driver_duplicate",
           agent: "scout",
           systemPrompt: "You are concise.",

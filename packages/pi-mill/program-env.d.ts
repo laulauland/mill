@@ -26,6 +26,7 @@ interface ExecutionResult {
   errorMessage?: string;
   step?: number;
   text: string;
+  /** Subagent session reference (session id or .jsonl path). */
   sessionPath?: string;
 }
 

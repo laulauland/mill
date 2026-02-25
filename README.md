@@ -48,7 +48,7 @@ mill wait <runId> --timeout   block until complete/failed/cancelled
 mill watch <runId>            stream tier-1 events (NDJSON with --json)
 mill inspect <id>[.<spawnId>] inspect run or spawn detail
 mill inspect <id> --session   resolve full agent session via driver
-mill cancel <runId>           interrupt run and all live spawns
+mill cancel <runId>           mark cancelled + kill worker process tree
 mill ls [--status <filter>]   list runs
 mill init                     generate starter mill.config.ts
 ```
@@ -104,11 +104,17 @@ Layers are orthogonal: executor decides _where_ the program runs, driver decides
 
 ```
 ~/.mill/runs/<runId>/
-  run.json          metadata
-  events.ndjson     append-only structured event log
-  result.json       final output
-  program.ts        copied source
+  run.json             metadata (status is canonical)
+  events.ndjson        append-only structured event log
+  result.json          final output
+  program.ts           copied source
+  worker.pid           detached worker pid (best effort)
+  logs/worker.log      worker lifecycle breadcrumbs
+  logs/cancel.log      cancel/kill lifecycle breadcrumbs
+  sessions/<spawn>.jsonl  per-spawn pi session transcripts (pi driver)
 ```
+
+For operations/debugging conventions, see `docs/references/mill-v0-operations-and-troubleshooting.md`.
 
 ### Internals
 

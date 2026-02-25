@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,7 +6,10 @@ import { join } from "node:path";
 import * as Schema from "@effect/schema/Schema";
 import { Effect } from "effect";
 import { decodeMillEventJsonSync } from "../domain/event.schema";
-import { runProgramSync, runWorker } from "./run.api";
+import { decodeRunIdSync } from "../domain/run.schema";
+import { makeRunStore } from "../internal/run-store.effect";
+import { runWithBunContext } from "./test-runtime.api";
+import { cancelRun, runProgramSync, runWorker } from "./run.api";
 import type { MillConfig } from "./types";
 
 const ProgramResultEnvelope = Schema.parseJson(
@@ -15,6 +19,27 @@ const ProgramResultEnvelope = Schema.parseJson(
     executor: Schema.optional(Schema.String),
   }),
 );
+
+const sleep = (millis: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, millis);
+  });
+
+const waitForProcessExit = async (pid: number, timeoutMillis: number): Promise<void> => {
+  const deadline = Date.now() + timeoutMillis;
+
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+
+    await sleep(25);
+  }
+
+  throw new Error(`child process ${pid} did not exit in time`);
+};
 
 const makeConfig = (): MillConfig => ({
   defaultDriver: "default",
@@ -205,6 +230,65 @@ describe("run.api integration", () => {
       expect(hostMarker).toContain("process-host:bun");
       expect(hostMarker).toContain(`executor=${output.run.executor}`);
     } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("cancelRun kills detached worker processes using persisted worker.pid", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-cancel-"));
+    const runsDirectory = join(tempDirectory, "runs");
+    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+    const defaults = makeConfig();
+
+    const store = makeRunStore({ runsDirectory });
+
+    const worker = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)", "_worker", "--run-id", runId],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    if (worker.pid === undefined) {
+      throw new Error("failed to start synthetic worker process");
+    }
+
+    try {
+      await runWithBunContext(
+        store.create({
+          runId,
+          programPath: "/tmp/program.ts",
+          driver: "default",
+          executor: "direct",
+          status: "running",
+          timestamp: "2026-02-25T10:00:00.000Z",
+        }),
+      );
+
+      const runDirectory = join(runsDirectory, runId);
+      await writeFile(join(runDirectory, "worker.pid"), `${worker.pid}\n`, "utf-8");
+
+      const cancelled = await cancelRun({
+        defaults,
+        runId,
+        runsDirectory,
+        cwd: tempDirectory,
+        pathExists: async () => false,
+      });
+
+      expect(cancelled.status).toBe("cancelled");
+
+      await waitForProcessExit(worker.pid, 2000);
+
+      const cancelLog = await readFile(join(runDirectory, "logs", "cancel.log"), "utf-8");
+      expect(cancelLog).toContain("cancel:kill term-sent");
+    } finally {
+      try {
+        worker.kill("SIGKILL");
+      } catch {
+        // already exited
+      }
       await rm(tempDirectory, { recursive: true, force: true });
     }
   });
