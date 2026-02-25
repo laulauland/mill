@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -82,70 +81,7 @@ interface ExtensionConfig {
   prompt: string;
 }
 
-const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefined => {
-  const candidates = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .reverse();
 
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (typeof parsed === "object" && parsed !== null) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return undefined;
-};
-
-function readModelsFromMill(config: ExtensionConfig): string[] {
-  const args = [...config.millArgs, "discovery", "--json"];
-  if (config.millRunsDir && config.millRunsDir.trim().length > 0) {
-    args.push("--runs-dir", config.millRunsDir);
-  }
-
-  const result = spawnSync(config.millCommand, args, {
-    encoding: "utf-8",
-    shell: false,
-  });
-
-  if (result.status !== 0) {
-    return [];
-  }
-
-  const payload = parseJsonObjectFromText(result.stdout);
-  if (!payload) {
-    return [];
-  }
-
-  const drivers = payload.drivers;
-  if (typeof drivers !== "object" || drivers === null) {
-    return [];
-  }
-
-  const models = new Set<string>();
-  for (const entry of Object.values(drivers)) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-    const values = (entry as { models?: unknown }).models;
-    if (!Array.isArray(values)) {
-      continue;
-    }
-    for (const value of values) {
-      if (typeof value === "string" && value.trim().length > 0) {
-        models.add(value);
-      }
-    }
-  }
-
-  return [...models];
-}
 
 function readEnabledModelsFallback(): string[] {
   try {
@@ -344,10 +280,10 @@ export default function (pi: ExtensionAPI) {
   const observability = new ObservabilityStore();
   const registry = new RunRegistry();
   const widget = new FactoryWidget();
-  const modelsFromMill = readModelsFromMill(config);
-  const fallbackModels = readEnabledModelsFallback();
-  const enabledModels = modelsFromMill.length > 0 ? modelsFromMill : fallbackModels;
-  const modelsText = enabledModels.length > 0 ? enabledModels.join(", ") : "(none detected)";
+  // Model discovery is deferred to avoid a boot cycle:
+  // pi → mill discovery → pi --list-models → pi (with extensions) → mill discovery → …
+  const enabledModels = readEnabledModelsFallback();
+  const modelsText = enabledModels.length > 0 ? enabledModels.join(", ") : "(use mill discovery to list)";
 
   // Keep a reference to the current context for widget/notification updates
   let currentCtx: ExtensionContext | undefined;
@@ -558,60 +494,97 @@ export default function (pi: ExtensionAPI) {
         });
       }
 
-      // Wire completion: update observability, widget, and notify
+      // Wire completion: persist state first, then UI updates + notification.
       promise.then(
         (summary) => {
+          observability.setStatus(
+            runId,
+            summary.status === "done"
+              ? "done"
+              : summary.status === "cancelled"
+                ? "cancelled"
+                : "failed",
+          );
+
+          const fullSummary: RunSummary = {
+            ...summary,
+            observability: observability.toSummary(runId),
+            metadata: {
+              task: params.task,
+              millCommand: config.millCommand,
+              millArgs: config.millArgs,
+              millRunsDir: config.millRunsDir,
+            },
+          };
+
+          registry.complete(runId, fullSummary);
+
           try {
-            observability.setStatus(
-              runId,
-              summary.status === "done"
-                ? "done"
-                : summary.status === "cancelled"
-                  ? "cancelled"
-                  : "failed",
-            );
-            const fullSummary = {
-              ...summary,
-              observability: observability.toSummary(runId),
-              metadata: {
-                task: params.task,
-                millCommand: config.millCommand,
-                millArgs: config.millArgs,
-                millRunsDir: config.millRunsDir,
-              },
-            };
-            registry.complete(runId, fullSummary);
-            widget.update(registry.getVisible(), ctx);
-            notifyCompletion(pi, registry, fullSummary);
             writeRunJson(fullSummary);
+          } catch (error) {
+            observability.push(runId, "warning", "write_run_json_failed", { error: String(error) });
+          }
+
+          try {
             widget.update(registry.getVisible(), ctx);
           } catch {
-            /* shutting down */
+            /* ui may be unavailable */
+          }
+
+          try {
+            notifyCompletion(pi, registry, fullSummary);
+          } catch (error) {
+            observability.push(runId, "warning", "notify_failed", { error: String(error) });
+          }
+
+          try {
+            widget.update(registry.getVisible(), ctx);
+          } catch {
+            /* ui may be unavailable */
           }
         },
         (err) => {
+          const details = toErrorDetails(err);
+          observability.setStatus(runId, details.code === "CANCELLED" ? "cancelled" : "failed");
+
+          const failedSummary: RunSummary = {
+            runId,
+            status: "failed",
+            results: [],
+            error: details,
+            observability: observability.toSummary(runId),
+            metadata: {
+              task: params.task,
+              millCommand: config.millCommand,
+              millArgs: config.millArgs,
+              millRunsDir: config.millRunsDir,
+            },
+          };
+
+          registry.fail(runId, details);
+
           try {
-            const details = toErrorDetails(err);
-            observability.setStatus(runId, details.code === "CANCELLED" ? "cancelled" : "failed");
-            const failedSummary: RunSummary = {
-              runId,
-              status: "failed",
-              results: [],
-              error: details,
-              observability: observability.toSummary(runId),
-              metadata: {
-                task: params.task,
-                millCommand: config.millCommand,
-                millArgs: config.millArgs,
-                millRunsDir: config.millRunsDir,
-              },
-            };
-            registry.fail(runId, details);
-            notifyCompletion(pi, registry, failedSummary);
             writeRunJson(failedSummary);
+          } catch (error) {
+            observability.push(runId, "warning", "write_run_json_failed", { error: String(error) });
+          }
+
+          try {
             widget.update(registry.getVisible(), ctx);
           } catch {
-            /* shutting down */
+            /* ui may be unavailable */
+          }
+
+          try {
+            notifyCompletion(pi, registry, failedSummary);
+          } catch (error) {
+            observability.push(runId, "warning", "notify_failed", { error: String(error) });
+          }
+
+          try {
+            widget.update(registry.getVisible(), ctx);
+          } catch {
+            /* ui may be unavailable */
           }
         },
       );
