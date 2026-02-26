@@ -64,6 +64,10 @@ const [tests, docs] = await Promise.all([
 
 Each `mill.spawn()` submits an async mill run (`mill run --json`) and then follows completion via mill APIs (`wait` + `inspect`). Model selection, driver routing, and execution behavior all come from your mill configuration.
 
+By default, mill run storage uses mill's global default (`~/.mill/runs`) unless you explicitly pass `--runs-dir` (or set `millRunsDir`).
+
+pi-mill monitor views are built from canonical mill runs in `~/.mill/runs` (filtered to runs tagged with `metadata.source = "pi-mill"`).
+
 Runs are **async by default** — the tool returns a `runId` immediately and delivers results via notification when complete.
 
 ## Monitoring

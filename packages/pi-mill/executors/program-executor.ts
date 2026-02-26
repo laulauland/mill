@@ -173,6 +173,7 @@ export async function executeProgram(input: {
   onUpdate?: (summary: RunSummary) => void;
   signal?: AbortSignal;
   parentSessionPath?: string;
+  piSessionKey?: string;
   sessionDir?: string;
   skipConfirmation?: boolean;
   millCommand?: string;
@@ -234,6 +235,7 @@ export async function executeProgram(input: {
         emit("running");
       },
       parentSessionPath: input.parentSessionPath,
+      piSessionKey: input.piSessionKey,
       sessionDir: input.sessionDir,
       millCommand: input.millCommand,
       millArgs: input.millArgs,

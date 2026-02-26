@@ -222,7 +222,7 @@ export const config: ExtensionConfig = {
   millCommand: "mill",
   /** Optional static args prepended to every mill invocation. */
   millArgs: [],
-  /** Optional runs-dir override passed to mill commands (discovery + child runs). */
+  /** Optional runs-dir override passed to mill commands. */
   millRunsDir: undefined,
   /** Extra text appended to the tool description. Use for model selection hints, project conventions, etc. */
   prompt:
@@ -244,11 +244,13 @@ export default function (pi: ExtensionAPI) {
   const observability = new ObservabilityStore();
   const registry = new RunRegistry();
   const widget = new FactoryWidget();
-  // Model discovery is deferred to avoid a boot cycle:
-  // pi → mill discovery → pi --list-models → pi (with extensions) → mill discovery → …
+  // Model enumeration is read from pi settings to avoid boot-time recursion between
+  // pi extension initialization and subagent runtime startup.
   const enabledModels = readEnabledModelsFallback();
   const modelsText =
-    enabledModels.length > 0 ? enabledModels.join(", ") : "(use mill discovery to list)";
+    enabledModels.length > 0
+      ? enabledModels.join(", ")
+      : "(set enabledModels in ~/.pi/agent/settings.json)";
 
   // Keep a reference to the current context for widget/notification updates
   let currentCtx: ExtensionContext | undefined;
@@ -382,8 +384,12 @@ export default function (pi: ExtensionAPI) {
       currentCtx = ctx;
       const params = validateParams(rawParams);
       const runId = generateRunId();
-      const piSessionDir = ctx.sessionManager.getSessionDir() ?? undefined;
-      observability.createRun(runId, true, piSessionDir);
+      const rawSessionDir = ctx.sessionManager.getSessionDir() ?? ctx.cwd;
+      const piSessionKey = cwdToSessionDir(rawSessionDir);
+
+      // Keep local observability in-memory/tmp only. Canonical persisted runs live under
+      // mill's own global run store (~/.mill/runs).
+      observability.createRun(runId, false);
       observability.setStatus(runId, "running", "run:start");
 
       const parentSessionPath = ctx.sessionManager.getSessionFile() ?? undefined;
@@ -433,6 +439,7 @@ export default function (pi: ExtensionAPI) {
         onUpdate: emitUpdate,
         signal: abort.signal,
         parentSessionPath,
+        piSessionKey,
         sessionDir,
         skipConfirmation: true,
         millCommand: config.millCommand,

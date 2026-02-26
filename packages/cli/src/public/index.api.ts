@@ -116,11 +116,11 @@ const dirname = (path: string): string => {
 const workerPidPath = (runsDirectory: string, runId: string): string =>
   joinPath(joinPath(runsDirectory, runId), "worker.pid");
 
-const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => {
-  const workerCommand = PlatformCommand.make(
-    process.execPath,
-    "run",
-    millBinPath,
+const buildWorkerCommandArguments = (
+  hasSourceEntrypoint: boolean,
+  input: LaunchWorkerInput,
+): ReadonlyArray<string> => {
+  const workerArguments = [
     "_worker",
     "--run-id",
     input.runId,
@@ -132,21 +132,32 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
     input.driverName,
     "--executor",
     input.executorName,
-  ).pipe(
-    PlatformCommand.workingDirectory(input.cwd),
-    PlatformCommand.stdin("ignore"),
-    PlatformCommand.stdout("ignore"),
-    PlatformCommand.stderr("ignore"),
-  );
+  ];
 
+  return hasSourceEntrypoint ? ["run", millBinPath, ...workerArguments] : workerArguments;
+};
+
+const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => {
   await runWithBunContext(
     Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const hasSourceEntrypoint = yield* fileSystem.exists(millBinPath);
+
+      const workerCommand = PlatformCommand.make(
+        process.execPath,
+        ...buildWorkerCommandArguments(hasSourceEntrypoint, input),
+      ).pipe(
+        PlatformCommand.workingDirectory(input.cwd),
+        PlatformCommand.stdin("ignore"),
+        PlatformCommand.stdout("ignore"),
+        PlatformCommand.stderr("ignore"),
+      );
+
       const detachedScope = yield* Scope.make();
       const processHandle = yield* Scope.extend(
         PlatformCommand.start(workerCommand),
         detachedScope,
       );
-      const fileSystem = yield* FileSystem.FileSystem;
       const pidPath = workerPidPath(input.runsDirectory, input.runId);
       const runDirectory = pidPath.slice(0, pidPath.lastIndexOf("/"));
 

@@ -114,6 +114,7 @@ interface SpawnInput {
   obs: ObservabilityStore;
   onProgress?: (result: ExecutionResult) => void;
   parentSessionPath?: string;
+  piSessionKey?: string;
   sessionDir?: string;
   millCommand: string;
   millArgs: string[];
@@ -502,7 +503,9 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
       source: "pi-mill",
       parentRunId: input.runId,
       parentTaskId: input.taskId,
+      parentTask: input.prompt,
       parentAgent: input.agent,
+      piSessionKey: input.piSessionKey,
     });
 
     const submitArgs = [
@@ -736,6 +739,7 @@ export function createMillRuntime(
     onTaskUpdate?: (result: ExecutionResult) => void;
     defaultSignal?: AbortSignal;
     parentSessionPath?: string;
+    piSessionKey?: string;
     sessionDir?: string;
     millCommand?: string;
     millArgs?: string[];
@@ -801,6 +805,7 @@ export function createMillRuntime(
         obs,
         onProgress: (partial) => options?.onTaskUpdate?.(partial),
         parentSessionPath: options?.parentSessionPath,
+        piSessionKey: options?.piSessionKey,
         sessionDir: options?.sessionDir,
         millCommand,
         millArgs,

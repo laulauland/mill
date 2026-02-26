@@ -24,7 +24,7 @@ export interface RunRecord {
 export class ObservabilityStore {
   private readonly runs = new Map<string, RunRecord>();
 
-  createRun(runId: string, withArtifacts: boolean, sessionDir?: string): RunRecord {
+  createRun(runId: string, withArtifacts: boolean, _sessionDir?: string): RunRecord {
     const record: RunRecord = {
       runId,
       status: "queued",
@@ -32,13 +32,13 @@ export class ObservabilityStore {
       events: [],
       artifacts: [],
     };
+
     if (withArtifacts) {
-      const base = sessionDir
-        ? path.join(sessionDir, ".mill", runId)
-        : fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-observe-"));
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-observe-"));
       fs.mkdirSync(base, { recursive: true });
       record.artifactsDir = base;
     }
+
     this.runs.set(runId, record);
     return record;
   }
