@@ -23,6 +23,7 @@ export interface ExecuteProgramInProcessHostInput {
   readonly programSource: string;
   readonly executorName: string;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
+  readonly env?: Readonly<Record<string, string>>;
   readonly spawn: (input: SpawnOptions) => Effect.Effect<SpawnResult, unknown>;
   readonly onIo?: (input: {
     readonly stream: "stdout" | "stderr";
@@ -289,12 +290,16 @@ export const executeProgramInProcessHost = (
           }),
       );
 
-      const command = Command.make(process.execPath, "run", hostProgramPath).pipe(
+      const baseCommand = Command.make(process.execPath, "run", hostProgramPath).pipe(
         Command.workingDirectory(input.workingDirectory),
         Command.stdin("pipe"),
         Command.stdout("pipe"),
         Command.stderr("pipe"),
       );
+      const command =
+        input.env === undefined || Object.keys(input.env).length === 0
+          ? baseCommand
+          : Command.env(baseCommand, input.env);
 
       yield* Effect.logDebug("mill.program-host:start", {
         runId: input.runId,

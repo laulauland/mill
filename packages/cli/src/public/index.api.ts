@@ -65,6 +65,7 @@ const defaultConfig = defineConfig({
   defaultDriver: "pi",
   defaultExecutor: "direct",
   defaultModel: "openai-codex/gpt-5.3-codex",
+  maxRunDepth: 1,
   drivers: {
     pi: processDriver(createPiDriverRegistration()),
     claude: processDriver(createClaudeDriverRegistration()),
@@ -115,6 +116,8 @@ const dirname = (path: string): string => {
 const workerPidPath = (runsDirectory: string, runId: string): string =>
   joinPath(joinPath(runsDirectory, runId), "worker.pid");
 
+const RUN_DEPTH_ENV = "MILL_RUN_DEPTH";
+
 const buildWorkerCommandArguments = (
   hasSourceEntrypoint: boolean,
   input: LaunchWorkerInput,
@@ -142,14 +145,19 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
       const fileSystem = yield* FileSystem.FileSystem;
       const hasSourceEntrypoint = yield* fileSystem.exists(millBinPath);
 
-      const workerCommand = PlatformCommand.make(
-        process.execPath,
-        ...buildWorkerCommandArguments(hasSourceEntrypoint, input),
-      ).pipe(
-        PlatformCommand.workingDirectory(input.cwd),
-        PlatformCommand.stdin("ignore"),
-        PlatformCommand.stdout("ignore"),
-        PlatformCommand.stderr("ignore"),
+      const workerCommand = PlatformCommand.env(
+        PlatformCommand.make(
+          process.execPath,
+          ...buildWorkerCommandArguments(hasSourceEntrypoint, input),
+        ).pipe(
+          PlatformCommand.workingDirectory(input.cwd),
+          PlatformCommand.stdin("ignore"),
+          PlatformCommand.stdout("ignore"),
+          PlatformCommand.stderr("ignore"),
+        ),
+        {
+          [RUN_DEPTH_ENV]: String(input.runDepth),
+        },
       );
 
       const detachedScope = yield* Scope.make();
@@ -316,6 +324,7 @@ const INIT_CONFIG_TEMPLATE = [
   "export default {",
   "  // Optional: override model/driver/executor defaults.",
   '  // defaultModel: "openai-codex/gpt-5.3-codex",',
+  "  // maxRunDepth: 1, // recursion guard for nested `mill run`",
   "  authoring: {",
   '    instructions: "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation). Prefer codex for synthesis, cerebras for fast retrieval.",',
   "  },",

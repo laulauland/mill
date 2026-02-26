@@ -20,8 +20,8 @@ pi install /path/to/mill/packages/pi-mill
 
 ## Prerequisites
 
-1. `mill` must be on your `PATH` (or set a custom command in config).
-2. A `mill.config.ts` with at least one driver/executor configured.
+1. `mill` must be on your `PATH` — see [install instructions](https://github.com/laulauland/mill#install).
+2. A `mill.config.ts` with at least one driver/executor configured (`mill init` to scaffold one).
 
 ## How it works
 

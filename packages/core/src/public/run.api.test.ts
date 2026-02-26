@@ -9,7 +9,7 @@ import { decodeMillEventJsonSync } from "../domain/event.schema";
 import { decodeRunIdSync } from "../domain/run.schema";
 import { makeRunStore } from "../internal/run-store.effect";
 import { runWithBunContext } from "./test-runtime.api";
-import { cancelRun, runProgramSync, runWorker } from "./run.api";
+import { cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
 import type { MillConfig } from "./types";
 
 const ProgramResultEnvelope = Schema.parseJson(
@@ -45,6 +45,7 @@ const makeConfig = (): MillConfig => ({
   defaultDriver: "default",
   defaultExecutor: "direct",
   defaultModel: "openai/gpt-5.3-codex",
+  maxRunDepth: 1,
   drivers: {
     default: {
       description: "default driver",
@@ -230,6 +231,59 @@ describe("run.api integration", () => {
       expect(hostMarker).toContain("process-host:bun");
       expect(hostMarker).toContain(`executor=${output.run.executor}`);
     } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces maxRunDepth recursion guard on nested run submissions", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-depth-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+    const previousDepth = process.env.MILL_RUN_DEPTH;
+
+    await writeFile(programPath, "return 'ok';\n", "utf-8");
+
+    try {
+      process.env.MILL_RUN_DEPTH = "1";
+
+      await expect(
+        submitRun({
+          defaults: makeConfig(),
+          programPath,
+          cwd: tempDirectory,
+          homeDirectory,
+          pathExists: async () => false,
+          launchWorker: async () => {
+            throw new Error("launchWorker should not be called when depth guard blocks run");
+          },
+        }),
+      ).rejects.toThrow("maxRunDepth=1");
+
+      let launchCalled = false;
+
+      const submitted = await submitRun({
+        defaults: {
+          ...makeConfig(),
+          maxRunDepth: 2,
+        },
+        programPath,
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        launchWorker: async () => {
+          launchCalled = true;
+        },
+      });
+
+      expect(submitted.status).toBe("pending");
+      expect(launchCalled).toBe(true);
+    } finally {
+      if (previousDepth === undefined) {
+        delete process.env.MILL_RUN_DEPTH;
+      } else {
+        process.env.MILL_RUN_DEPTH = previousDepth;
+      }
+
       await rm(tempDirectory, { recursive: true, force: true });
     }
   });

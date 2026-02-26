@@ -6,6 +6,30 @@ A simple TypeScript runtime for orchestrating subagent work. The orchestrator wr
 
 You talk to your main agent (in Pi, Claude Code, OpenCode etc.). When work needs to be farmed out, it writes a mill program: a TypeScript file that spawns subagents with specific instructions. You see the code before it executes.
 
+## Install
+
+```bash
+brew install laulauland/tap/mill
+```
+
+Or build from source (requires [Bun](https://bun.sh)):
+
+```bash
+git clone https://github.com/laulauland/mill.git && cd mill
+bun install
+bun build --compile packages/cli/src/bin/mill.ts --outfile mill
+mv mill ~/.local/bin/  # or anywhere on your PATH
+```
+
+Then scaffold a config:
+
+```bash
+mill init              # creates ./mill.config.ts in current project
+mill init --global     # creates ~/.mill/config.ts (shared default)
+```
+
+The config sets your default driver, model preferences, and authoring guidance. See [Configuration](#configuration) for details.
+
 ## Quick example
 
 ```ts
@@ -52,6 +76,26 @@ All commands accept `--json` for machine-readable output on stdout (diagnostics 
 
 `mill --help` and `mill <command> --help` include a **Models** section for the selected driver (`defaultDriver` from resolved config, or `--driver` override on command help). The list is sourced from that driver's `codec.modelCatalog`, so driver registration is what informs the CLI/main agent about available models.
 
+## Use with Claude Code
+
+[Install mill](#install), then add the skill:
+
+```bash
+npx skills add laulauland/mill
+```
+
+This teaches Claude Code how to write and run mill programs. When you ask it to farm out work to subagents, it will author a `.ts` program using `mill.spawn()`, show it to you for confirmation, and execute it via the CLI.
+
+## Use with pi
+
+[Install mill](#install), then add the [pi-mill](https://github.com/laulauland/mill/tree/main/packages/pi-mill) extension:
+
+```bash
+pi install npm:pi-mill
+```
+
+This registers a `subagent` tool in pi. When the agent needs to delegate work, it writes a mill program and executes it. The extension also adds monitoring: `/mill` opens an in-session overlay, and `pi --mill` launches a standalone run monitor.
+
 ## FAQ
 
 **Couldn't I just do this with bash and claude -p?**
@@ -73,6 +117,12 @@ mill init --global       # creates ~/.mill/config.ts
 ```
 
 Resolved in order: `./mill.config.ts` → walk up to repo root → `~/.mill/config.ts` → built-in defaults.
+
+Recursion guard:
+
+- `maxRunDepth` (default `1`) limits nested `mill run` invocations by depth.
+- Mill tracks depth with `MILL_RUN_DEPTH` in worker/program child environments.
+- If a nested invocation exceeds `maxRunDepth`, `mill run` is rejected before submission.
 
 ## Drivers
 

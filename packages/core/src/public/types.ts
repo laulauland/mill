@@ -118,6 +118,7 @@ export interface MillConfig {
   readonly defaultDriver: string;
   readonly defaultExecutor: string;
   readonly defaultModel: string;
+  readonly maxRunDepth?: number;
   readonly drivers: Readonly<Record<string, DriverRegistration>>;
   readonly executors: Readonly<Record<string, ExecutorRegistration>>;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
@@ -168,6 +169,7 @@ export interface ConfigFileOverrides {
   readonly defaultDriver?: string;
   readonly defaultExecutor?: string;
   readonly defaultModel?: string;
+  readonly maxRunDepth?: number;
   readonly drivers?: Readonly<Record<string, DriverRegistration>>;
   readonly executors?: Readonly<Record<string, ExecutorRegistration>>;
   readonly extensions?: ReadonlyArray<ExtensionRegistration>;

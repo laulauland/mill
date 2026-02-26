@@ -208,6 +208,7 @@ describe("resolveConfig", () => {
         '  defaultDriver: "module-driver",',
         '  defaultExecutor: "module-executor",',
         '  defaultModel: "provider/module-model",',
+        "  maxRunDepth: 3,",
         "  drivers: {",
         "    'module-driver': processDriver({",
         "      description: `driver-${suffix}`,",
@@ -263,6 +264,7 @@ describe("resolveConfig", () => {
       expect(resolved.config.defaultDriver).toBe("module-driver");
       expect(resolved.config.defaultExecutor).toBe("module-executor");
       expect(resolved.config.defaultModel).toBe("provider/module-model");
+      expect(resolved.config.maxRunDepth).toBe(3);
       expect(resolved.config.authoring.instructions).toBe("Use module config");
       expect(Object.keys(resolved.config.drivers)).toContain("default");
       expect(Object.keys(resolved.config.drivers)).toContain("module-driver");

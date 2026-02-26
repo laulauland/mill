@@ -89,6 +89,7 @@ export interface ListRunsInput extends BaseRunInput {
 export interface RunWorkerInput extends BaseRunInput {
   readonly runId: string;
   readonly programPath: string;
+  readonly runDepth?: number;
 }
 
 export interface LaunchWorkerInput {
@@ -98,6 +99,7 @@ export interface LaunchWorkerInput {
   readonly driverName: string;
   readonly executorName: string;
   readonly cwd: string;
+  readonly runDepth: number;
 }
 
 interface EngineContext {
@@ -107,12 +109,15 @@ interface EngineContext {
   readonly selectedExecutorRuntime: ExecutorRuntime;
   readonly selectedExtensions: ReadonlyArray<ExtensionRegistration>;
   readonly runsDirectory: string;
+  readonly maxRunDepth: number;
 }
 
 const DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS = 60 * 60 * 24 * 365;
 const WORKER_PID_FILENAME = "worker.pid";
 const CANCEL_LOG_PATH = "logs/cancel.log";
 const PROCESS_EXIT_GRACE_MILLIS = 400;
+const RUN_DEPTH_ENV = "MILL_RUN_DEPTH";
+const DEFAULT_MAX_RUN_DEPTH = 1;
 
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {
@@ -350,6 +355,38 @@ const resolveRunsDirectory = (
   return joinPath(cwd, ".mill/runs");
 };
 
+const parseInteger = (value: string | undefined): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed)) {
+    return undefined;
+  }
+
+  return parsed;
+};
+
+const resolveCurrentRunDepth = (): number => {
+  const parsed = parseInteger(process.env[RUN_DEPTH_ENV]);
+
+  if (parsed === undefined || parsed < 0) {
+    return 0;
+  }
+
+  return parsed;
+};
+
+const resolveMaxRunDepth = (configured: number | undefined): number => {
+  if (configured === undefined || !Number.isInteger(configured) || configured <= 0) {
+    return DEFAULT_MAX_RUN_DEPTH;
+  }
+
+  return configured;
+};
+
 const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>): Promise<A> =>
   Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
 
@@ -401,6 +438,7 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
     selectedExecutorRuntime: selectedExecutor.runtime,
     selectedExtensions: resolvedConfig.config.extensions,
     runsDirectory,
+    maxRunDepth: resolveMaxRunDepth(resolvedConfig.config.maxRunDepth),
     engine: makeMillEngine({
       runsDirectory,
       driverName: selectedDriver.name,
@@ -472,6 +510,17 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
   const engineContext = await makeEngineForConfig(input);
   const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
+  const currentRunDepth = resolveCurrentRunDepth();
+  const nextRunDepth = currentRunDepth + 1;
+
+  if (nextRunDepth > engineContext.maxRunDepth) {
+    return Promise.reject(
+      new Error(
+        `Run depth ${nextRunDepth} exceeds configured maxRunDepth=${engineContext.maxRunDepth}.`,
+      ),
+    );
+  }
+
   const submittedRun = await runWithBunContext(
     engineContext.engine.submit({
       runId,
@@ -491,6 +540,7 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
     driverName: engineContext.selectedDriverName,
     executorName: engineContext.selectedExecutorName,
     cwd,
+    runDepth: nextRunDepth,
   });
 
   return submittedRun;
@@ -535,6 +585,7 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
   const engineContext = await makeEngineForConfig(input);
   const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
   const workerPidPath = workerPidPathFor(runDirectory);
+  const runDepth = input.runDepth ?? resolveCurrentRunDepth();
 
   fs.mkdirSync(runDirectory, { recursive: true });
   fs.writeFileSync(workerPidPath, `${process.pid}\n`, "utf-8");
@@ -559,6 +610,9 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
                 programSource,
                 executorName: engineContext.selectedExecutorName,
                 extensions: engineContext.selectedExtensions,
+                env: {
+                  [RUN_DEPTH_ENV]: String(runDepth),
+                },
                 spawn,
                 onIo: ({ stream, line }) =>
                   Effect.flatMap(
