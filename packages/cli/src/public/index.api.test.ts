@@ -848,7 +848,8 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
     expect(stdout[0]).toContain("Models:");
-    expect(stdout[0]).toContain("codex (provider/model-id): openai-codex/gpt-5.3-codex");
+    expect(stdout[0]).toContain("pi (provider/model-id):");
+    expect(stdout[0]).not.toContain("codex (provider/model-id):");
     expect(stdout[0]).toContain("Authoring:\n  CUSTOM_AUTHORING_INSTRUCTIONS");
     expect(stdout[0]).not.toContain("systemPrompt = WHO the agent is");
   });
@@ -879,7 +880,8 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
     expect(stdout[0]).toContain("Models:");
-    expect(stdout[0]).toContain("claude (provider/model-id): anthropic/claude-sonnet-4-6");
+    expect(stdout[0]).toContain("pi (provider/model-id):");
+    expect(stdout[0]).not.toContain("claude (provider/model-id):");
     expect(stdout[0]).toContain("systemPrompt = WHO the agent is");
     expect(stdout[0]).toContain("prompt       = WHAT to do now");
     expect(stdout[0]).not.toContain("From config:");
@@ -916,8 +918,34 @@ describe("runCli", () => {
       "Authoring (from config): CUSTOM_AUTHORING_IN_COMMAND_HELP",
     );
     expect(stdout.join("\n")).toContain("Models:");
-    expect(stdout.join("\n")).toContain("codex (provider/model-id): openai-codex/gpt-5.3-codex");
+    expect(stdout.join("\n")).toContain("pi (provider/model-id):");
+    expect(stdout.join("\n")).not.toContain("codex (provider/model-id):");
     expect(stdout.join("\n")).not.toContain("systemPrompt = WHO the agent is");
+  });
+
+  it("honors --driver override in command help model catalog", async () => {
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    const code = await runCli(["run", "--help", "--driver", "codex"], {
+      cwd: "/workspace/repo",
+      homeDirectory: "/Users/tester",
+      pathExists: async () => false,
+      io: {
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toHaveLength(0);
+    expect(stdout.join("\n")).toContain("Models:");
+    expect(stdout.join("\n")).toContain("codex (provider/model-id): openai-codex/gpt-5.3-codex");
+    expect(stdout.join("\n")).not.toContain("pi (provider/model-id):");
   });
 
   it("falls back to static authoring guidance in command help when config omits authoring", async () => {
@@ -947,7 +975,8 @@ describe("runCli", () => {
     expect(stderr).toHaveLength(0);
     expect(stdout.join("\n")).toContain("Authoring:\n  systemPrompt = WHO the agent is");
     expect(stdout.join("\n")).toContain("Models:");
-    expect(stdout.join("\n")).toContain("claude (provider/model-id): anthropic/claude-sonnet-4-6");
+    expect(stdout.join("\n")).toContain("pi (provider/model-id):");
+    expect(stdout.join("\n")).not.toContain("claude (provider/model-id):");
     expect(stdout.join("\n")).not.toContain("Authoring (from config):");
   });
 

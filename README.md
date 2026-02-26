@@ -50,7 +50,7 @@ mill init [--global]                   generate starter config (local or ~/.mill
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
 
-`mill --help` and `mill <command> --help` include a **Models** section. Those model lists are sourced from each configured driver's `codec.modelCatalog` effect (via resolved `mill.config.ts`), so driver registrations are what inform the CLI/main agent about available models.
+`mill --help` and `mill <command> --help` include a **Models** section for the selected driver (`defaultDriver` from resolved config, or `--driver` override on command help). The list is sourced from that driver's `codec.modelCatalog`, so driver registration is what informs the CLI/main agent about available models.
 
 ## FAQ
 
@@ -93,7 +93,7 @@ Model catalog source by driver:
 - `@mill/driver-claude`: built-in default catalog (`sonnet`, `opus`, `haiku`) unless overridden in config.
 - `@mill/driver-codex`: built-in default catalog (`openai-codex/gpt-5.3-codex`) unless overridden in config.
 
-These driver catalogs flow into CLI help (`mill --help`, `mill <command> --help`) through each driver's `codec.modelCatalog`. In short: driver registration is how model availability is communicated to the CLI/main agent.
+These driver catalogs flow into CLI help (`mill --help`, `mill <command> --help`) through the selected driver's `codec.modelCatalog`. In short: driver registration is how model availability is communicated to the CLI/main agent.
 
 ## Internals
 

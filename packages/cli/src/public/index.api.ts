@@ -826,7 +826,33 @@ const isCommandHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   return argv.slice(1).some((argument) => HELP_FLAGS.has(argument));
 };
 
-const resolveHelpContextForHelp = async (options: RunCliOptions): Promise<ResolvedHelpContext> => {
+const extractDriverOverride = (argv: ReadonlyArray<string>): string | undefined => {
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+
+    if (argument === "--driver") {
+      const next = argv[index + 1];
+      if (next !== undefined && next.length > 0 && !next.startsWith("--")) {
+        return next;
+      }
+      continue;
+    }
+
+    if (argument?.startsWith("--driver=") === true) {
+      const value = argument.slice("--driver=".length);
+      if (value.length > 0) {
+        return value;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const resolveHelpContextForHelp = async (
+  options: RunCliOptions,
+  selectedDriverName?: string,
+): Promise<ResolvedHelpContext> => {
   try {
     const resolvedConfig = await resolveConfig({
       defaults: defaultConfig,
@@ -854,6 +880,9 @@ const resolveHelpContextForHelp = async (options: RunCliOptions): Promise<Resolv
       left.driverName.localeCompare(right.driverName),
     );
 
+    const preferredDriver = selectedDriverName ?? resolvedConfig.config.defaultDriver;
+    const selectedDriverEntry = driverEntries.find((entry) => entry.driverName === preferredDriver);
+
     return {
       authoring: hasAuthoringOverride
         ? {
@@ -865,7 +894,7 @@ const resolveHelpContextForHelp = async (options: RunCliOptions): Promise<Resolv
           },
       modelCatalog: {
         source: "resolved",
-        entries: driverEntries,
+        entries: selectedDriverEntry === undefined ? driverEntries : [selectedDriverEntry],
       },
     };
   } catch {
@@ -890,14 +919,17 @@ export const runCli = async (
   const io = resolvedOptions.io ?? defaultIo;
 
   if (isHelpRequest(argv)) {
-    const helpContext = await resolveHelpContextForHelp(resolvedOptions);
+    const helpContext = await resolveHelpContextForHelp(
+      resolvedOptions,
+      extractDriverOverride(argv),
+    );
     io.stdout(buildHelpText(helpContext));
     return 0;
   }
 
   const commandHelpRequest = isCommandHelpRequest(argv);
   const helpContext = commandHelpRequest
-    ? await resolveHelpContextForHelp(resolvedOptions)
+    ? await resolveHelpContextForHelp(resolvedOptions, extractDriverOverride(argv))
     : undefined;
 
   const command = createCli(resolvedOptions, io);
