@@ -13,12 +13,19 @@ const CLAUDE_JSON_FIXTURE_SCRIPT =
 describe("createClaudeDriverRegistration", () => {
   it("supports explicit model catalogs", async () => {
     const driver = createClaudeDriverRegistration({
-      models: ["anthropic/claude-sonnet-4-6"],
+      models: [" anthropic/claude-sonnet-4-6 ", "anthropic/claude-sonnet-4-6", ""],
     });
     const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
 
     expect(models).toEqual(["anthropic/claude-sonnet-4-6"]);
     expect(driver.runtime).toBeDefined();
+  });
+
+  it("provides a non-empty default catalog", async () => {
+    const driver = createClaudeDriverRegistration();
+    const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
+
+    expect(models).toContain("anthropic/claude-sonnet-4-6");
   });
 
   it("spawns runtime outputs via generic driver contracts", async () => {

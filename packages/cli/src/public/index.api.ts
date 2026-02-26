@@ -710,16 +710,52 @@ const STATIC_AUTHORING_HELP_LINES = [
   "  prompt       = WHAT to do now (specific files, concrete task)",
 ] as const;
 
+interface DriverModelCatalogEntry {
+  readonly driverName: string;
+  readonly modelFormat: string;
+  readonly models: ReadonlyArray<string>;
+}
+
 type ResolvedAuthoringHelp =
   | { readonly source: "static" }
   | { readonly source: "config"; readonly instructions: string };
+
+type ResolvedModelCatalogHelp =
+  | { readonly source: "resolved"; readonly entries: ReadonlyArray<DriverModelCatalogEntry> }
+  | { readonly source: "unavailable" };
+
+interface ResolvedHelpContext {
+  readonly authoring: ResolvedAuthoringHelp;
+  readonly modelCatalog: ResolvedModelCatalogHelp;
+}
 
 const renderAuthoringHelp = (authoringHelp: ResolvedAuthoringHelp): string =>
   authoringHelp.source === "config"
     ? `Authoring:\n  ${authoringHelp.instructions}`
     : `Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`;
 
-const buildHelpText = (authoringHelp: ResolvedAuthoringHelp): string =>
+const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string => {
+  if (modelCatalog.source === "unavailable") {
+    return "Models:\n  (unavailable: failed to resolve config or driver catalogs)";
+  }
+
+  if (modelCatalog.entries.length === 0) {
+    return "Models:\n  (no drivers configured)";
+  }
+
+  return [
+    "Models:",
+    ...modelCatalog.entries.map((entry) => {
+      if (entry.models.length === 0) {
+        return `  ${entry.driverName} (${entry.modelFormat}): (catalog empty)`;
+      }
+
+      return `  ${entry.driverName} (${entry.modelFormat}): ${entry.models.join(", ")}`;
+    }),
+  ].join("\n");
+};
+
+const buildHelpText = (helpContext: ResolvedHelpContext): string =>
   `mill - orchestration runtime for AI agents
 
 Usage: mill <command> [options]
@@ -734,6 +770,8 @@ Commands:
   init [--global]               Create starter config (local or ~/.mill/config.ts)
 
 Global options: --json, --driver <name>, --runs-dir <path>
+
+${renderModelCatalogHelp(helpContext.modelCatalog)}
 
 Examples:
 
@@ -755,7 +793,7 @@ Examples:
       mill.spawn({ agent: "perf", systemPrompt: "...", prompt: "Profile src/api/" }),
     ]);
 
-${renderAuthoringHelp(authoringHelp)}
+${renderAuthoringHelp(helpContext.authoring)}
 
 Run mill <command> --help for details.`;
 
@@ -788,9 +826,7 @@ const isCommandHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   return argv.slice(1).some((argument) => HELP_FLAGS.has(argument));
 };
 
-const resolveAuthoringHelpForHelp = async (
-  options: RunCliOptions,
-): Promise<ResolvedAuthoringHelp> => {
+const resolveHelpContextForHelp = async (options: RunCliOptions): Promise<ResolvedHelpContext> => {
   try {
     const resolvedConfig = await resolveConfig({
       defaults: defaultConfig,
@@ -804,18 +840,45 @@ const resolveAuthoringHelpForHelp = async (
     const hasAuthoringOverride =
       resolvedConfig.source !== "defaults" && instructions !== defaultConfig.authoring.instructions;
 
-    if (hasAuthoringOverride) {
-      return {
-        source: "config",
-        instructions,
-      };
-    }
+    const driverEntriesUnsorted = await Runtime.runPromise(runtime)(
+      Effect.forEach(Object.entries(resolvedConfig.config.drivers), ([driverName, registration]) =>
+        Effect.map(registration.codec.modelCatalog, (models) => ({
+          driverName,
+          modelFormat: registration.modelFormat,
+          models: Array.from(new Set(models)),
+        })),
+      ),
+    );
+
+    const driverEntries = [...driverEntriesUnsorted].sort((left, right) =>
+      left.driverName.localeCompare(right.driverName),
+    );
+
+    return {
+      authoring: hasAuthoringOverride
+        ? {
+            source: "config",
+            instructions,
+          }
+        : {
+            source: "static",
+          },
+      modelCatalog: {
+        source: "resolved",
+        entries: driverEntries,
+      },
+    };
   } catch {
-    // fall through to static authoring help
+    // fall through to static authoring + unavailable model catalogs
   }
 
   return {
-    source: "static",
+    authoring: {
+      source: "static",
+    },
+    modelCatalog: {
+      source: "unavailable",
+    },
   };
 };
 
@@ -827,14 +890,14 @@ export const runCli = async (
   const io = resolvedOptions.io ?? defaultIo;
 
   if (isHelpRequest(argv)) {
-    const authoringHelp = await resolveAuthoringHelpForHelp(resolvedOptions);
-    io.stdout(buildHelpText(authoringHelp));
+    const helpContext = await resolveHelpContextForHelp(resolvedOptions);
+    io.stdout(buildHelpText(helpContext));
     return 0;
   }
 
   const commandHelpRequest = isCommandHelpRequest(argv);
-  const authoringHelp = commandHelpRequest
-    ? await resolveAuthoringHelpForHelp(resolvedOptions)
+  const helpContext = commandHelpRequest
+    ? await resolveHelpContextForHelp(resolvedOptions)
     : undefined;
 
   const command = createCli(resolvedOptions, io);
@@ -859,12 +922,14 @@ export const runCli = async (
   const compactHelp = CliConfig.layer({ showBuiltIns: false, showTypes: false });
   const exitCode = await runWithBunContext(Effect.provide(codeEffect, compactHelp));
 
-  if (commandHelpRequest && exitCode === 0 && authoringHelp !== undefined) {
-    if (authoringHelp.source === "config") {
-      io.stdout(`Authoring (from config): ${authoringHelp.instructions}`);
+  if (commandHelpRequest && exitCode === 0 && helpContext !== undefined) {
+    if (helpContext.authoring.source === "config") {
+      io.stdout(`Authoring (from config): ${helpContext.authoring.instructions}`);
     } else {
       io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`);
     }
+
+    io.stdout(renderModelCatalogHelp(helpContext.modelCatalog));
   }
 
   return exitCode;

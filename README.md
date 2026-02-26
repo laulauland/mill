@@ -50,6 +50,8 @@ mill init [--global]                   generate starter config (local or ~/.mill
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
 
+`mill --help` and `mill <command> --help` include a **Models** section. Those model lists are sourced from each configured driver's `codec.modelCatalog` effect (via resolved `mill.config.ts`), so driver registrations are what inform the CLI/main agent about available models.
+
 ## FAQ
 
 **Couldn't I just do this with bash and claude -p?**

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Runtime } from "effect";
 import { createPiDriverRegistration } from "./index.api";
@@ -28,7 +31,7 @@ const ERROR_TERMINAL_SCRIPT =
 describe("createPiDriverRegistration", () => {
   it("supports explicit model catalog overrides via codec", async () => {
     const driver = createPiDriverRegistration({
-      models: ["openai/gpt-5.3-codex"],
+      models: [" openai/gpt-5.3-codex ", "openai/gpt-5.3-codex", ""],
     });
 
     const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
@@ -36,6 +39,48 @@ describe("createPiDriverRegistration", () => {
     expect(models).toEqual(["openai/gpt-5.3-codex"]);
     expect(driver.process.command.length).toBeGreaterThan(0);
     expect(driver.process.args.length).toBeGreaterThan(0);
+  });
+
+  it("reads model catalog from ~/.pi/agent/settings.json when override is omitted", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-driver-pi-model-catalog-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const settingsPath = join(homeDirectory, ".pi", "agent", "settings.json");
+    const previousHome = process.env.HOME;
+
+    try {
+      await mkdir(dirname(settingsPath), { recursive: true });
+      await writeFile(
+        settingsPath,
+        JSON.stringify(
+          {
+            enabledModels: [
+              " openai/gpt-5.3-codex ",
+              "cerebras/zai-glm-4.7",
+              "",
+              "cerebras/zai-glm-4.7",
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      process.env.HOME = homeDirectory;
+
+      const driver = createPiDriverRegistration();
+      const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
+
+      expect(models).toEqual(["openai/gpt-5.3-codex", "cerebras/zai-glm-4.7"]);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
   });
 
   it("spawns process-backed runs and decodes structured pi JSON output", async () => {

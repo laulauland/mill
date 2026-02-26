@@ -14,12 +14,19 @@ const CODEX_JSON_FIXTURE_SCRIPT =
 describe("createCodexDriverRegistration", () => {
   it("supports explicit model catalogs", async () => {
     const driver = createCodexDriverRegistration({
-      models: ["openai/gpt-5.3-codex"],
+      models: [" openai/gpt-5.3-codex ", "openai/gpt-5.3-codex", ""],
     });
     const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
 
     expect(models).toEqual(["openai/gpt-5.3-codex"]);
     expect(driver.runtime).toBeDefined();
+  });
+
+  it("provides a non-empty default catalog", async () => {
+    const driver = createCodexDriverRegistration();
+    const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
+
+    expect(models).toContain("openai-codex/gpt-5.3-codex");
   });
 
   it("spawns runtime outputs via generic driver contracts", async () => {

@@ -7,10 +7,15 @@ export interface CreateCodexDriverRegistrationInput {
   readonly models?: ReadonlyArray<string>;
 }
 
+const DEFAULT_CODEX_MODELS = ["openai-codex/gpt-5.3-codex"] as const;
+
+const normalizeModelCatalog = (models: ReadonlyArray<string>): ReadonlyArray<string> =>
+  Array.from(new Set(models.map((model) => model.trim()).filter((model) => model.length > 0)));
+
 export const createCodexCodec = (input?: {
   readonly models?: ReadonlyArray<string>;
 }): DriverCodec => ({
-  modelCatalog: Effect.succeed(input?.models ?? []),
+  modelCatalog: Effect.succeed(normalizeModelCatalog(input?.models ?? DEFAULT_CODEX_MODELS)),
 });
 
 export const createCodexDriverConfig = (): DriverProcessConfig => ({

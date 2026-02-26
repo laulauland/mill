@@ -847,6 +847,8 @@ describe("runCli", () => {
 
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
+    expect(stdout[0]).toContain("Models:");
+    expect(stdout[0]).toContain("codex (provider/model-id): openai-codex/gpt-5.3-codex");
     expect(stdout[0]).toContain("Authoring:\n  CUSTOM_AUTHORING_INSTRUCTIONS");
     expect(stdout[0]).not.toContain("systemPrompt = WHO the agent is");
   });
@@ -876,6 +878,8 @@ describe("runCli", () => {
 
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
+    expect(stdout[0]).toContain("Models:");
+    expect(stdout[0]).toContain("claude (provider/model-id): anthropic/claude-sonnet-4-6");
     expect(stdout[0]).toContain("systemPrompt = WHO the agent is");
     expect(stdout[0]).toContain("prompt       = WHAT to do now");
     expect(stdout[0]).not.toContain("From config:");
@@ -911,6 +915,8 @@ describe("runCli", () => {
     expect(stdout.join("\n")).toContain(
       "Authoring (from config): CUSTOM_AUTHORING_IN_COMMAND_HELP",
     );
+    expect(stdout.join("\n")).toContain("Models:");
+    expect(stdout.join("\n")).toContain("codex (provider/model-id): openai-codex/gpt-5.3-codex");
     expect(stdout.join("\n")).not.toContain("systemPrompt = WHO the agent is");
   });
 
@@ -940,6 +946,8 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
     expect(stdout.join("\n")).toContain("Authoring:\n  systemPrompt = WHO the agent is");
+    expect(stdout.join("\n")).toContain("Models:");
+    expect(stdout.join("\n")).toContain("claude (provider/model-id): anthropic/claude-sonnet-4-6");
     expect(stdout.join("\n")).not.toContain("Authoring (from config):");
   });
 
