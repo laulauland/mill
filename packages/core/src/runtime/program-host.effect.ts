@@ -24,6 +24,10 @@ export interface ExecuteProgramInProcessHostInput {
   readonly executorName: string;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly spawn: (input: SpawnOptions) => Effect.Effect<SpawnResult, unknown>;
+  readonly onIo?: (input: {
+    readonly stream: "stdout" | "stderr";
+    readonly line: string;
+  }) => Effect.Effect<void>;
 }
 
 type ProgramHostResultMessage = Extract<ProgramHostInboundMessage, { readonly kind: "result" }>;
@@ -322,6 +326,12 @@ export const executeProgramInProcessHost = (
         Stream.runForEach(Stream.splitLines(Stream.decodeText(processHandle.stdout)), (line) =>
           Effect.gen(function* () {
             if (!line.startsWith(ProgramHostProtocolPrefix)) {
+              if (line.length > 0 && input.onIo !== undefined) {
+                yield* input.onIo({
+                  stream: "stdout",
+                  line,
+                });
+              }
               return;
             }
 
@@ -408,7 +418,16 @@ export const executeProgramInProcessHost = (
 
       const stderrFiber = yield* Effect.forkScoped(
         Stream.runForEach(Stream.splitLines(Stream.decodeText(processHandle.stderr)), (line) =>
-          Ref.update(stderrLinesRef, (lines) => [...lines, line]),
+          Effect.gen(function* () {
+            yield* Ref.update(stderrLinesRef, (lines) => [...lines, line]);
+
+            if (line.length > 0 && input.onIo !== undefined) {
+              yield* input.onIo({
+                stream: "stderr",
+                line,
+              });
+            }
+          }),
         ),
       );
 

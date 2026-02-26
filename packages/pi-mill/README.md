@@ -62,7 +62,7 @@ const [tests, docs] = await Promise.all([
 ]);
 ```
 
-Each `mill.spawn()` submits an async mill run (`mill run --json`) and then follows completion via mill APIs (`wait` + `inspect`). Model selection, driver routing, and execution behavior all come from your mill configuration.
+Each `mill.spawn()` submits an async mill run (`mill run --json`) and then follows completion via mill APIs (`wait` + `watch --channel events`). Model selection, driver routing, and execution behavior all come from your mill configuration.
 
 By default, mill run storage uses mill's global default (`~/.mill/runs`) unless you explicitly pass `--runs-dir` (or set `millRunsDir`).
 

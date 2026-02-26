@@ -8,7 +8,6 @@ import {
   cancelRun,
   defineConfig,
   getRunStatus,
-  inspectRun,
   listRuns,
   processDriver,
   resolveConfig,
@@ -481,11 +480,19 @@ const waitCommand = async (
   return 1;
 };
 
+const WATCH_CHANNELS = ["events", "io", "all"] as const;
+const WATCH_SOURCES = ["driver", "program"] as const;
+
+type WatchChannel = (typeof WATCH_CHANNELS)[number];
+type WatchSource = (typeof WATCH_SOURCES)[number];
+
 interface WatchCommandInput {
   readonly run: Option.Option<string>;
   readonly sinceTime: Option.Option<string>;
+  readonly channel: Option.Option<WatchChannel>;
+  readonly source: Option.Option<WatchSource>;
+  readonly spawn: Option.Option<string>;
   readonly json: boolean;
-  readonly raw: boolean;
   readonly runsDir: Option.Option<string>;
   readonly driver: Option.Option<string>;
 }
@@ -498,8 +505,10 @@ const watchCommand = async (
   await watchRun({
     defaults: defaultConfig,
     runId: fromOption(command.run),
+    channel: fromOption(command.channel),
+    source: fromOption(command.source),
+    spawnId: fromOption(command.spawn),
     sinceTimeIso: fromOption(command.sinceTime),
-    raw: command.raw,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
@@ -511,40 +520,6 @@ const watchCommand = async (
     },
   });
 
-  return 0;
-};
-
-interface InspectCommandInput {
-  readonly ref: string;
-  readonly json: boolean;
-  readonly session: boolean;
-  readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
-}
-
-const inspectCommand = async (
-  command: InspectCommandInput,
-  options: RunCliOptions,
-  io: CliIo,
-): Promise<number> => {
-  const inspected = await inspectRun({
-    defaults: defaultConfig,
-    ref: command.ref,
-    session: command.session,
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
-  });
-
-  if (command.json) {
-    io.stdout(JSON.stringify(inspected));
-    return 0;
-  }
-
-  io.stdout(JSON.stringify(inspected, null, 2));
   return 0;
 };
 
@@ -676,29 +651,19 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
     {
       run: optionalTextOption("run"),
       sinceTime: optionalTextOption("since-time"),
+      channel: Options.choice("channel", WATCH_CHANNELS).pipe(Options.optional),
+      source: Options.choice("source", WATCH_SOURCES).pipe(Options.optional),
+      spawn: optionalTextOption("spawn"),
       json: Options.boolean("json"),
-      raw: Options.boolean("raw"),
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(watchCommand(command, options, io)),
   ).pipe(
     CliCommand.withDescription(
-      "Stream run events. Use --run <runId> for scoped watch, omit for global watch.",
+      "Watch run streams. --channel events|io|all (default: events). --channel io|all requires --run.",
     ),
   );
-
-  const inspect = CliCommand.make(
-    "inspect",
-    {
-      ref: Args.text({ name: "runId[.spawnId]" }),
-      json: Options.boolean("json"),
-      session: Options.boolean("session"),
-      runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
-    },
-    (command) => toCliEffect(inspectCommand(command, options, io)),
-  ).pipe(CliCommand.withDescription("Inspect run, spawn, or session output."));
 
   const cancel = CliCommand.make(
     "cancel",
@@ -736,7 +701,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
 
   return CliCommand.make("mill").pipe(
     CliCommand.withDescription("Mill orchestration runtime."),
-    CliCommand.withSubcommands([run, status, wait, watch, inspect, cancel, ls, init, worker]),
+    CliCommand.withSubcommands([run, status, wait, watch, cancel, ls, init, worker]),
   );
 };
 
@@ -763,8 +728,7 @@ Commands:
   run <program.ts>              Run a mill program
   status <runId>                Show run state
   wait <runId> --timeout <s>    Wait for terminal state
-  watch [--run <runId>]         Stream run events (global if --run omitted)
-  inspect <ref>                 Inspect run or spawn detail
+  watch [--run <runId>]         Watch events/io streams (use --channel events|io|all)
   cancel <runId>                Cancel a running execution
   ls                            List runs
   init [--global]               Create starter config (local or ~/.mill/config.ts)
@@ -802,7 +766,6 @@ const COMMAND_NAMES = new Set([
   "status",
   "wait",
   "watch",
-  "inspect",
   "cancel",
   "ls",
   "init",

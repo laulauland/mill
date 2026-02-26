@@ -27,23 +27,25 @@ console.log(plan.text);
 ```
 
 ```bash
-mill run review.ts           # returns runId, executes in background
-mill watch abc123            # stream events live
-mill run review.ts --sync    # or block until done
+mill run review.ts                 # returns runId, executes in background
+mill watch --run abc123            # stream events live
+mill watch --run abc123 --channel io
+mill run review.ts --sync          # or block until done
 ```
 
 ## CLI
 
 ```
 mill run <program.ts> [--sync] [--json] [--driver <name>]
-mill status <runId>           show run state
-mill wait <runId> --timeout   block until complete/failed/cancelled
-mill watch [--run <runId>]    stream tier-1 events (global if --run omitted)
-mill inspect <id>[.<spawnId>] inspect run or spawn detail
-mill inspect <id> --session   resolve full agent session via driver
-mill cancel <runId>           mark cancelled + kill worker process tree
-mill ls [--status <filter>]   list runs
-mill init [--global]          generate starter config (local or ~/.mill/config.ts)
+mill status <runId>                    show run state
+mill wait <runId> --timeout            block until complete/failed/cancelled
+mill watch [--run <runId>]             watch streams (default: events)
+  --channel events|io|all              choose stream channel
+  --source driver|program              io source filter (io/all only)
+  --spawn <spawnId>                    io spawn filter (io/all only)
+mill cancel <runId>                    mark cancelled + kill worker process tree
+mill ls [--status <filter>]            list runs
+mill init [--global]                   generate starter config (local or ~/.mill/config.ts)
 ```
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).

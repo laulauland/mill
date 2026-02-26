@@ -360,7 +360,7 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description: [
       "Spawn subagents for delegated or orchestrated work.",
-      "Execution backend: mill async APIs (submit + watch + inspect). Configure drivers/executors/models via mill.config.ts.",
+      "Execution backend: mill async APIs (submit + watch + wait). Configure drivers/executors/models via mill.config.ts.",
       `Enabled models: ${modelsText}`,
       "Write a TypeScript script. `mill` is a global (like `process` or `console`). Use mill.spawn() to orchestrate agents.",
       "mill.spawn() returns a Promise<ExecutionResult>. Use `await` for sequential, `Promise.all` for parallel.",

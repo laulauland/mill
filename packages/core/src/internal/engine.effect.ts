@@ -30,11 +30,12 @@ import {
   type RunStore,
 } from "./run-store.effect";
 import {
-  publishRawEvent,
+  publishIoEvent,
   publishTier1Event,
-  watchRawLive,
+  watchIoLive,
   watchTier1GlobalLive,
   watchTier1Live,
+  type IoStreamEvent,
 } from "./observer-hub.effect";
 
 export class ConfigError extends Data.TaggedError("ConfigError")<{ message: string }> {}
@@ -118,7 +119,9 @@ export interface MillEngine {
   ) => Effect.Effect<ReadonlyArray<RunSyncOutput["run"]>, PersistenceError>;
   readonly watch: (runId: RunId) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError>;
   readonly watchAll: (sinceTimeIso?: string) => Stream.Stream<MillEvent, PersistenceError>;
-  readonly watchRaw: (runId: RunId) => Stream.Stream<string, RunNotFoundError | PersistenceError>;
+  readonly watchIo: (
+    runId: RunId,
+  ) => Stream.Stream<IoStreamEvent, RunNotFoundError | PersistenceError>;
   readonly inspect: (
     ref: InspectRef,
   ) => Effect.Effect<InspectResult, RunNotFoundError | PersistenceError>;
@@ -800,7 +803,16 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             });
 
             for (const rawLine of driverOutputExit.value.raw ?? []) {
-              yield* publishRawEvent(runInput.runId, rawLine);
+              const timestamp = yield* toIsoTimestamp;
+
+              yield* publishIoEvent({
+                runId: runInput.runId,
+                source: "driver",
+                stream: "stdout",
+                line: rawLine,
+                timestamp,
+                spawnId,
+              });
             }
 
             for (const driverEvent of driverOutputExit.value.events) {
@@ -1069,9 +1081,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         }),
       ),
 
-    watchRaw: (runId) =>
+    watchIo: (runId) =>
       Stream.unwrapScoped(
-        Effect.zipRight(runStore.getRun(runId), Effect.succeed(watchRawLive(runId))),
+        Effect.zipRight(runStore.getRun(runId), Effect.succeed(watchIoLive(runId))),
       ),
 
     inspect: (ref) =>

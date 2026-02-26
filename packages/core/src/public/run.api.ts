@@ -2,25 +2,17 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Runtime, Stream } from "effect";
-import { makeMillEngine, ProgramExecutionError, type InspectResult } from "../engine.effect";
+import { Effect, Fiber, Runtime, Stream } from "effect";
+import { makeMillEngine, ProgramExecutionError } from "../engine.effect";
 import { makeDriverRegistry } from "../driver-registry.effect";
 import { makeExecutorRegistry } from "../executor-registry.effect";
-import {
-  decodeRunIdSync,
-  decodeSpawnIdSync,
-  type RunRecord,
-  type RunSyncOutput,
-} from "../run.schema";
+import { type MillEvent } from "../event.schema";
+import { decodeRunIdSync, type RunRecord, type RunSyncOutput } from "../run.schema";
 import { runDetachedWorker } from "../worker.effect";
 import { executeProgramInProcessHost } from "../program-host.effect";
+import { publishIoEvent, type IoStreamEvent } from "../observer-hub.effect";
 import { resolveConfig } from "./config-loader.api";
-import type {
-  DriverSessionPointer,
-  ExecutorRuntime,
-  ExtensionRegistration,
-  ResolveConfigOptions,
-} from "./types";
+import type { ExecutorRuntime, ExtensionRegistration, ResolveConfigOptions } from "./types";
 
 const runtime = Runtime.defaultRuntime;
 
@@ -53,21 +45,37 @@ export interface WaitForRunInput extends GetRunStatusInput {
   readonly timeoutSeconds: number;
 }
 
+export type WatchChannel = "events" | "io" | "all";
+export type WatchSource = "driver" | "program";
+
+export type WatchOutput =
+  | {
+      readonly kind: "event";
+      readonly runId: string;
+      readonly event: MillEvent;
+    }
+  | {
+      readonly kind: "io";
+      readonly runId: string;
+      readonly source: WatchSource;
+      readonly stream: "stdout" | "stderr";
+      readonly line: string;
+      readonly timestamp: string;
+      readonly spawnId?: string;
+    };
+
 export interface WatchRunInput extends Omit<
   GetRunStatusInput,
   "runId" | "pathExists" | "loadConfigModule"
 > {
   readonly runId?: string;
-  readonly raw?: boolean;
+  readonly channel?: WatchChannel;
+  readonly source?: WatchSource;
+  readonly spawnId?: string;
   readonly sinceTimeIso?: string;
   readonly pathExists?: (path: string) => Promise<boolean>;
   readonly loadConfigModule?: (path: string) => Promise<unknown>;
   readonly onEvent: (line: string) => void;
-}
-
-export interface InspectRunInput extends BaseRunInput {
-  readonly ref: string;
-  readonly session?: boolean;
 }
 
 export interface CancelRunInput extends GetRunStatusInput {
@@ -404,32 +412,6 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
   };
 };
 
-const parseInspectRef = (
-  ref: string,
-):
-  | {
-      runId: string;
-      spawnId?: string;
-    }
-  | undefined => {
-  const [runIdPart, spawnIdPart] = ref.split(".");
-
-  if (runIdPart === undefined || runIdPart.length === 0) {
-    return undefined;
-  }
-
-  if (spawnIdPart === undefined || spawnIdPart.length === 0) {
-    return {
-      runId: runIdPart,
-    };
-  }
-
-  return {
-    runId: runIdPart,
-    spawnId: spawnIdPart,
-  };
-};
-
 const isRunTerminalEvent = (eventType: string): boolean =>
   eventType === "run:complete" || eventType === "run:failed" || eventType === "run:cancelled";
 
@@ -443,10 +425,45 @@ const isSinceTimeIso = (value: string): boolean => {
   return new Date(parsed).toISOString() === value;
 };
 
-export interface InspectSessionOutput extends DriverSessionPointer {
-  readonly runId: string;
-  readonly spawnId: string;
-}
+const toWatchEventOutput = (event: MillEvent): WatchOutput => ({
+  kind: "event",
+  runId: event.runId,
+  event,
+});
+
+const toWatchIoOutput = (event: IoStreamEvent): WatchOutput => ({
+  kind: "io",
+  runId: event.runId,
+  source: event.source,
+  stream: event.stream,
+  line: event.line,
+  timestamp: event.timestamp,
+  spawnId: event.spawnId,
+});
+
+const emitWatchOutput = (
+  onEvent: (line: string) => void,
+  output: WatchOutput,
+): Effect.Effect<void> =>
+  Effect.sync(() => {
+    onEvent(JSON.stringify(output));
+  });
+
+const filterIoEvent = (
+  event: IoStreamEvent,
+  source: WatchSource | undefined,
+  spawnId: string | undefined,
+): boolean => {
+  if (source !== undefined && event.source !== source) {
+    return false;
+  }
+
+  if (spawnId !== undefined && event.spawnId !== spawnId) {
+    return false;
+  }
+
+  return true;
+};
 
 export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
   const cwd = input.cwd ?? process.cwd();
@@ -543,6 +560,18 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
                 executorName: engineContext.selectedExecutorName,
                 extensions: engineContext.selectedExtensions,
                 spawn,
+                onIo: ({ stream, line }) =>
+                  Effect.flatMap(
+                    Effect.sync(() => new Date().toISOString()),
+                    (timestamp) =>
+                      publishIoEvent({
+                        runId: input.runId,
+                        source: "program",
+                        stream,
+                        line,
+                        timestamp,
+                      }),
+                  ),
               }),
             }),
             (error) =>
@@ -589,19 +618,33 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     );
   }
 
+  const channel = input.channel ?? "events";
+
+  if (input.runId === undefined && channel !== "events") {
+    return Promise.reject(new Error("watch --channel io|all requires --run <runId>."));
+  }
+
+  if (input.runId === undefined && (input.source !== undefined || input.spawnId !== undefined)) {
+    return Promise.reject(new Error("watch --source/--spawn requires --run <runId>."));
+  }
+
+  if (channel === "io" && input.sinceTimeIso !== undefined) {
+    return Promise.reject(new Error("watch --channel io does not support --since-time."));
+  }
+
+  if (channel === "events" && (input.source !== undefined || input.spawnId !== undefined)) {
+    return Promise.reject(
+      new Error("watch --source/--spawn require --channel io or --channel all."),
+    );
+  }
+
   const engineContext = await makeEngineForConfig(input);
 
   if (input.runId === undefined) {
-    if (input.raw === true) {
-      return Promise.reject(new Error("watch --raw requires a runId."));
-    }
-
     await runWithBunContext(
       Effect.scoped(
         Stream.runForEach(engineContext.engine.watchAll(input.sinceTimeIso), (event) =>
-          Effect.sync(() => {
-            input.onEvent(JSON.stringify(event));
-          }),
+          emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
         ),
       ),
     );
@@ -611,14 +654,54 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
 
   const runId = decodeRunIdSync(input.runId);
 
-  if (input.raw === true) {
+  const eventStream = Stream.filter(engineContext.engine.watch(runId), (event) =>
+    input.sinceTimeIso === undefined ? true : event.timestamp >= input.sinceTimeIso,
+  );
+
+  const ioStream = Stream.filter(engineContext.engine.watchIo(runId), (event) =>
+    filterIoEvent(event, input.source, input.spawnId),
+  );
+
+  if (channel === "events") {
+    await runWithBunContext(
+      Effect.scoped(
+        Stream.runForEach(
+          Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
+          (event) => emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
+        ),
+      ),
+    );
+
+    return;
+  }
+
+  const currentRun = await runWithBunContext(engineContext.engine.status(runId));
+
+  if (
+    currentRun.status === "complete" ||
+    currentRun.status === "failed" ||
+    currentRun.status === "cancelled"
+  ) {
+    if (channel === "all") {
+      await runWithBunContext(
+        Effect.scoped(
+          Stream.runForEach(
+            Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
+            (event) => emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
+          ),
+        ),
+      );
+    }
+
+    return;
+  }
+
+  if (channel === "io") {
     await runWithBunContext(
       Effect.raceFirst(
         Effect.scoped(
-          Stream.runForEach(engineContext.engine.watchRaw(runId), (line) =>
-            Effect.sync(() => {
-              input.onEvent(line);
-            }),
+          Stream.runForEach(ioStream, (event) =>
+            emitWatchOutput(input.onEvent, toWatchIoOutput(event)),
           ),
         ),
         engineContext.engine.wait(runId, DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS * 1000),
@@ -628,80 +711,24 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     return;
   }
 
-  const watchStream = Stream.filter(engineContext.engine.watch(runId), (event) =>
-    input.sinceTimeIso === undefined ? true : event.timestamp >= input.sinceTimeIso,
-  );
-
   await runWithBunContext(
     Effect.scoped(
-      Stream.runForEach(
-        Stream.takeUntil(watchStream, (event) => isRunTerminalEvent(event.type)),
-        (event) =>
-          Effect.sync(() => {
-            input.onEvent(JSON.stringify(event));
-          }),
-      ),
-    ),
-  );
-};
+      Effect.gen(function* () {
+        const ioFiber = yield* Effect.forkScoped(
+          Stream.runForEach(ioStream, (event) =>
+            emitWatchOutput(input.onEvent, toWatchIoOutput(event)),
+          ),
+        );
 
-export const inspectRun = async (
-  input: InspectRunInput,
-): Promise<InspectResult | InspectSessionOutput> => {
-  const parsedRef = parseInspectRef(input.ref);
+        yield* Stream.runForEach(
+          Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
+          (event) => emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
+        );
 
-  if (parsedRef === undefined) {
-    return Promise.reject(new Error("inspect reference requires a runId"));
-  }
-
-  const engineContext = await makeEngineForConfig(input);
-  const inspected = await runWithBunContext(
-    engineContext.engine.inspect({
-      runId: decodeRunIdSync(parsedRef.runId),
-      spawnId: parsedRef.spawnId === undefined ? undefined : decodeSpawnIdSync(parsedRef.spawnId),
-    }),
-  );
-
-  if (input.session !== true) {
-    return inspected;
-  }
-
-  if (inspected.kind !== "spawn" || inspected.result === undefined) {
-    return Promise.reject(
-      new Error("inspect --session requires a runId.spawnId reference with completed spawn result"),
-    );
-  }
-
-  const resolvedConfig = await resolveConfig(input);
-  const driverRegistry = makeDriverRegistry({
-    defaultDriver: resolvedConfig.config.defaultDriver,
-    drivers: resolvedConfig.config.drivers,
-  });
-  const run = await runWithBunContext(
-    engineContext.engine.status(decodeRunIdSync(parsedRef.runId)),
-  );
-  const resolvedDriver = await Runtime.runPromise(runtime)(driverRegistry.resolve(run.driver));
-
-  if (resolvedDriver.runtime.resolveSession === undefined) {
-    return Promise.reject(
-      new Error(`Driver ${resolvedDriver.name} does not support session inspection`),
-    );
-  }
-
-  const sessionPointer = await Runtime.runPromise(runtime)(
-    Effect.provide(
-      resolvedDriver.runtime.resolveSession({
-        sessionRef: inspected.result.sessionRef,
+        yield* Fiber.interrupt(ioFiber);
       }),
-      BunContext.layer,
     ),
   );
-
-  return {
-    runId: parsedRef.runId,
-    spawnId: inspected.spawnId,
-    ...sessionPointer,
-  } satisfies InspectSessionOutput;
 };
 
 export const cancelRun = async (

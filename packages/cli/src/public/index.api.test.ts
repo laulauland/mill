@@ -64,43 +64,26 @@ const StatusEnvelope = Schema.parseJson(
   }),
 );
 
-const InspectRunEnvelope = Schema.parseJson(
-  Schema.Struct({
-    kind: Schema.Literal("run"),
-    run: Schema.Struct({
-      id: Schema.String,
-      status: Schema.String,
-    }),
-    events: Schema.Array(
-      Schema.Struct({
+const WatchOutputEnvelope = Schema.parseJson(
+  Schema.Union(
+    Schema.Struct({
+      kind: Schema.Literal("event"),
+      runId: Schema.String,
+      event: Schema.Struct({
         type: Schema.String,
-        sequence: Schema.Number,
+        runId: Schema.String,
       }),
-    ),
-  }),
-);
-
-const InspectSpawnEnvelope = Schema.parseJson(
-  Schema.Struct({
-    kind: Schema.Literal("spawn"),
-    runId: Schema.String,
-    spawnId: Schema.String,
-    result: Schema.optional(
-      Schema.Struct({
-        sessionRef: Schema.String,
-      }),
-    ),
-  }),
-);
-
-const SessionEnvelope = Schema.parseJson(
-  Schema.Struct({
-    runId: Schema.String,
-    spawnId: Schema.String,
-    sessionRef: Schema.String,
-    pointer: Schema.String,
-    driver: Schema.String,
-  }),
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("io"),
+      runId: Schema.String,
+      source: Schema.Union(Schema.Literal("driver"), Schema.Literal("program")),
+      stream: Schema.Union(Schema.Literal("stdout"), Schema.Literal("stderr")),
+      line: Schema.String,
+      timestamp: Schema.String,
+      spawnId: Schema.optional(Schema.String),
+    }),
+  ),
 );
 
 const CancelEnvelope = Schema.parseJson(
@@ -129,13 +112,6 @@ const WaitTimeoutEnvelope = Schema.parseJson(
       timeoutSeconds: Schema.Number,
       message: Schema.String,
     }),
-  }),
-);
-
-const WatchEventEnvelope = Schema.parseJson(
-  Schema.Struct({
-    type: Schema.String,
-    runId: Schema.String,
   }),
 );
 
@@ -498,8 +474,8 @@ describe("runCli", () => {
     }
   });
 
-  it("supports watch/inspect/session/ls JSON contracts for completed runs", async () => {
-    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-inspect-watch-"));
+  it("supports watch/ls JSON contracts for completed runs", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-watch-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
 
@@ -534,84 +510,31 @@ describe("runCli", () => {
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
 
       const watchStdout: Array<string> = [];
-      const watchCode = await runCli(["watch", "--run", runPayload.run.id, "--json"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            watchStdout.push(line);
-          },
-          stderr: () => undefined,
-        },
-      });
-
-      expect(watchCode).toBe(0);
-      expect(watchStdout.length).toBeGreaterThan(0);
-
-      for (const line of watchStdout) {
-        const parsed = Schema.decodeUnknownSync(WatchEventEnvelope)(line);
-        expect(parsed.runId).toBe(runPayload.run.id);
-        expect(typeof parsed.type).toBe("string");
-      }
-
-      const inspectRunStdout: Array<string> = [];
-      const inspectRunCode = await runCli(["inspect", runPayload.run.id, "--json"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            inspectRunStdout.push(line);
-          },
-          stderr: () => undefined,
-        },
-      });
-
-      expect(inspectRunCode).toBe(0);
-      const inspectedRun = Schema.decodeUnknownSync(InspectRunEnvelope)(inspectRunStdout[0]);
-      expect(inspectedRun.run.id).toBe(runPayload.run.id);
-      expect(inspectedRun.events.length).toBeGreaterThan(0);
-
-      const inspectSpawnStdout: Array<string> = [];
-      const inspectSpawnCode = await runCli(["inspect", `${runPayload.run.id}.spawn_1`, "--json"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            inspectSpawnStdout.push(line);
-          },
-          stderr: () => undefined,
-        },
-      });
-
-      expect(inspectSpawnCode).toBe(0);
-      const inspectedSpawn = Schema.decodeUnknownSync(InspectSpawnEnvelope)(inspectSpawnStdout[0]);
-      expect(inspectedSpawn.spawnId).toBe("spawn_1");
-      expect(inspectedSpawn.result?.sessionRef.length).toBeGreaterThan(0);
-
-      const inspectSessionStdout: Array<string> = [];
-      const inspectSessionCode = await runCli(
-        ["inspect", `${runPayload.run.id}.spawn_1`, "--session", "--json"],
+      const watchCode = await runCli(
+        ["watch", "--run", runPayload.run.id, "--channel", "all", "--json"],
         {
           cwd: tempDirectory,
           homeDirectory,
           pathExists: async () => false,
           io: {
             stdout: (line) => {
-              inspectSessionStdout.push(line);
+              watchStdout.push(line);
             },
             stderr: () => undefined,
           },
         },
       );
 
-      expect(inspectSessionCode).toBe(0);
-      const sessionPayload = Schema.decodeUnknownSync(SessionEnvelope)(inspectSessionStdout[0]);
-      expect(sessionPayload.runId).toBe(runPayload.run.id);
-      expect(sessionPayload.spawnId).toBe("spawn_1");
-      expect(sessionPayload.pointer.length).toBeGreaterThan(0);
+      expect(watchCode).toBe(0);
+      expect(watchStdout.length).toBeGreaterThan(0);
+
+      const parsedWatch = watchStdout.map((line) =>
+        Schema.decodeUnknownSync(WatchOutputEnvelope)(line),
+      );
+      expect(parsedWatch.every((entry) => entry.runId === runPayload.run.id)).toBe(true);
+      expect(
+        parsedWatch.some((entry) => entry.kind === "event" && entry.event.type === "run:complete"),
+      ).toBe(true);
 
       const listStdout: Array<string> = [];
       const listCode = await runCli(["ls", "--json"], {
@@ -697,22 +620,14 @@ describe("runCli", () => {
       const secondCancel = Schema.decodeUnknownSync(CancelEnvelope)(cancelStdout2[0]);
       expect(secondCancel.runId).toBe(submittedRun.runId);
 
-      const inspectStdout: Array<string> = [];
-      const inspectCode = await runCli(["inspect", submittedRun.runId, "--json"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            inspectStdout.push(line);
-          },
-          stderr: () => undefined,
-        },
-      });
+      const eventsContent = await readFile(submittedRun.paths.eventsFile, "utf-8");
+      const persistedEvents = eventsContent
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { type?: string });
 
-      expect(inspectCode).toBe(0);
-      const inspectedRun = Schema.decodeUnknownSync(InspectRunEnvelope)(inspectStdout[0]);
-      const terminalEvents = inspectedRun.events.filter(
+      const terminalEvents = persistedEvents.filter(
         (event) =>
           event.type === "run:complete" ||
           event.type === "run:failed" ||
@@ -743,8 +658,8 @@ describe("runCli", () => {
     }
   });
 
-  it("watch --raw streams tier-2 passthrough without persistence", async () => {
-    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-watch-raw-"));
+  it("watch --channel io streams io envelopes without persisted event payloads", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-watch-io-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
 
@@ -806,24 +721,32 @@ describe("runCli", () => {
       const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
 
       const watchStdout: Array<string> = [];
-      const watchCode = await runCli(["watch", "--run", submittedRun.runId, "--raw"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            watchStdout.push(line);
+      const watchCode = await runCli(
+        ["watch", "--run", submittedRun.runId, "--channel", "io", "--json"],
+        {
+          cwd: tempDirectory,
+          homeDirectory,
+          pathExists: async () => false,
+          io: {
+            stdout: (line) => {
+              watchStdout.push(line);
+            },
+            stderr: () => undefined,
           },
-          stderr: () => undefined,
         },
-      });
+      );
 
       expect(watchCode).toBe(0);
       expect(watchStdout.length).toBeGreaterThan(0);
 
+      const parsedWatch = watchStdout.map((line) =>
+        Schema.decodeUnknownSync(WatchOutputEnvelope)(line),
+      );
+      expect(parsedWatch.every((entry) => entry.kind === "io")).toBe(true);
+
       const eventsContent = await readFile(submittedRun.paths.eventsFile, "utf-8");
-      for (const rawLine of watchStdout) {
-        expect(eventsContent.includes(rawLine.trim())).toBe(false);
+      for (const line of watchStdout) {
+        expect(eventsContent.includes(line.trim())).toBe(false);
       }
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });

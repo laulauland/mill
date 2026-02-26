@@ -136,14 +136,12 @@ interface MillRunSubmitPayload {
   runId?: string;
 }
 
-interface MillRunInspectPayload {
-  run?: {
-    status?: string;
-  };
-  result?: {
-    status?: string;
-    errorMessage?: string;
-    spawns?: ReadonlyArray<MillSpawnResult>;
+interface MillWatchOutputEnvelope {
+  kind?: string;
+  runId?: string;
+  event?: {
+    type?: string;
+    payload?: Record<string, unknown>;
   };
 }
 
@@ -186,6 +184,30 @@ const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefi
   }
 
   return undefined;
+};
+
+const parseJsonObjectsFromText = (text: string): Array<Record<string, unknown>> =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        return typeof parsed === "object" && parsed !== null
+          ? [parsed as Record<string, unknown>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const readStringField = (record: Record<string, unknown>, key: string): string | undefined => {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
 };
 
 const formatCommand = (command: string, args: ReadonlyArray<string>): string =>
@@ -328,35 +350,65 @@ function writeMillProgram(input: {
 }
 
 const decodeMillResult = (
-  payload: MillRunInspectPayload,
+  payloads: ReadonlyArray<Record<string, unknown>>,
   fallback: { agent: string; modelId: string; prompt: string },
 ): ExecutionResult => {
-  const spawns = payload.result?.spawns;
-  if (!Array.isArray(spawns) || spawns.length === 0) {
-    const failedStatus = payload.result?.status ?? payload.run?.status;
-    const message = payload.result?.errorMessage;
+  const spawnResults: Array<MillSpawnResult> = [];
+  let runFailedMessage: string | undefined;
+
+  for (const payload of payloads) {
+    const envelope = payload as MillWatchOutputEnvelope;
+    if (envelope.kind !== "event") {
+      continue;
+    }
+
+    const event = envelope.event;
+    if (!isRecord(event)) {
+      continue;
+    }
+
+    const eventType = readStringField(event, "type");
+    const eventPayload = event.payload;
+
+    if (eventType === "spawn:complete" && isRecord(eventPayload) && isRecord(eventPayload.result)) {
+      const result = eventPayload.result;
+      spawnResults.push({
+        text: readStringField(result, "text"),
+        sessionRef: readStringField(result, "sessionRef"),
+        agent: readStringField(result, "agent"),
+        model: readStringField(result, "model"),
+        driver: readStringField(result, "driver"),
+        exitCode: typeof result.exitCode === "number" ? result.exitCode : undefined,
+        stopReason: readStringField(result, "stopReason"),
+        errorMessage: readStringField(result, "errorMessage"),
+      });
+      continue;
+    }
+
+    if (eventType === "run:failed" && isRecord(eventPayload)) {
+      runFailedMessage = readStringField(eventPayload, "message");
+    }
+  }
+
+  if (spawnResults.length === 0) {
     throw new MillError({
       code: "RUNTIME",
       message:
-        message && message.length > 0
-          ? `mill run ${failedStatus ?? "unknown"}: ${message}`
+        runFailedMessage && runFailedMessage.length > 0
+          ? `mill run failed: ${runFailedMessage}`
           : "mill run completed without spawn results.",
       recoverable: false,
     });
   }
 
   const selectedSpawn =
-    spawns.find((spawn) => spawn.agent === fallback.agent) ?? spawns[0] ?? ({} as MillSpawnResult);
+    spawnResults.find((spawn) => spawn.agent === fallback.agent) ??
+    spawnResults[0] ??
+    ({} as MillSpawnResult);
 
-  const runStatus = payload.result?.status ?? payload.run?.status;
-  const derivedExitCode =
-    typeof selectedSpawn.exitCode === "number"
-      ? selectedSpawn.exitCode
-      : runStatus === "complete"
-        ? 0
-        : 1;
+  const derivedExitCode = typeof selectedSpawn.exitCode === "number" ? selectedSpawn.exitCode : 0;
 
-  const errorMessage = selectedSpawn.errorMessage ?? payload.result?.errorMessage;
+  const errorMessage = selectedSpawn.errorMessage;
   const stopReason = selectedSpawn.stopReason;
 
   if (derivedExitCode !== 0 || stopReason === "error" || (errorMessage?.length ?? 0) > 0) {
@@ -621,26 +673,34 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     if (terminalStatus === "failed") {
       throw new MillError({
         code: "RUNTIME",
-        message: "Subagent run failed before inspect.",
+        message: "Subagent run failed before watch replay.",
         recoverable: false,
       });
     }
 
-    const inspectArgs = [...input.millArgs, "inspect", submittedRunId, "--json"];
+    const watchArgs = [
+      ...input.millArgs,
+      "watch",
+      "--run",
+      submittedRunId,
+      "--channel",
+      "events",
+      "--json",
+    ];
     if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
-      inspectArgs.push("--runs-dir", input.millRunsDir);
+      watchArgs.push("--runs-dir", input.millRunsDir);
     }
 
-    const inspected = await runCommandCapture({
+    const watched = await runCommandCapture({
       command: input.millCommand,
-      args: inspectArgs,
+      args: watchArgs,
       cwd: input.cwd,
       env: process.env,
       signal: input.signal,
     });
-    appendCommandLog(stdoutPath, input.millCommand, inspectArgs, inspected);
+    appendCommandLog(stdoutPath, input.millCommand, watchArgs, watched);
 
-    if (inspected.aborted || aborted) {
+    if (watched.aborted || aborted) {
       await requestRunCancel();
       throw new MillError({
         code: "CANCELLED",
@@ -649,27 +709,27 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
       });
     }
 
-    if (inspected.code !== 0) {
+    if (watched.code !== 0) {
       throw new MillError({
         code: "RUNTIME",
         message:
-          inspected.combined.trim().length > 0
-            ? `mill inspect failed:\n${inspected.combined.trim()}`
-            : "mill inspect failed.",
+          watched.combined.trim().length > 0
+            ? `mill watch failed:\n${watched.combined.trim()}`
+            : "mill watch failed.",
         recoverable: false,
       });
     }
 
-    const parsed = parseJsonObjectFromText([inspected.stdout, inspected.stderr].join("\n"));
-    if (!parsed) {
+    const parsedEvents = parseJsonObjectsFromText([watched.stdout, watched.stderr].join("\n"));
+    if (parsedEvents.length === 0) {
       throw new MillError({
         code: "RUNTIME",
-        message: "mill inspect output was not valid JSON.",
+        message: "mill watch output did not contain JSON events.",
         recoverable: false,
       });
     }
 
-    const decoded = decodeMillResult(parsed as MillRunInspectPayload, {
+    const decoded = decodeMillResult(parsedEvents, {
       agent: input.agent,
       modelId: input.modelId,
       prompt: input.prompt,

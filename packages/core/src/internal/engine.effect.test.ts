@@ -370,7 +370,7 @@ describe("MillEngine sync lifecycle", () => {
     }
   });
 
-  it("watch and watchRaw surface tier-1 persisted events and tier-2 raw passthrough", async () => {
+  it("watch and watchIo surface tier-1 persisted events and io passthrough", async () => {
     const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-watch-"));
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
@@ -428,9 +428,7 @@ describe("MillEngine sync lifecycle", () => {
         ),
       );
 
-      const watchRawEffect = Effect.scoped(
-        Stream.runCollect(Stream.take(engine.watchRaw(runId), 2)),
-      );
+      const watchIoEffect = Effect.scoped(Stream.runCollect(Stream.take(engine.watchIo(runId), 2)));
 
       const executionEffect = engine.runSync({
         runId,
@@ -446,22 +444,24 @@ describe("MillEngine sync lifecycle", () => {
           ),
       });
 
-      const [tier1EventsChunk, rawEventsChunk] = await runWithBunContext(
+      const [tier1EventsChunk, ioEventsChunk] = await runWithBunContext(
         Effect.map(
-          Effect.all([watchTier1Effect, watchRawEffect, executionEffect], {
+          Effect.all([watchTier1Effect, watchIoEffect, executionEffect], {
             concurrency: "unbounded",
           }),
-          ([tier1Events, rawEvents]) => [tier1Events, rawEvents] as const,
+          ([tier1Events, ioEvents]) => [tier1Events, ioEvents] as const,
         ),
       );
 
       const tier1Events = [...tier1EventsChunk];
-      const rawEvents = [...rawEventsChunk];
+      const ioEvents = [...ioEventsChunk];
 
       expect(tier1Events.some((event) => event.type === "run:start")).toBe(true);
       expect(tier1Events.some((event) => event.type === "run:complete")).toBe(true);
-      expect(rawEvents).toHaveLength(2);
-      expect(rawEvents[0]).toContain("raw:scout");
+      expect(ioEvents).toHaveLength(2);
+      expect(ioEvents[0]?.source).toBe("driver");
+      expect(ioEvents[0]?.stream).toBe("stdout");
+      expect(ioEvents[0]?.line).toContain("raw:scout");
 
       const eventsFile = await readFile(join(runsDirectory, runId, "events.ndjson"), "utf-8");
       expect(eventsFile.includes('"type":"final"')).toBe(false);
