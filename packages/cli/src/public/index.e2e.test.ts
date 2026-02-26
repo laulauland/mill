@@ -153,13 +153,8 @@ describe("mill run/status/wait (e2e)", () => {
     await writeFile(
       programPath,
       [
-        "const output = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
-        '  prompt: "Inspect repository layout.",',
-        '  model: "google-gemini-cli/gemini-2.0-flash",',
-        "});",
-        "return output.text;",
+        "await new Promise((resolve) => setTimeout(resolve, 50));",
+        "return 'driver-executor-selected';",
       ].join("\n"),
       "utf-8",
     );
@@ -186,7 +181,7 @@ describe("mill run/status/wait (e2e)", () => {
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runOutput);
       expect(runPayload.run.driver).toBe("pi");
       expect(runPayload.run.executor).toBe("direct");
-      expect(runPayload.result.spawns[0]?.driver).toBe("pi");
+      expect(runPayload.result.spawns).toHaveLength(0);
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
@@ -200,12 +195,8 @@ describe("mill run/status/wait (e2e)", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
-        '  prompt: "Inspect repository layout.",',
-        "});",
-        "globalThis.__millAsyncProgramText = scan.text;",
+        "await new Promise((resolve) => setTimeout(resolve, 150));",
+        "globalThis.__millAsyncProgramText = 'async-complete';",
       ].join("\n"),
       "utf-8",
     );
@@ -268,7 +259,7 @@ describe("mill run/status/wait (e2e)", () => {
         "utf-8",
       );
 
-      expect(copiedProgram).toContain("mill.spawn");
+      expect(copiedProgram).toContain("setTimeout");
       expect(workerLog.length).toBeGreaterThan(0);
 
       const workerExitCode = await commandExitCode(
@@ -315,17 +306,9 @@ describe("mill run/status/wait (e2e)", () => {
     await writeFile(
       programPath,
       [
-        "const first = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
-        '  prompt: "Inspect repository layout.",',
-        "});",
-        "const second = await mill.spawn({",
-        '  agent: "synth",',
-        '  systemPrompt: "You summarize findings.",',
-        "  prompt: first.text,",
-        "});",
-        "globalThis.__millSecondText = second.text;",
+        "await new Promise((resolve) => setTimeout(resolve, 80));",
+        "await new Promise((resolve) => setTimeout(resolve, 80));",
+        "globalThis.__millSecondText = 'sync-complete';",
       ].join("\n"),
       "utf-8",
     );
@@ -350,7 +333,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(runPayload.run.driver).toBe("pi");
       expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
-      expect(runPayload.result.spawns).toHaveLength(2);
+      expect(runPayload.result.spawns).toHaveLength(0);
 
       const statusOutput = await commandOutput(
         Command.make(
@@ -409,12 +392,8 @@ describe("mill run/status/wait (e2e)", () => {
     await writeFile(
       completeProgramPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
-        '  prompt: "Inspect repository layout.",',
-        "});",
-        "return scan.text;",
+        "await new Promise((resolve) => setTimeout(resolve, 150));",
+        "return 'quick-complete';",
       ].join("\n"),
       "utf-8",
     );

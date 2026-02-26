@@ -47,7 +47,7 @@ This keeps transcripts available for post-hoc debugging and parent-orchestrator 
 
 ## 5) Fast triage checklist for "run stuck in running"
 
-1. `mill inspect <runId> --json`
+1. `mill watch --run <runId> --channel events --json`
    - if you only see `spawn:start` and no `spawn:complete`, the child driver call is still in-flight.
 2. Check process liveness using `worker.pid` + OS process list.
 3. `mill cancel <runId> --json`

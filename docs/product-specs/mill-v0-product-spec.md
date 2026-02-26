@@ -65,9 +65,8 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
 mill run <program.ts> [--json] [--sync] [--runs-dir <path>] [--driver <name>] [--executor <name>] [--meta-json <json>]
 mill status <runId> [--json] [--runs-dir <path>] [--driver <name>]
 mill wait <runId> --timeout <seconds> [--json] [--runs-dir <path>] [--driver <name>]
-mill watch [--run <runId>] [--since-time <iso>] [--json] [--raw] [--runs-dir <path>] [--driver <name>]
+mill watch [--run <runId>] [--since-time <iso>] [--channel events|io|all] [--source driver|program] [--spawn <spawnId>] [--json] [--runs-dir <path>] [--driver <name>]
 mill ls [--json] [--status <status>] [--runs-dir <path>] [--driver <name>]
-mill inspect <runId>[.<spawnId>] [--json] [--session] [--runs-dir <path>] [--driver <name>]
 mill cancel <runId> [--json] [--runs-dir <path>] [--driver <name>]
 mill init [--global]
 ```
@@ -99,7 +98,7 @@ mill program (TS)
       -> driver (generic)
         -> agent process / remote endpoint
 
-engine events -> watch/inspect/tui/automation
+engine events -> watch/tui/automation
 ```
 
 All layers are orthogonal:

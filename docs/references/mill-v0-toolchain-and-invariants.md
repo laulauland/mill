@@ -164,7 +164,7 @@ Practical exception policy:
 3. Generic process driver + one codec (pi or claude)
 4. Engine submit/status/wait/watch/cancel
 5. Worker process + detached `run`
-6. `inspect` and `--session` bridge
+6. `watch` channel finalization + cancellation bridge
 7. Extension hooks
 8. Guardrail toolchain + rules/tests
 

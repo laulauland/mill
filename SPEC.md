@@ -67,11 +67,10 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
 mill run <program.ts> [--json] [--sync] [--driver <name>] [--executor <name>] [--confirm=false]
 mill status <runId> [--json]
 mill wait <runId> --timeout <seconds> [--json]
-mill watch <runId> [--json] [--raw]
+mill watch [--run <runId>] [--channel events|io|all] [--source driver|program] [--spawn <spawnId>] [--json]
 mill ls [--json] [--status <status>]
-mill inspect <runId>[.<spawnId>] [--json] [--session]
 mill cancel <runId> [--json]
-mill init
+mill init [--global]
 ```
 
 Discovery (for humans and agents):
@@ -102,7 +101,7 @@ mill program (TS)
       -> driver (generic)
         -> agent process / remote endpoint
 
-engine events -> watch/inspect/tui/automation
+engine events -> watch/tui/automation
 ```
 
 All layers are orthogonal:
@@ -530,7 +529,7 @@ Encoding/decoding requirements:
 - readers decode with `Schema.decodeUnknown*`
 - unknown schema versions are surfaced as typed decode errors
 
-Tier 1 is written to `events.ndjson` and is the source for `watch`, `inspect`, and extensions.
+Tier 1 is written to `events.ndjson` and is the source for `watch` (events channel), `status`/`wait` terminal checks, and extensions.
 
 ### Tier 1 lifecycle invariants
 
@@ -549,10 +548,10 @@ spawn: pending -> running -> complete|error|cancelled
 Terminal states have no outgoing transitions.
 `mill wait` resolves on first observed terminal event and treats additional terminal events as invariant violations.
 
-### Tier 2 (raw passthrough, ephemeral)
+### Tier 2 (io passthrough, ephemeral)
 
-- full raw bytes/text from driver process or remote stream
-- available live via `watch --raw`
+- line-oriented IO from driver/program streams
+- available live via `watch --channel io` (or merged via `watch --channel all`)
 - not persisted by engine
 
 ---
@@ -687,10 +686,10 @@ Rules:
 
 ## 15) Observers
 
-Observers consume tier-1 stream (and optionally tier-2 live raw stream):
+Observers consume tier-1 stream (and optionally tier-2 live io stream):
 
-- `mill watch`
-- `mill inspect`
+- `mill watch --channel events`
+- `mill watch --channel io|all`
 - future TUI/web UI
 - automation reading NDJSON
 
@@ -698,9 +697,9 @@ Observers are read-only; they do not mutate engine state.
 
 ---
 
-## 16) `inspect --session`
+## 16) Session ownership + pointers
 
-`mill inspect <runId>.<spawnId> --session` resolves the spawn `sessionRef` via the originating driver and opens or prints a pointer to full native session history.
+Spawn `sessionRef` values are emitted in `spawn:complete` events and summarized in `result.json`.
 
 Engine never normalizes full transcript ownership.
 
@@ -913,7 +912,7 @@ Practical exception policy:
 3. Generic process driver + one codec (pi or claude)
 4. Engine submit/status/wait/watch/cancel
 5. Worker process + detached `run`
-6. `inspect` and `--session` bridge
+6. `watch` channel finalization + cancellation bridge
 7. Extension hooks
 8. Guardrail toolchain + rules/tests
 

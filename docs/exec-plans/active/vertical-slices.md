@@ -284,46 +284,43 @@ Lock architecture constraints so future slices cannot regress Effect/boundary sa
 
 ---
 
-## S7 — Final Hardening: inspect/session/cancel/watch Semantics (Dedicated Final Slice)
+## S7 — Final Hardening: watch/cancel/list Semantics (Dedicated Final Slice)
 
 **Goal**
 Complete observer/control semantics for robust long-running orchestration operations.
 
 **Package span**
 
-- core: `watch`, `inspect`, `cancel`, session-ref resolution, interruption-safe cancellation
-- cli: `watch`, `inspect [--session]`, `cancel`, `ls`
-- driver-pi (and optionally others): `sessionRef` opener/locator bridge for `inspect --session`
+- core: `watch` channels (`events` / `io` / `all`), `cancel`, `list`, interruption-safe cancellation
+- cli: `watch`, `cancel`, `ls`
+- pi-mill runtime: completion replay via `watch --channel events`
 
 **Acceptance criteria**
 
-1. **Test intent:** integration + e2e command matrix across inspect/session/cancel/watch with concurrent runs.
-2. `watch --json` emits valid JSONL tier-1 events; `watch --raw` streams tier-2 raw passthrough without persistence.
-3. `inspect <runId>[.<spawnId>] --json` returns decoded persisted data; `--session` resolves driver-owned session pointer.
+1. **Test intent:** integration + e2e command matrix across watch/cancel/list with concurrent runs.
+2. `watch --json` emits valid JSONL envelopes, with `kind: "event"` for tier-1 events and `kind: "io"` for tier-2 stream lines.
+3. `watch --channel io` streams passthrough IO without persisting those lines to `events.ndjson`.
 4. `cancel <runId>` is interruption-safe, idempotent, and no-op for already terminal runs; emits at most one `run:cancelled` terminal event.
 5. `ls`/`status` remain consistent with terminal invariants and persisted snapshots after cancellations/completions.
 
 **Deliverables**
 
-- Core observer stream and inspect/cancel implementations tied to event log + in-memory fanout.
-- CLI command handlers for `watch`, `inspect`, `cancel`, `ls` with strict JSON stdout contract.
-- Driver session bridge interface + driver-pi implementation for session lookup/open.
+- Core observer stream implementations for event and IO channels tied to event log + in-memory fanout.
+- CLI command handlers for `watch`, `cancel`, and `ls` with strict JSON stdout contract.
+- pi-mill completion decoding from `watch --channel events` output.
 
 **Test commands**
 
 - `bun test packages/core/src/internal`
 - `bun test packages/core/src/runtime`
 - `bun test packages/cli/src`
-- `bun test packages/driver-pi/src`
 - `bun test`
 
-**Status (2026-02-23)**
+**Status (2026-02-26)**
 
 - ✅ Added core observer fanout hub (`packages/core/src/internal/observer-hub.effect.ts`) and wired engine tier-1/tier-2 publishing to persisted append + in-memory live subscribers.
-- ✅ Extended `MillEngine` with `watch`, `watchRaw`, `inspect`, `cancel`, and `list` semantics.
+- ✅ Extended `MillEngine` with `watch`, `watchIo`, `cancel`, and `list` semantics.
 - ✅ Hardened append path synchronization against concurrent terminal transitions by rehydrating lifecycle guard state from persisted events before each append.
-- ✅ Implemented `inspect` run/spawn decoded views and session bridge plumbing in `packages/core/src/public/run.api.ts`.
-- ✅ Added driver session bridge contract (`resolveSession`) and implemented pointer resolution for `@mill/driver-pi`.
-- ✅ Added CLI handlers for `watch`, `inspect`, `cancel`, and `ls` with JSON stdout contracts.
+- ✅ Added CLI `watch` channel/source/spawn filters and removed the separate `inspect` command surface.
 - ✅ Fixed async submit detachment stdio to `ignore` so `run --json` remains non-blocking even under captured stdout in e2e contexts.
-- ✅ Added integration/e2e coverage for command matrix behavior across watch/inspect/session/cancel/ls, including concurrent run cancellation invariants.
+- ✅ Added integration/e2e coverage for command matrix behavior across watch/cancel/ls, including concurrent run cancellation invariants.
