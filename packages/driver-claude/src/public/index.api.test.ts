@@ -26,6 +26,8 @@ describe("createClaudeDriverRegistration", () => {
     const models = await Runtime.runPromise(runtime)(driver.codec.modelCatalog);
 
     expect(models).toContain("anthropic/claude-sonnet-4-6");
+    expect(models).toContain("anthropic/claude-opus-4-6");
+    expect(models).toContain("anthropic/claude-haiku-4-5");
   });
 
   it("spawns runtime outputs via generic driver contracts", async () => {

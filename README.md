@@ -87,6 +87,14 @@ Drivers translate `mill.spawn()` into whatever protocol the agent needs. Ships w
 | `@mill/driver-pi`     | Pi driver                                  |
 | `pi-mill`             | Pi extension for mill as execution backend |
 
+Model catalog source by driver:
+
+- `@mill/driver-pi`: reads `~/.pi/agent/settings.json` (`enabledModels`) by default, unless overridden in config.
+- `@mill/driver-claude`: built-in default catalog (`sonnet`, `opus`, `haiku`) unless overridden in config.
+- `@mill/driver-codex`: built-in default catalog (`openai-codex/gpt-5.3-codex`) unless overridden in config.
+
+These driver catalogs flow into CLI help (`mill --help`, `mill <command> --help`) through each driver's `codec.modelCatalog`. In short: driver registration is how model availability is communicated to the CLI/main agent.
+
 ## Internals
 
 Built on [Effect](https://effect.website). Public API is Promise-based (`src/public/**/*.api.ts`). Engine, drivers, and persistence are Effect-first with Schema-validated domain types.

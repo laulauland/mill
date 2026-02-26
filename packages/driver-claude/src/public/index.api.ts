@@ -7,7 +7,11 @@ export interface CreateClaudeDriverRegistrationInput {
   readonly models?: ReadonlyArray<string>;
 }
 
-const DEFAULT_CLAUDE_MODELS = ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6"] as const;
+const DEFAULT_CLAUDE_MODELS = [
+  "anthropic/claude-sonnet-4-6",
+  "anthropic/claude-opus-4-6",
+  "anthropic/claude-haiku-4-5",
+] as const;
 
 const normalizeModelCatalog = (models: ReadonlyArray<string>): ReadonlyArray<string> =>
   Array.from(new Set(models.map((model) => model.trim()).filter((model) => model.length > 0)));
