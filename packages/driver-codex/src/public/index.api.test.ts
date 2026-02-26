@@ -6,9 +6,12 @@ import { createCodexDriverRegistration } from "./index.api";
 const runtime = Runtime.defaultRuntime;
 
 const CODEX_JSON_FIXTURE_SCRIPT =
+  "const args=process.argv.slice(1);" +
+  "const modelIndex=args.indexOf('--model');" +
+  "const selectedModel=modelIndex>=0?args[modelIndex+1]:'missing-model';" +
   "console.log(JSON.stringify({type:'thread.started',thread_id:'codex-thread'}));" +
   "console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'ls -la'}}));" +
-  "console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'done'}}));" +
+  "console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'model:'+selectedModel}}));" +
   "console.log(JSON.stringify({type:'turn.completed'}));";
 
 describe("createCodexDriverRegistration", () => {
@@ -33,7 +36,7 @@ describe("createCodexDriverRegistration", () => {
     const driver = createCodexDriverRegistration({
       process: {
         command: "bun",
-        args: ["-e", CODEX_JSON_FIXTURE_SCRIPT],
+        args: ["-e", CODEX_JSON_FIXTURE_SCRIPT, "--"],
       },
       models: ["openai/gpt-5.3-codex"],
     });
@@ -59,7 +62,8 @@ describe("createCodexDriverRegistration", () => {
 
     expect(output.result.driver).toBe("codex");
     expect(output.result.sessionRef).toBe("codex-thread");
-    expect(output.result.text).toBe("done");
+    expect(output.result.text).toBe("model:gpt-5.3-codex");
     expect(output.events.some((event) => event.type === "tool_call")).toBe(true);
+    expect(output.raw?.length ?? 0).toBeGreaterThan(0);
   });
 });

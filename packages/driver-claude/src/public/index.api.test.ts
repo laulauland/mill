@@ -6,9 +6,12 @@ import { createClaudeDriverRegistration } from "./index.api";
 const runtime = Runtime.defaultRuntime;
 
 const CLAUDE_JSON_FIXTURE_SCRIPT =
+  "const args=process.argv.slice(1);" +
+  "const modelIndex=args.indexOf('--model');" +
+  "const selectedModel=modelIndex>=0?args[modelIndex+1]:'missing-model';" +
   "console.log(JSON.stringify({type:'system',session_id:'claude-session'}));" +
   "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash'},{type:'text',text:'Working...'}]}}));" +
-  "console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done',stop_reason:'stop',session_id:'claude-session'}));";
+  "console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'model:'+selectedModel,stop_reason:'stop',session_id:'claude-session'}));";
 
 describe("createClaudeDriverRegistration", () => {
   it("supports explicit model catalogs", async () => {
@@ -34,7 +37,7 @@ describe("createClaudeDriverRegistration", () => {
     const driver = createClaudeDriverRegistration({
       process: {
         command: "bun",
-        args: ["-e", CLAUDE_JSON_FIXTURE_SCRIPT],
+        args: ["-e", CLAUDE_JSON_FIXTURE_SCRIPT, "--"],
       },
       models: ["anthropic/claude-sonnet-4-6"],
     });
@@ -60,6 +63,8 @@ describe("createClaudeDriverRegistration", () => {
 
     expect(output.result.driver).toBe("claude");
     expect(output.result.sessionRef).toBe("claude-session");
+    expect(output.result.text).toBe("model:claude-sonnet-4-6");
     expect(output.events.some((event) => event.type === "tool_call")).toBe(true);
+    expect(output.raw?.length ?? 0).toBeGreaterThan(0);
   });
 });

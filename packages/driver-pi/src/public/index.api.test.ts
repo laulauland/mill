@@ -13,11 +13,12 @@ const PI_JSON_FIXTURE_SCRIPT =
   "const modelIndex=args.indexOf('--model');" +
   "const model=modelIndex>=0?args[modelIndex+1]:'openai/gpt-5.3-codex';" +
   "const prompt=args[args.length-1]??'';" +
+  "const text='fixture:'+model+':'+prompt;" +
   "console.log(JSON.stringify({type:'session',id:'session-test'}));" +
   "console.log(JSON.stringify({type:'agent_start'}));" +
   "console.log(JSON.stringify({type:'tool_execution_start',toolName:'bash'}));" +
-  "console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'fixture:'+prompt}],model,stopReason:'stop'}}));" +
-  "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'fixture:'+prompt}],model,stopReason:'stop'}]}));";
+  "console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],model,stopReason:'stop'}}));" +
+  "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text}],model,stopReason:'stop'}]}));";
 
 const DUPLICATE_TERMINAL_SCRIPT =
   "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'first'}]}]}));" +
@@ -87,7 +88,7 @@ describe("createPiDriverRegistration", () => {
     const driver = createPiDriverRegistration({
       process: {
         command: "bun",
-        args: ["-e", PI_JSON_FIXTURE_SCRIPT],
+        args: ["-e", PI_JSON_FIXTURE_SCRIPT, "--"],
       },
       models: ["openai/gpt-5.3-codex"],
     });
@@ -117,8 +118,9 @@ describe("createPiDriverRegistration", () => {
     expect(output.result.sessionRef).toBe("/tmp/run_driver_test/sessions/spawn_driver_test.jsonl");
     expect(output.result.agent).toBe("scout");
     expect(output.result.model).toBe("openai/gpt-5.3-codex");
-    expect(output.result.text).toBe("fixture:Say hello");
+    expect(output.result.text).toBe("fixture:openai/gpt-5.3-codex:Say hello");
     expect(output.result.exitCode).toBe(0);
+    expect(output.raw?.length ?? 0).toBeGreaterThan(0);
   });
 
   it("resolves session pointers for inspect --session bridge", async () => {
@@ -154,7 +156,7 @@ describe("createPiDriverRegistration", () => {
     const driver = createPiDriverRegistration({
       process: {
         command: "bun",
-        args: ["-e", DUPLICATE_TERMINAL_SCRIPT],
+        args: ["-e", DUPLICATE_TERMINAL_SCRIPT, "--"],
       },
       models: ["openai/gpt-5.3-codex"],
     });
@@ -187,7 +189,7 @@ describe("createPiDriverRegistration", () => {
     const driver = createPiDriverRegistration({
       process: {
         command: "bun",
-        args: ["-e", ERROR_TERMINAL_SCRIPT],
+        args: ["-e", ERROR_TERMINAL_SCRIPT, "--"],
       },
       models: ["openai/gpt-5.3-codex"],
     });
