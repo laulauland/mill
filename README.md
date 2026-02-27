@@ -17,7 +17,8 @@ Or build from source (requires [Bun](https://bun.sh)):
 ```bash
 git clone https://github.com/laulauland/mill.git && cd mill
 bun install
-bun build --compile packages/cli/src/bin/mill.ts --outfile mill
+VERSION=$(node -p 'require("./packages/cli/package.json").version')
+bun build --compile packages/cli/src/bin/mill.ts --outfile mill --define "__MILL_VERSION__=\"$VERSION\""
 mv mill ~/.local/bin/  # or anywhere on your PATH
 ```
 

@@ -21,7 +21,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - name: Compile binary
-        run: bun build --compile packages/cli/src/bin/mill.ts --outfile mill-bin
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          bun build --compile packages/cli/src/bin/mill.ts --outfile mill-bin --define "__MILL_VERSION__=\"${VERSION}\""
       - name: Package bottle
         run: |
           VERSION=${GITHUB_REF_NAME#v}
@@ -90,7 +92,7 @@ jobs:
 
             def install
               system "bun", "install", "--frozen-lockfile"
-              system "bun", "build", "--compile", "packages/cli/src/bin/mill.ts", "--outfile", "mill"
+              system "bun", "build", "--compile", "packages/cli/src/bin/mill.ts", "--outfile", "mill", "--define", "__MILL_VERSION__=\"#{version}\""
               bin.install "mill"
             end
 

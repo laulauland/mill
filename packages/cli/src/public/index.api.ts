@@ -4,6 +4,7 @@ import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import * as Schema from "@effect/schema/Schema";
 import { Effect, Option, Runtime, Scope } from "effect";
+import { readFileSync } from "node:fs";
 import {
   cancelRun,
   defineConfig,
@@ -42,7 +43,46 @@ interface CliExit {
   readonly code: number;
 }
 
+declare const __MILL_VERSION__: string | undefined;
+
 const runtime = Runtime.defaultRuntime;
+
+const readVersionFromPackageJson = (): string | undefined => {
+  try {
+    const packageJsonPath = new URL("../../package.json", import.meta.url);
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as {
+      readonly version?: unknown;
+    };
+
+    return typeof parsed.version === "string" && parsed.version.length > 0
+      ? parsed.version
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const resolveCliVersion = (): string => {
+  if (typeof __MILL_VERSION__ === "string" && __MILL_VERSION__.length > 0) {
+    return __MILL_VERSION__;
+  }
+
+  const envVersion = process.env.MILL_VERSION ?? process.env.npm_package_version;
+
+  if (typeof envVersion === "string" && envVersion.length > 0) {
+    return envVersion;
+  }
+
+  const packageVersion = readVersionFromPackageJson();
+
+  if (packageVersion !== undefined) {
+    return packageVersion;
+  }
+
+  return "0.0.0";
+};
+
+const CLI_VERSION = resolveCliVersion();
 
 const defaultIo: CliIo = {
   stdout: (line) => {
@@ -765,7 +805,7 @@ const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string 
 };
 
 const buildHelpText = (helpContext: ResolvedHelpContext): string =>
-  `mill - orchestration runtime for AI agents
+  `mill ${CLI_VERSION} - orchestration runtime for AI agents
 
 Usage: mill <command> [options]
 
@@ -944,7 +984,7 @@ export const runCli = async (
   const command = createCli(resolvedOptions, io);
   const run = CliCommand.run(command, {
     name: "mill",
-    version: "0.0.0",
+    version: CLI_VERSION,
     executable: "mill",
   });
 
