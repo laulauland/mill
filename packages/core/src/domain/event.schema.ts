@@ -101,6 +101,36 @@ export const SpawnErrorEvent = Schema.Struct({
 });
 export type SpawnErrorEvent = Schema.Schema.Type<typeof SpawnErrorEvent>;
 
+export const SpawnMessageChunkEvent = Schema.Struct({
+  ...EventEnvelope,
+  type: Schema.Literal("spawn:message_chunk"),
+  payload: Schema.Struct({
+    spawnId: SpawnId,
+    text: Schema.String,
+  }),
+});
+export type SpawnMessageChunkEvent = Schema.Schema.Type<typeof SpawnMessageChunkEvent>;
+
+export const SpawnThoughtChunkEvent = Schema.Struct({
+  ...EventEnvelope,
+  type: Schema.Literal("spawn:thought_chunk"),
+  payload: Schema.Struct({
+    spawnId: SpawnId,
+    text: Schema.String,
+  }),
+});
+export type SpawnThoughtChunkEvent = Schema.Schema.Type<typeof SpawnThoughtChunkEvent>;
+
+export const SpawnPlanEvent = Schema.Struct({
+  ...EventEnvelope,
+  type: Schema.Literal("spawn:plan"),
+  payload: Schema.Struct({
+    spawnId: SpawnId,
+    steps: Schema.Array(Schema.String),
+  }),
+});
+export type SpawnPlanEvent = Schema.Schema.Type<typeof SpawnPlanEvent>;
+
 export const SpawnCompleteEvent = Schema.Struct({
   ...EventEnvelope,
   type: Schema.Literal("spawn:complete"),
@@ -141,6 +171,9 @@ export const MillEvent = Schema.Union(
   SpawnStartEvent,
   SpawnMilestoneEvent,
   SpawnToolCallEvent,
+  SpawnMessageChunkEvent,
+  SpawnThoughtChunkEvent,
+  SpawnPlanEvent,
   SpawnErrorEvent,
   SpawnCompleteEvent,
   SpawnCancelledEvent,

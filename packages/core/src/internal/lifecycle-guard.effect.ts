@@ -44,6 +44,18 @@ const spawnIdForEvent = (event: MillEvent): string | undefined => {
     return event.payload.spawnId;
   }
 
+  if (event.type === "spawn:message_chunk") {
+    return event.payload.spawnId;
+  }
+
+  if (event.type === "spawn:thought_chunk") {
+    return event.payload.spawnId;
+  }
+
+  if (event.type === "spawn:plan") {
+    return event.payload.spawnId;
+  }
+
   if (event.type === "spawn:complete") {
     return event.payload.spawnId;
   }

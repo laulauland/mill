@@ -294,9 +294,7 @@ export function cancelRunByPidFiles(artifactsDir: string): number {
         const isCanonicalRunJson = typeof data?.id === "string" && data.id.length > 0;
         const inferredRunsDir = isCanonicalRunJson ? path.dirname(artifactsDir) : undefined;
         const runsDir =
-          configuredRunsDir && configuredRunsDir.length > 0
-            ? configuredRunsDir
-            : inferredRunsDir;
+          configuredRunsDir && configuredRunsDir.length > 0 ? configuredRunsDir : inferredRunsDir;
 
         if (runsDir && runsDir.length > 0) {
           args.push("--runs-dir", runsDir);

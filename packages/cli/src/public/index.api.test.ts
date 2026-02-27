@@ -535,17 +535,20 @@ describe("runCli", () => {
       expect(submittedRun.runId.length).toBeGreaterThan(0);
 
       const waitStdout: Array<string> = [];
-      const waitCode = await runCliForTest(["wait", submittedRun.runId, "--timeout", "5", "--json"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            waitStdout.push(line);
+      const waitCode = await runCliForTest(
+        ["wait", submittedRun.runId, "--timeout", "5", "--json"],
+        {
+          cwd: tempDirectory,
+          homeDirectory,
+          pathExists: async () => false,
+          io: {
+            stdout: (line) => {
+              waitStdout.push(line);
+            },
+            stderr: () => undefined,
           },
-          stderr: () => undefined,
         },
-      });
+      );
 
       expect(waitCode).toBe(0);
       const waitedRun = Schema.decodeUnknownSync(StatusEnvelope)(waitStdout[0]);
@@ -602,19 +605,22 @@ describe("runCli", () => {
 
       const waitJsonStdout: Array<string> = [];
       const waitJsonStderr: Array<string> = [];
-      const waitJsonCode = await runCliForTest(["wait", runPayload.run.id, "--timeout", "2", "--json"], {
-        cwd: tempDirectory,
-        homeDirectory,
-        pathExists: async () => false,
-        io: {
-          stdout: (line) => {
-            waitJsonStdout.push(line);
-          },
-          stderr: (line) => {
-            waitJsonStderr.push(line);
+      const waitJsonCode = await runCliForTest(
+        ["wait", runPayload.run.id, "--timeout", "2", "--json"],
+        {
+          cwd: tempDirectory,
+          homeDirectory,
+          pathExists: async () => false,
+          io: {
+            stdout: (line) => {
+              waitJsonStdout.push(line);
+            },
+            stderr: (line) => {
+              waitJsonStderr.push(line);
+            },
           },
         },
-      });
+      );
 
       expect(waitJsonCode).toBe(0);
       expect(waitJsonStderr).toHaveLength(0);

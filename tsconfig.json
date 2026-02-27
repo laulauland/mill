@@ -4,6 +4,7 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/cli" },
+    { "path": "./packages/driver-acp" },
     { "path": "./packages/driver-pi" },
     { "path": "./packages/driver-claude" },
     { "path": "./packages/driver-codex" }

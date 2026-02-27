@@ -19,9 +19,11 @@ import {
   watchRun,
   type LaunchWorkerInput,
 } from "@mill/core";
-import { createClaudeDriverRegistration } from "@mill/driver-claude";
-import { createCodexDriverRegistration } from "@mill/driver-codex";
-import { createPiDriverRegistration } from "@mill/driver-pi";
+import {
+  createClaudeAcpDriverRegistration,
+  createCodexAcpDriverRegistration,
+  createPiAcpDriverRegistration,
+} from "@mill/driver-acp";
 
 interface CliIo {
   readonly stdout: (line: string) => void;
@@ -107,9 +109,9 @@ const defaultConfig = defineConfig({
   defaultExecutor: "direct",
   maxRunDepth: 1,
   drivers: {
-    pi: processDriver(createPiDriverRegistration()),
-    claude: processDriver(createClaudeDriverRegistration()),
-    codex: processDriver(createCodexDriverRegistration()),
+    pi: processDriver(createPiAcpDriverRegistration()),
+    claude: processDriver(createClaudeAcpDriverRegistration()),
+    codex: processDriver(createCodexAcpDriverRegistration()),
   },
   executors: {
     direct: createDirectExecutor(),
@@ -160,9 +162,7 @@ const workerPidPath = (runsDirectory: string, runId: string): string =>
 
 const RUN_DEPTH_ENV = "MILL_RUN_DEPTH";
 
-const resolveScriptEntrypointFromArgv = (
-  argv: ReadonlyArray<string>,
-): string | undefined => {
+const resolveScriptEntrypointFromArgv = (argv: ReadonlyArray<string>): string | undefined => {
   const candidate = argv[1];
 
   if (typeof candidate !== "string") {
@@ -329,7 +329,9 @@ const normalizeNonEmptyText = (value: string | undefined): string | undefined =>
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const inferHarnessDriver = (env: Readonly<Record<string, string | undefined>>): string | undefined => {
+const inferHarnessDriver = (
+  env: Readonly<Record<string, string | undefined>>,
+): string | undefined => {
   if (env.CLAUDECODE === "1") {
     return "claude";
   }
@@ -367,7 +369,13 @@ const resolveActiveDriverSelection = (
   const inferred = inferHarnessDriver(env);
 
   const source: ActiveDriverSource | undefined =
-    requested !== undefined ? "flag" : configured !== undefined ? "config" : inferred !== undefined ? "harness" : undefined;
+    requested !== undefined
+      ? "flag"
+      : configured !== undefined
+        ? "config"
+        : inferred !== undefined
+          ? "harness"
+          : undefined;
   const selected = requested ?? configured ?? inferred;
   const available = Object.keys(resolvedConfig.config.drivers).sort((left, right) =>
     left.localeCompare(right),

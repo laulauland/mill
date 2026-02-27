@@ -3,8 +3,11 @@ import {
   makeEventEnvelope,
   type MillEvent,
   type SpawnCompleteEvent,
+  type SpawnMessageChunkEvent,
   type SpawnMilestoneEvent,
+  type SpawnPlanEvent,
   type SpawnStartEvent,
+  type SpawnThoughtChunkEvent,
   type SpawnToolCallEvent,
 } from "../domain/event.schema";
 import {
@@ -515,6 +518,18 @@ const isSpawnEventForSpawn = (event: MillEvent, spawnId: SpawnId): boolean => {
     return event.payload.spawnId === spawnId;
   }
 
+  if (event.type === "spawn:message_chunk") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:thought_chunk") {
+    return event.payload.spawnId === spawnId;
+  }
+
+  if (event.type === "spawn:plan") {
+    return event.payload.spawnId === spawnId;
+  }
+
   if (event.type === "spawn:error") {
     return event.payload.spawnId === spawnId;
   }
@@ -863,6 +878,84 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   (sequence, timestamp) => ({
                     ...makeEventEnvelope(runInput.runId, sequence, timestamp),
                     ...toolCallEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "message_chunk") {
+                const messageChunkEvent: Omit<
+                  SpawnMessageChunkEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:message_chunk",
+                  payload: {
+                    spawnId,
+                    text: driverEvent.text,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...messageChunkEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "thought_chunk") {
+                const thoughtChunkEvent: Omit<
+                  SpawnThoughtChunkEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:thought_chunk",
+                  payload: {
+                    spawnId,
+                    text: driverEvent.text,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...thoughtChunkEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "plan") {
+                const planEvent: Omit<
+                  SpawnPlanEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:plan",
+                  payload: {
+                    spawnId,
+                    steps: driverEvent.steps,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...planEvent,
                   }),
                 );
               }

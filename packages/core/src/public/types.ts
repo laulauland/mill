@@ -36,6 +36,18 @@ export type DriverSpawnEvent =
   | {
       readonly type: "tool_call";
       readonly toolName: string;
+    }
+  | {
+      readonly type: "message_chunk";
+      readonly text: string;
+    }
+  | {
+      readonly type: "thought_chunk";
+      readonly text: string;
+    }
+  | {
+      readonly type: "plan";
+      readonly steps: ReadonlyArray<string>;
     };
 
 export interface DriverSpawnOutput {
