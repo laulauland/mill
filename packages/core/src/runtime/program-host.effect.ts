@@ -48,6 +48,25 @@ const normalizePath = (path: string): string => {
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
 
+const basename = (path: string): string => {
+  const normalized = normalizePath(path);
+  const index = normalized.lastIndexOf("/");
+
+  if (index < 0) {
+    return normalized;
+  }
+
+  return normalized.slice(index + 1);
+};
+
+const isBunExecutable = (path: string): boolean => {
+  const name = basename(path).toLowerCase();
+  return name === "bun" || name.startsWith("bun-") || name.startsWith("bun.");
+};
+
+const resolveProgramHostExecutable = (): string =>
+  isBunExecutable(process.execPath) ? process.execPath : "bun";
+
 const toMessage = (error: unknown): string => {
   if (error instanceof Error) {
     return error.message;
@@ -290,7 +309,8 @@ export const executeProgramInProcessHost = (
           }),
       );
 
-      const baseCommand = Command.make(process.execPath, "run", hostProgramPath).pipe(
+      const programHostExecutable = resolveProgramHostExecutable();
+      const baseCommand = Command.make(programHostExecutable, "run", hostProgramPath).pipe(
         Command.workingDirectory(input.workingDirectory),
         Command.stdin("pipe"),
         Command.stdout("pipe"),
@@ -305,6 +325,7 @@ export const executeProgramInProcessHost = (
         runId: input.runId,
         hostProgramPath,
         workingDirectory: input.workingDirectory,
+        executable: programHostExecutable,
       });
 
       const processHandle = yield* Effect.mapError(
