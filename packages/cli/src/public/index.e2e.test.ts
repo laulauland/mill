@@ -105,11 +105,20 @@ const EventTypeEnvelope = Schema.parseJson(
   }),
 );
 
+const withNeutralRunDepthEnv = (command: Command.Command): Command.Command =>
+  Command.env(command, {
+    MILL_RUN_DEPTH: "",
+  });
+
 const commandOutput = (command: Command.Command): Promise<string> =>
-  Runtime.runPromise(runtime)(Effect.provide(Command.string(command), BunContext.layer));
+  Runtime.runPromise(runtime)(
+    Effect.provide(Command.string(withNeutralRunDepthEnv(command)), BunContext.layer),
+  );
 
 const commandExitCode = (command: Command.Command): Promise<number> =>
-  Runtime.runPromise(runtime)(Effect.provide(Command.exitCode(command), BunContext.layer));
+  Runtime.runPromise(runtime)(
+    Effect.provide(Command.exitCode(withNeutralRunDepthEnv(command)), BunContext.layer),
+  );
 
 describe("mill help (e2e)", () => {
   it("does not expose discovery subcommand", async () => {
@@ -187,6 +196,42 @@ describe("mill run/status/wait (e2e)", () => {
     }
   }, 20_000);
 
+  it("fails when no active driver can be resolved", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-driver-unresolved-e2e-"));
+    const runsDirectory = join(tempDirectory, "runs");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(programPath, "return 'no-driver';\n", "utf-8");
+
+    try {
+      const exitCode = await commandExitCode(
+        Command.env(
+          Command.make(
+            "bun",
+            "run",
+            "packages/cli/src/bin/mill.ts",
+            "run",
+            programPath,
+            "--sync",
+            "--json",
+            "--runs-dir",
+            runsDirectory,
+          ),
+          {
+            CLAUDECODE: "",
+            CODEX_THREAD_ID: "",
+            CODEX_SANDBOX: "",
+            CODEX_SANDBOX_NETWORK_DISABLED: "",
+          },
+        ),
+      );
+
+      expect(exitCode).toBe(1);
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("submits async run by default, then status/wait observes completion", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-async-e2e-"));
     const runsDirectory = join(tempDirectory, "runs");
@@ -210,6 +255,8 @@ describe("mill run/status/wait (e2e)", () => {
           "run",
           programPath,
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -226,6 +273,8 @@ describe("mill run/status/wait (e2e)", () => {
           "status",
           submitPayload.runId,
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -244,6 +293,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--timeout",
           "5",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -272,6 +323,8 @@ describe("mill run/status/wait (e2e)", () => {
           submitPayload.runId,
           "--program",
           join(submitPayload.paths.runDir, "program.ts"),
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -323,6 +376,8 @@ describe("mill run/status/wait (e2e)", () => {
           programPath,
           "--sync",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -343,6 +398,8 @@ describe("mill run/status/wait (e2e)", () => {
           "status",
           runPayload.run.id,
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -362,6 +419,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--timeout",
           "2",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -416,6 +475,8 @@ describe("mill run/status/wait (e2e)", () => {
           "run",
           completeProgramPath,
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -429,6 +490,8 @@ describe("mill run/status/wait (e2e)", () => {
           "run",
           cancelProgramPath,
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -445,6 +508,8 @@ describe("mill run/status/wait (e2e)", () => {
           "cancel",
           cancelRun.runId,
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -464,6 +529,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--timeout",
           "8",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -482,6 +549,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--timeout",
           "8",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -501,6 +570,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--channel",
           "all",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -533,6 +604,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--channel",
           "events",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -557,6 +630,8 @@ describe("mill run/status/wait (e2e)", () => {
           "packages/cli/src/bin/mill.ts",
           "ls",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),
@@ -632,6 +707,8 @@ describe("mill run/status/wait (e2e)", () => {
           "--timeout",
           "1",
           "--json",
+          "--driver",
+          "pi",
           "--runs-dir",
           runsDirectory,
         ),

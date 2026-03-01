@@ -36,6 +36,7 @@ interface RunCliOptions {
   readonly loadConfigModule?: (path: string) => Promise<unknown>;
   readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
   readonly io?: CliIo;
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 interface CliExit {
@@ -102,9 +103,8 @@ const createDirectExecutor = () => ({
 });
 
 const defaultConfig = defineConfig({
-  defaultDriver: "pi",
+  defaultDriver: "",
   defaultExecutor: "direct",
-  defaultModel: "openai-codex/gpt-5.3-codex",
   maxRunDepth: 1,
   drivers: {
     pi: processDriver(createPiDriverRegistration()),
@@ -238,7 +238,10 @@ const parseMetadataJson = (raw: string): Readonly<Record<string, string>> | unde
 
 const toCliEffect = (program: Promise<number>) =>
   Effect.flatMap(
-    Effect.promise(() => program),
+    Effect.tryPromise({
+      try: () => program,
+      catch: (error) => error,
+    }),
     (code) =>
       code === 0
         ? Effect.void
@@ -254,6 +257,111 @@ const formatUnknownError = (error: unknown): string => {
   }
 
   return String(error);
+};
+
+type ActiveDriverSource = "flag" | "config" | "harness";
+
+interface ActiveDriverResolution {
+  readonly name: string;
+  readonly source: ActiveDriverSource;
+  readonly resolvedConfig: Awaited<ReturnType<typeof resolveConfig>>;
+}
+
+const normalizeNonEmptyText = (value: string | undefined): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const inferHarnessDriver = (env: Readonly<Record<string, string | undefined>>): string | undefined => {
+  if (env.CLAUDECODE === "1") {
+    return "claude";
+  }
+
+  if (
+    normalizeNonEmptyText(env.CODEX_THREAD_ID) !== undefined ||
+    normalizeNonEmptyText(env.CODEX_SANDBOX) !== undefined ||
+    normalizeNonEmptyText(env.CODEX_SANDBOX_NETWORK_DISABLED) !== undefined
+  ) {
+    return "codex";
+  }
+
+  return undefined;
+};
+
+const sourceLabel = (source: ActiveDriverSource): string => {
+  if (source === "flag") {
+    return "--driver";
+  }
+
+  if (source === "config") {
+    return "mill.config.ts defaultDriver";
+  }
+
+  return "harness inference";
+};
+
+const resolveActiveDriverSelection = (
+  requestedDriverName: string | undefined,
+  resolvedConfig: Awaited<ReturnType<typeof resolveConfig>>,
+  env: Readonly<Record<string, string | undefined>>,
+): Omit<ActiveDriverResolution, "resolvedConfig"> => {
+  const requested = normalizeNonEmptyText(requestedDriverName);
+  const configured = normalizeNonEmptyText(resolvedConfig.config.defaultDriver);
+  const inferred = inferHarnessDriver(env);
+
+  const source: ActiveDriverSource | undefined =
+    requested !== undefined ? "flag" : configured !== undefined ? "config" : inferred !== undefined ? "harness" : undefined;
+  const selected = requested ?? configured ?? inferred;
+  const available = Object.keys(resolvedConfig.config.drivers).sort((left, right) =>
+    left.localeCompare(right),
+  );
+
+  if (selected === undefined || source === undefined) {
+    throw new Error(
+      "Unable to resolve active driver. Provide --driver <name>, set defaultDriver in mill.config.ts, or run from a supported harness (CLAUDECODE=1 => claude, CODEX_THREAD_ID/CODEX_SANDBOX/CODEX_SANDBOX_NETWORK_DISABLED => codex).",
+    );
+  }
+
+  if (!available.includes(selected)) {
+    const renderedAvailable = available.length > 0 ? available.join(", ") : "(none)";
+
+    throw new Error(
+      `Resolved active driver '${selected}' from ${sourceLabel(source)} is unavailable. Available drivers: ${renderedAvailable}.`,
+    );
+  }
+
+  return {
+    name: selected,
+    source,
+  };
+};
+
+const resolveActiveDriver = async (
+  options: RunCliOptions,
+  requestedDriverName: string | undefined,
+): Promise<ActiveDriverResolution> => {
+  const resolvedConfig = await resolveConfig({
+    defaults: defaultConfig,
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    pathExists: options.pathExists,
+    loadConfigModule: options.loadConfigModule,
+  });
+
+  const selection = resolveActiveDriverSelection(
+    requestedDriverName,
+    resolvedConfig,
+    options.env ?? process.env,
+  );
+
+  return {
+    ...selection,
+    resolvedConfig,
+  };
 };
 
 interface RunCommandInput {
@@ -283,13 +391,15 @@ const runCommand = async (
     }
   }
 
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+
   const runInput = {
     defaults: defaultConfig,
     programPath: command.program,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
+    driverName: activeDriver.name,
     executorName: fromOption(command.executor),
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
@@ -340,6 +450,8 @@ const workerCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+
   const output = await runWorker({
     defaults: defaultConfig,
     runId: command.runId,
@@ -347,7 +459,7 @@ const workerCommand = async (
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
+    driverName: activeDriver.name,
     executorName: fromOption(command.executor),
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
@@ -362,8 +474,7 @@ const workerCommand = async (
 
 const INIT_CONFIG_TEMPLATE = [
   "export default {",
-  "  // Optional: override model/driver/executor defaults.",
-  '  // defaultModel: "openai-codex/gpt-5.3-codex",',
+  "  // Optional: override driver/executor defaults.",
   "  // maxRunDepth: 1, // recursion guard for nested `mill run`",
   "  authoring: {",
   '    instructions: "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation). Prefer codex for synthesis, cerebras for fast retrieval.",',
@@ -417,13 +528,15 @@ const statusCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+
   const output = await getRunStatus({
     defaults: defaultConfig,
     runId: command.runId,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
+    driverName: activeDriver.name,
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
   });
@@ -456,6 +569,7 @@ const waitCommand = async (
   }
 
   const timeoutSeconds = command.timeout;
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   const [waitResult] = await Promise.allSettled([
     waitForRun({
@@ -465,7 +579,7 @@ const waitCommand = async (
       cwd: options.cwd,
       homeDirectory: options.homeDirectory,
       runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-      driverName: fromOption(command.driver),
+      driverName: activeDriver.name,
       pathExists: options.pathExists,
       loadConfigModule: options.loadConfigModule,
     }),
@@ -551,6 +665,8 @@ const watchCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+
   await watchRun({
     defaults: defaultConfig,
     runId: fromOption(command.run),
@@ -561,7 +677,7 @@ const watchCommand = async (
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
+    driverName: activeDriver.name,
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
     onEvent: (line) => {
@@ -584,13 +700,15 @@ const cancelCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+
   const cancelled = await cancelRun({
     defaults: defaultConfig,
     runId: command.runId,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
+    driverName: activeDriver.name,
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
   });
@@ -619,13 +737,15 @@ const lsCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
+  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+
   const runs = await listRuns({
     defaults: defaultConfig,
     status: fromOption(command.status),
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: fromOption(command.driver),
+    driverName: activeDriver.name,
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
   });
@@ -771,7 +891,7 @@ type ResolvedAuthoringHelp =
 
 type ResolvedModelCatalogHelp =
   | { readonly source: "resolved"; readonly entries: ReadonlyArray<DriverModelCatalogEntry> }
-  | { readonly source: "unavailable" };
+  | { readonly source: "unavailable"; readonly message: string };
 
 interface ResolvedHelpContext {
   readonly authoring: ResolvedAuthoringHelp;
@@ -785,7 +905,7 @@ const renderAuthoringHelp = (authoringHelp: ResolvedAuthoringHelp): string =>
 
 const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string => {
   if (modelCatalog.source === "unavailable") {
-    return "Models:\n  (unavailable: failed to resolve config or driver catalogs)";
+    return `Models:\n  (unavailable: ${modelCatalog.message})`;
   }
 
   if (modelCatalog.entries.length === 0) {
@@ -829,17 +949,19 @@ Examples:
       agent: "scout",
       systemPrompt: "You are a code risk analyst.",
       prompt: "Review src/auth and summarize top security risks.",
+      model: "openai-codex/gpt-5.3-codex",
     });
     const plan = await mill.spawn({
       agent: "planner",
       systemPrompt: "You turn findings into an execution-ready plan.",
       prompt: \`Create remediation steps from:\\n\\n\${scan.text}\`,
+      model: "anthropic/claude-sonnet-4-6",
     });
 
   Parallel fan-out:
     const [security, perf] = await Promise.all([
-      mill.spawn({ agent: "security", systemPrompt: "...", prompt: "Review src/auth/" }),
-      mill.spawn({ agent: "perf", systemPrompt: "...", prompt: "Profile src/api/" }),
+      mill.spawn({ agent: "security", systemPrompt: "...", prompt: "Review src/auth/", model: "anthropic/claude-sonnet-4-6" }),
+      mill.spawn({ agent: "perf", systemPrompt: "...", prompt: "Profile src/api/", model: "cerebras/zai-glm-4.7" }),
     ]);
 
 ${renderAuthoringHelp(helpContext.authoring)}
@@ -902,6 +1024,10 @@ const resolveHelpContextForHelp = async (
   options: RunCliOptions,
   selectedDriverName?: string,
 ): Promise<ResolvedHelpContext> => {
+  let authoring: ResolvedAuthoringHelp = {
+    source: "static",
+  };
+
   try {
     const resolvedConfig = await resolveConfig({
       defaults: defaultConfig,
@@ -915,49 +1041,54 @@ const resolveHelpContextForHelp = async (
     const hasAuthoringOverride =
       resolvedConfig.source !== "defaults" && instructions !== defaultConfig.authoring.instructions;
 
-    const driverEntriesUnsorted = await Runtime.runPromise(runtime)(
-      Effect.forEach(Object.entries(resolvedConfig.config.drivers), ([driverName, registration]) =>
-        Effect.map(registration.codec.modelCatalog, (models) => ({
-          driverName,
-          modelFormat: registration.modelFormat,
-          models: Array.from(new Set(models)),
-        })),
-      ),
-    );
+    authoring = hasAuthoringOverride
+      ? {
+          source: "config",
+          instructions,
+        }
+      : {
+          source: "static",
+        };
 
-    const driverEntries = [...driverEntriesUnsorted].sort((left, right) =>
-      left.driverName.localeCompare(right.driverName),
+    const activeDriver = resolveActiveDriverSelection(
+      selectedDriverName,
+      resolvedConfig,
+      options.env ?? process.env,
     );
+    const registration = resolvedConfig.config.drivers[activeDriver.name];
 
-    const preferredDriver = selectedDriverName ?? resolvedConfig.config.defaultDriver;
-    const selectedDriverEntry = driverEntries.find((entry) => entry.driverName === preferredDriver);
+    if (registration === undefined) {
+      throw new Error(
+        `Resolved active driver '${activeDriver.name}' from ${sourceLabel(activeDriver.source)} is unavailable.`,
+      );
+    }
+
+    const models = await Runtime.runPromise(runtime)(
+      Effect.map(registration.codec.modelCatalog, (catalog) => Array.from(new Set(catalog))),
+    );
 
     return {
-      authoring: hasAuthoringOverride
-        ? {
-            source: "config",
-            instructions,
-          }
-        : {
-            source: "static",
-          },
+      authoring,
       modelCatalog: {
         source: "resolved",
-        entries: selectedDriverEntry === undefined ? driverEntries : [selectedDriverEntry],
+        entries: [
+          {
+            driverName: activeDriver.name,
+            modelFormat: registration.modelFormat,
+            models,
+          },
+        ],
       },
     };
-  } catch {
-    // fall through to static authoring + unavailable model catalogs
+  } catch (error) {
+    return {
+      authoring,
+      modelCatalog: {
+        source: "unavailable",
+        message: formatUnknownError(error),
+      },
+    };
   }
-
-  return {
-    authoring: {
-      source: "static",
-    },
-    modelCatalog: {
-      source: "unavailable",
-    },
-  };
 };
 
 export const runCli = async (

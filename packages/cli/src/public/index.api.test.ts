@@ -5,6 +5,32 @@ import { join } from "node:path";
 import * as Schema from "@effect/schema/Schema";
 import { runCli } from "./index.api";
 
+const TEST_HARNESS_ENV = {
+  CODEX_THREAD_ID: "test-thread-id",
+} as const;
+
+const runCliForTest = async (
+  argv: ReadonlyArray<string>,
+  options?: Parameters<typeof runCli>[1],
+): Promise<number> => {
+  const previousDepth = process.env.MILL_RUN_DEPTH;
+
+  delete process.env.MILL_RUN_DEPTH;
+
+  try {
+    return await runCli(argv, {
+      env: TEST_HARNESS_ENV,
+      ...(options ?? {}),
+    });
+  } finally {
+    if (previousDepth === undefined) {
+      delete process.env.MILL_RUN_DEPTH;
+    } else {
+      process.env.MILL_RUN_DEPTH = previousDepth;
+    }
+  }
+};
+
 const RunSyncEnvelope = Schema.parseJson(
   Schema.Struct({
     run: Schema.Struct({
@@ -120,7 +146,7 @@ describe("runCli", () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli(["discovery", "--json"], {
+    const code = await runCliForTest(["discovery", "--json"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async () => false,
@@ -151,6 +177,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "globalThis.__millLastText = scan.text;",
       ].join("\n"),
@@ -161,7 +188,7 @@ describe("runCli", () => {
     const runStderr: Array<string> = [];
 
     try {
-      const runCode = await runCli(["run", programPath, "--sync", "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--sync", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -181,7 +208,7 @@ describe("runCli", () => {
 
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(runPayload.run.status).toBe("complete");
-      expect(runPayload.run.driver).toBe("pi");
+      expect(runPayload.run.driver).toBe("codex");
       expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
       expect(runPayload.result.spawns).toHaveLength(1);
@@ -189,7 +216,7 @@ describe("runCli", () => {
       const statusStdout: Array<string> = [];
       const statusStderr: Array<string> = [];
 
-      const statusCode = await runCli(["status", runPayload.run.id, "--json"], {
+      const statusCode = await runCliForTest(["status", runPayload.run.id, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -210,7 +237,7 @@ describe("runCli", () => {
       const statusPayload = Schema.decodeUnknownSync(StatusEnvelope)(statusStdout[0]);
       expect(statusPayload.id).toBe(runPayload.run.id);
       expect(statusPayload.status).toBe("complete");
-      expect(statusPayload.driver).toBe("pi");
+      expect(statusPayload.driver).toBe("codex");
       expect(statusPayload.executor).toBe("direct");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -229,6 +256,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "return scan.text;",
       ].join("\n"),
@@ -237,7 +265,7 @@ describe("runCli", () => {
 
     try {
       const runStdout: Array<string> = [];
-      const runCode = await runCli(
+      const runCode = await runCliForTest(
         ["run", programPath, "--sync", "--json", "--driver", "pi", "--executor", "direct"],
         {
           cwd: tempDirectory,
@@ -247,7 +275,6 @@ describe("runCli", () => {
             default: {
               defaultDriver: "claude",
               defaultExecutor: "direct",
-              defaultModel: "google-gemini-cli/gemini-2.0-flash",
             },
           }),
           io: {
@@ -282,6 +309,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "return scan.text;",
       ].join("\n"),
@@ -290,7 +318,7 @@ describe("runCli", () => {
 
     try {
       const runStdout: Array<string> = [];
-      const runCode = await runCli(["run", programPath, "--sync", "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--sync", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async (path) => path === join(tempDirectory, "mill.config.ts"),
@@ -319,6 +347,149 @@ describe("runCli", () => {
     }
   }, 15_000);
 
+  it("prefers Claude harness inference over Codex markers when both are present", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-harness-priority-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runStdout: Array<string> = [];
+      const runCode = await runCliForTest(["run", programPath, "--sync", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        env: {
+          CLAUDECODE: "1",
+          CODEX_THREAD_ID: "test-thread-id",
+        },
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: () => undefined,
+        },
+      });
+
+      expect(runCode).toBe(0);
+      const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
+      expect(payload.run.driver).toBe("claude");
+      expect(payload.result.spawns[0]?.driver).toBe("claude");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("fails with a helpful error when no active driver can be resolved", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-driver-missing-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const stdout: Array<string> = [];
+      const stderr: Array<string> = [];
+
+      const code = await runCliForTest(["run", programPath, "--sync", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        env: {},
+        io: {
+          stdout: (line) => {
+            stdout.push(line);
+          },
+          stderr: (line) => {
+            stderr.push(line);
+          },
+        },
+      });
+
+      expect(code).toBe(1);
+      expect(stdout).toHaveLength(0);
+      expect(stderr.join("\n")).toContain("Unable to resolve active driver");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when configured defaultDriver is unavailable", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-driver-invalid-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const scan = await mill.spawn({",
+        '  agent: "scout",',
+        '  systemPrompt: "You are concise.",',
+        '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
+        "});",
+        "return scan.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const stdout: Array<string> = [];
+      const stderr: Array<string> = [];
+
+      const code = await runCliForTest(["run", programPath, "--sync", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async (path) => path === join(tempDirectory, "mill.config.ts"),
+        loadConfigModule: async () => ({
+          default: {
+            defaultDriver: "missing-driver",
+          },
+        }),
+        io: {
+          stdout: (line) => {
+            stdout.push(line);
+          },
+          stderr: (line) => {
+            stderr.push(line);
+          },
+        },
+      });
+
+      expect(code).toBe(1);
+      expect(stdout).toHaveLength(0);
+      expect(stderr.join("\n")).toContain("Resolved active driver 'missing-driver'");
+      expect(stderr.join("\n")).toContain("Available drivers: claude, codex, pi");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("submits run asynchronously by default and writes worker artifacts", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-async-run-"));
     const homeDirectory = join(tempDirectory, "home");
@@ -331,6 +502,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "globalThis.__millAsyncText = scan.text;",
       ].join("\n"),
@@ -341,7 +513,7 @@ describe("runCli", () => {
       const runStdout: Array<string> = [];
       const runStderr: Array<string> = [];
 
-      const runCode = await runCli(["run", programPath, "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -363,7 +535,7 @@ describe("runCli", () => {
       expect(submittedRun.runId.length).toBeGreaterThan(0);
 
       const waitStdout: Array<string> = [];
-      const waitCode = await runCli(["wait", submittedRun.runId, "--timeout", "5", "--json"], {
+      const waitCode = await runCliForTest(["wait", submittedRun.runId, "--timeout", "5", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -404,6 +576,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "globalThis.__millWaitText = scan.text;",
       ].join("\n"),
@@ -412,7 +585,7 @@ describe("runCli", () => {
 
     try {
       const runStdout: Array<string> = [];
-      const runCode = await runCli(["run", programPath, "--sync", "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--sync", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -429,7 +602,7 @@ describe("runCli", () => {
 
       const waitJsonStdout: Array<string> = [];
       const waitJsonStderr: Array<string> = [];
-      const waitJsonCode = await runCli(["wait", runPayload.run.id, "--timeout", "2", "--json"], {
+      const waitJsonCode = await runCliForTest(["wait", runPayload.run.id, "--timeout", "2", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -451,7 +624,7 @@ describe("runCli", () => {
 
       const waitHumanStdout: Array<string> = [];
       const waitHumanStderr: Array<string> = [];
-      const waitHumanCode = await runCli(["wait", runPayload.run.id, "--timeout", "2"], {
+      const waitHumanCode = await runCliForTest(["wait", runPayload.run.id, "--timeout", "2"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -486,6 +659,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "return scan.text;",
       ].join("\n"),
@@ -494,7 +668,7 @@ describe("runCli", () => {
 
     try {
       const runStdout: Array<string> = [];
-      const runCode = await runCli(["run", programPath, "--sync", "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--sync", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -510,7 +684,7 @@ describe("runCli", () => {
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
 
       const watchStdout: Array<string> = [];
-      const watchCode = await runCli(
+      const watchCode = await runCliForTest(
         ["watch", "--run", runPayload.run.id, "--channel", "all", "--json"],
         {
           cwd: tempDirectory,
@@ -537,7 +711,7 @@ describe("runCli", () => {
       ).toBe(true);
 
       const listStdout: Array<string> = [];
-      const listCode = await runCli(["ls", "--json"], {
+      const listCode = await runCliForTest(["ls", "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -570,7 +744,7 @@ describe("runCli", () => {
 
     try {
       const runStdout: Array<string> = [];
-      const runCode = await runCli(["run", programPath, "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -586,7 +760,7 @@ describe("runCli", () => {
       const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
 
       const cancelStdout1: Array<string> = [];
-      const cancelCode1 = await runCli(["cancel", submittedRun.runId, "--json"], {
+      const cancelCode1 = await runCliForTest(["cancel", submittedRun.runId, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -604,7 +778,7 @@ describe("runCli", () => {
       expect(firstCancel.status).toBe("cancelled");
 
       const cancelStdout2: Array<string> = [];
-      const cancelCode2 = await runCli(["cancel", submittedRun.runId, "--json"], {
+      const cancelCode2 = await runCliForTest(["cancel", submittedRun.runId, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -638,7 +812,7 @@ describe("runCli", () => {
       expect(terminalEvents[0]?.type).toBe("run:cancelled");
 
       const statusAfterCancelStdout: Array<string> = [];
-      const statusAfterCancelCode = await runCli(["status", submittedRun.runId, "--json"], {
+      const statusAfterCancelCode = await runCliForTest(["status", submittedRun.runId, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -670,6 +844,7 @@ describe("runCli", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         '  prompt: "Say hello",',
+        '  model: "openai-codex/gpt-5.3-codex",',
         "});",
         "return scan.text;",
       ].join("\n"),
@@ -678,7 +853,7 @@ describe("runCli", () => {
 
     try {
       const runStdout: Array<string> = [];
-      const runCode = await runCli(["run", programPath, "--json"], {
+      const runCode = await runCliForTest(["run", programPath, "--json"], {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
@@ -698,7 +873,7 @@ describe("runCli", () => {
           ];
 
           setTimeout(() => {
-            void runCli(workerArgs, {
+            void runCliForTest(workerArgs, {
               cwd: input.cwd,
               homeDirectory,
               pathExists: async () => false,
@@ -721,7 +896,7 @@ describe("runCli", () => {
       const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(runStdout[0]);
 
       const watchStdout: Array<string> = [];
-      const watchCode = await runCli(
+      const watchCode = await runCliForTest(
         ["watch", "--run", submittedRun.runId, "--channel", "io", "--json"],
         {
           cwd: tempDirectory,
@@ -759,7 +934,7 @@ describe("runCli", () => {
     const stderr: Array<string> = [];
 
     try {
-      const code = await runCli(["init"], {
+      const code = await runCliForTest(["init"], {
         cwd: tempDirectory,
         homeDirectory: join(tempDirectory, "home"),
         io: {
@@ -794,7 +969,7 @@ describe("runCli", () => {
     try {
       await mkdir(homeDirectory, { recursive: true });
 
-      const code = await runCli(["init", "--global"], {
+      const code = await runCliForTest(["init", "--global"], {
         cwd: tempDirectory,
         homeDirectory,
         io: {
@@ -820,11 +995,36 @@ describe("runCli", () => {
     }
   });
 
+  it("shows driver resolution guidance in root help when active driver is unresolved", async () => {
+    const stdout: Array<string> = [];
+    const stderr: Array<string> = [];
+
+    const code = await runCliForTest([], {
+      cwd: "/workspace/repo",
+      homeDirectory: "/Users/tester",
+      pathExists: async () => false,
+      env: {},
+      io: {
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toHaveLength(0);
+    expect(stdout[0]).toContain("Models:");
+    expect(stdout[0]).toContain("unavailable: Unable to resolve active driver");
+  });
+
   it("uses config authoring instructions in root help when configured", async () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli([], {
+    const code = await runCliForTest([], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
@@ -848,8 +1048,8 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
     expect(stdout[0]).toContain("Models:");
-    expect(stdout[0]).toContain("pi (provider/model-id):");
-    expect(stdout[0]).not.toContain("codex (provider/model-id):");
+    expect(stdout[0]).toContain("codex (provider/model-id):");
+    expect(stdout[0]).not.toContain("pi (provider/model-id):");
     expect(stdout[0]).toContain("Authoring:\n  CUSTOM_AUTHORING_INSTRUCTIONS");
     expect(stdout[0]).not.toContain("systemPrompt = WHO the agent is");
   });
@@ -858,7 +1058,7 @@ describe("runCli", () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli([], {
+    const code = await runCliForTest([], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
@@ -891,7 +1091,7 @@ describe("runCli", () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli(["run", "--help"], {
+    const code = await runCliForTest(["run", "--help"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
@@ -918,8 +1118,8 @@ describe("runCli", () => {
       "Authoring (from config): CUSTOM_AUTHORING_IN_COMMAND_HELP",
     );
     expect(stdout.join("\n")).toContain("Models:");
-    expect(stdout.join("\n")).toContain("pi (provider/model-id):");
-    expect(stdout.join("\n")).not.toContain("codex (provider/model-id):");
+    expect(stdout.join("\n")).toContain("codex (provider/model-id):");
+    expect(stdout.join("\n")).not.toContain("pi (provider/model-id):");
     expect(stdout.join("\n")).not.toContain("systemPrompt = WHO the agent is");
   });
 
@@ -927,7 +1127,7 @@ describe("runCli", () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli(["run", "--help", "--driver", "codex"], {
+    const code = await runCliForTest(["run", "--help", "--driver", "codex"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async () => false,
@@ -952,7 +1152,7 @@ describe("runCli", () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCli(["run", "--help"], {
+    const code = await runCliForTest(["run", "--help"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async (path) => path === "/Users/tester/.mill/config.ts",
@@ -1032,7 +1232,7 @@ describe("runCli", () => {
       const jsonStdout: Array<string> = [];
       const jsonStderr: Array<string> = [];
 
-      const jsonCode = await runCli(
+      const jsonCode = await runCliForTest(
         ["wait", runId, "--timeout", "1", "--json", "--runs-dir", runsDirectory],
         {
           cwd: tempDirectory,
@@ -1058,7 +1258,7 @@ describe("runCli", () => {
       const humanStdout: Array<string> = [];
       const humanStderr: Array<string> = [];
 
-      const humanCode = await runCli(
+      const humanCode = await runCliForTest(
         ["wait", runId, "--timeout", "1", "--runs-dir", runsDirectory],
         {
           cwd: tempDirectory,
