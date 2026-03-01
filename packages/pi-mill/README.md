@@ -20,8 +20,8 @@ pi install /path/to/mill/packages/pi-mill
 
 ## Prerequisites
 
-1. `mill` must be on your `PATH` — see [install instructions](https://github.com/laulauland/mill#install).
-2. A `mill.config.ts` with at least one driver/executor configured (`mill init` to scaffold one).
+1. A `mill.config.ts` with at least one driver/executor configured (`mill init` to scaffold one).
+2. If no bundled CLI is available, `mill` must be on your `PATH` — see [install instructions](https://github.com/laulauland/mill#install).
 
 ## How it works
 
@@ -95,7 +95,7 @@ export const config = {
 | Option        | Description                                                                                                           |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `maxDepth`    | Subagent nesting limit. `1` = agents can spawn subagents, but those subagents cannot spawn their own. `0` = disabled. |
-| `millCommand` | Executable name or path for mill.                                                                                     |
+| `millCommand` | Executable name or path for mill. If set to `"mill"` (default), pi-mill prefers a bundled CLI when present.           |
 | `millArgs`    | Extra args prepended to every mill invocation.                                                                        |
 | `millRunsDir` | Override for `--runs-dir`.                                                                                            |
 | `prompt`      | Additional guidance appended to the tool description (model selection hints, project conventions, etc).               |

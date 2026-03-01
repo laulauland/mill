@@ -218,7 +218,7 @@ function loadHistoricalRuns(ctx: ExtensionContext, registry: RunRegistry): void 
 export const config: ExtensionConfig = {
   /** Maximum nesting depth for subagent spawning. 1 = orchestrator can spawn subagents, but those subagents cannot spawn their own. 0 = no subagents at all. */
   maxDepth: 1,
-  /** mill executable path/name. */
+  /** mill executable path/name. "mill" (default) prefers bundled CLI when available. */
   millCommand: "mill",
   /** Optional static args prepended to every mill invocation. */
   millArgs: [],

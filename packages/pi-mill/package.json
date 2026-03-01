@@ -21,6 +21,7 @@
   "files": [
     "*.ts",
     ".pi-skills",
+    ".vendor",
     "executors",
     "package.json",
     "README.md",
@@ -28,11 +29,11 @@
   ],
   "type": "module",
   "scripts": {
-    "clean": "rm -rf .pi-skills",
+    "clean": "rm -rf .pi-skills .vendor",
     "build": "echo 'nothing to build'",
     "check": "echo 'nothing to check'",
     "migrate:runs": "node ./scripts/migrate-factory-to-mill.mjs",
-    "prepack": "node ./scripts/sync-skills.mjs"
+    "prepack": "node ./scripts/prepack.mjs"
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",

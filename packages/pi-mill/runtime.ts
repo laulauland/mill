@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { MillError } from "./errors.js";
 import type { ObservabilityStore } from "./observability.js";
@@ -791,6 +792,48 @@ function validateModelSelector(model: string, agent: string): string {
   return model;
 }
 
+function resolveBundledMillCliPath(): string | undefined {
+  const currentFile = fileURLToPath(import.meta.url);
+  const extensionDir = path.dirname(currentFile);
+  const bundledCliPath = path.join(extensionDir, ".vendor", "mill.mjs");
+  return fs.existsSync(bundledCliPath) ? bundledCliPath : undefined;
+}
+
+function resolveMillCommand(options?: { millCommand?: string; millArgs?: string[] }): {
+  millCommand: string;
+  millArgs: string[];
+} {
+  const configuredCommand = options?.millCommand?.trim() || process.env.PI_FACTORY_MILL_CMD?.trim();
+  const configuredArgs = options?.millArgs ?? [];
+  const bundledCliPath = resolveBundledMillCliPath();
+
+  if (configuredCommand && configuredCommand.length > 0 && configuredCommand !== "mill") {
+    return {
+      millCommand: configuredCommand,
+      millArgs: configuredArgs,
+    };
+  }
+
+  if (bundledCliPath) {
+    return {
+      millCommand: process.execPath,
+      millArgs: [bundledCliPath, ...configuredArgs],
+    };
+  }
+
+  if (configuredCommand && configuredCommand.length > 0) {
+    return {
+      millCommand: configuredCommand,
+      millArgs: configuredArgs,
+    };
+  }
+
+  return {
+    millCommand: "mill",
+    millArgs: configuredArgs,
+  };
+}
+
 export function createMillRuntime(
   ctx: ExtensionContext,
   runId: string,
@@ -813,8 +856,7 @@ export function createMillRuntime(
     { controller: AbortController; promise: Promise<ExecutionResult> }
   >();
 
-  const millCommand = options?.millCommand?.trim() || process.env.PI_FACTORY_MILL_CMD || "mill";
-  const millArgs = options?.millArgs ?? [];
+  const { millCommand, millArgs } = resolveMillCommand(options);
   const millRunsDir = options?.millRunsDir ?? process.env.PI_FACTORY_MILL_RUNS_DIR;
 
   const millRuntime: MillRuntime = {

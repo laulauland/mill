@@ -4,3 +4,4 @@ packages/*/node_modules/
 dist/
 implement.factory.ts
 packages/pi-mill/.pi-skills/
+packages/pi-mill/.vendor/
