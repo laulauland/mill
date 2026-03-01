@@ -44,7 +44,6 @@ const waitForProcessExit = async (pid: number, timeoutMillis: number): Promise<v
 const makeConfig = (): MillConfig => ({
   defaultDriver: "default",
   defaultExecutor: "direct",
-  defaultModel: "openai/gpt-5.3-codex",
   maxRunDepth: 1,
   drivers: {
     default: {
@@ -161,6 +160,9 @@ describe("run.api integration", () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-api-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
+    const previousDepth = process.env.MILL_RUN_DEPTH;
+
+    delete process.env.MILL_RUN_DEPTH;
 
     await writeFile(
       programPath,
@@ -170,6 +172,7 @@ describe("run.api integration", () => {
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
         "  prompt: note,",
+        '  model: "openai/gpt-5.3-codex",',
         "});",
         'return JSON.stringify({ note, driver: spawned.driver, executor: globalThis.__millExecutorName ?? "unknown" });',
       ].join("\n"),
@@ -231,6 +234,12 @@ describe("run.api integration", () => {
       expect(hostMarker).toContain("process-host:bun");
       expect(hostMarker).toContain(`executor=${output.run.executor}`);
     } finally {
+      if (previousDepth === undefined) {
+        delete process.env.MILL_RUN_DEPTH;
+      } else {
+        process.env.MILL_RUN_DEPTH = previousDepth;
+      }
+
       await rm(tempDirectory, { recursive: true, force: true });
     }
   });

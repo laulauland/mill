@@ -40,7 +40,6 @@ describe("runDetachedWorker", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,
@@ -71,6 +70,7 @@ describe("runDetachedWorker", () => {
                 agent: "scout",
                 systemPrompt: "You are concise.",
                 prompt: "Say hello",
+                model: "openai/gpt-5.3-codex",
               });
 
               expect(result.sessionRef.length).toBeGreaterThan(0);

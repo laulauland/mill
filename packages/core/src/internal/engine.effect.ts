@@ -135,7 +135,6 @@ export interface MakeMillEngineInput {
   readonly runsDirectory: string;
   readonly driverName: string;
   readonly executorName: string;
-  readonly defaultModel: string;
   readonly driver: DriverRuntime;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
 }
@@ -743,7 +742,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               spawnId,
               driver: input.driver.name,
               agent: spawnInput.agent,
-              model: spawnInput.model ?? input.defaultModel,
+              model: spawnInput.model,
             });
 
             const driverOutputExit = yield* Effect.exit(
@@ -755,7 +754,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   agent: spawnInput.agent,
                   systemPrompt: spawnInput.systemPrompt,
                   prompt: spawnInput.prompt,
-                  model: spawnInput.model ?? input.defaultModel,
+                  model: spawnInput.model,
                 }),
                 (error) =>
                   new ProgramExecutionError({

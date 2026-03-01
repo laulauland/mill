@@ -443,7 +443,6 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
       runsDirectory,
       driverName: selectedDriver.name,
       executorName: selectedExecutor.name,
-      defaultModel: resolvedConfig.config.defaultModel,
       driver: selectedDriver.runtime,
       extensions: resolvedConfig.config.extensions,
     }),

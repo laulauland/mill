@@ -7,7 +7,7 @@ const buildSpawnOutput = (input: SpawnInput): SpawnOutput => ({
   text: `noop response for ${input.agent}`,
   sessionRef: "session/noop",
   agent: input.agent,
-  model: input.model ?? "openai/gpt-5.3-codex",
+  model: input.model,
   driver: "default",
   exitCode: 0,
 });

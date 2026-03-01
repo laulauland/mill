@@ -4,7 +4,7 @@ export interface SpawnInput {
   readonly agent: string;
   readonly systemPrompt: string;
   readonly prompt: string;
-  readonly model?: string;
+  readonly model: string;
 }
 
 export interface SpawnOutput {
@@ -117,7 +117,6 @@ export interface ExecutorRegistration {
 export interface MillConfig {
   readonly defaultDriver: string;
   readonly defaultExecutor: string;
-  readonly defaultModel: string;
   readonly maxRunDepth?: number;
   readonly drivers: Readonly<Record<string, DriverRegistration>>;
   readonly executors: Readonly<Record<string, ExecutorRegistration>>;
@@ -168,7 +167,6 @@ export type ConfigSource = "cwd" | "upward" | "home" | "defaults";
 export interface ConfigFileOverrides {
   readonly defaultDriver?: string;
   readonly defaultExecutor?: string;
-  readonly defaultModel?: string;
   readonly maxRunDepth?: number;
   readonly drivers?: Readonly<Record<string, DriverRegistration>>;
   readonly executors?: Readonly<Record<string, ExecutorRegistration>>;

@@ -135,7 +135,6 @@ const hasConfigShape = (value: Record<string, unknown>): boolean =>
   [
     "defaultDriver",
     "defaultExecutor",
-    "defaultModel",
     "maxRunDepth",
     "drivers",
     "executors",
@@ -180,7 +179,6 @@ const toConfigOverrides = (value: Record<string, unknown>): ConfigFileOverrides 
   return {
     defaultDriver: readStringField(value, "defaultDriver"),
     defaultExecutor: readStringField(value, "defaultExecutor"),
-    defaultModel: readStringField(value, "defaultModel"),
     maxRunDepth: readPositiveIntegerField(value, "maxRunDepth"),
     drivers: readRecordField(value, "drivers") as Readonly<Record<string, DriverRegistration>>,
     executors: readRecordField(value, "executors") as MillConfig["executors"],
@@ -241,7 +239,6 @@ const mergeConfig = (defaults: MillConfig, overrides: ConfigFileOverrides): Mill
   ...defaults,
   defaultDriver: overrides.defaultDriver ?? defaults.defaultDriver,
   defaultExecutor: overrides.defaultExecutor ?? defaults.defaultExecutor,
-  defaultModel: overrides.defaultModel ?? defaults.defaultModel,
   maxRunDepth: overrides.maxRunDepth ?? defaults.maxRunDepth,
   drivers: {
     ...defaults.drivers,

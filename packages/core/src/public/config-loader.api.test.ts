@@ -9,7 +9,6 @@ import type { MillConfig } from "./types";
 const makeDefaults = (): MillConfig => ({
   defaultDriver: "default",
   defaultExecutor: "direct",
-  defaultModel: "openai/gpt-5.3-codex",
   drivers: {
     default: {
       description: "Catalog-backed test driver",
@@ -207,7 +206,6 @@ describe("resolveConfig", () => {
         "export default defineConfig({",
         '  defaultDriver: "module-driver",',
         '  defaultExecutor: "module-executor",',
-        '  defaultModel: "provider/module-model",',
         "  maxRunDepth: 3,",
         "  drivers: {",
         "    'module-driver': processDriver({",
@@ -263,7 +261,6 @@ describe("resolveConfig", () => {
       expect(resolved.configPath).toBe(configPath);
       expect(resolved.config.defaultDriver).toBe("module-driver");
       expect(resolved.config.defaultExecutor).toBe("module-executor");
-      expect(resolved.config.defaultModel).toBe("provider/module-model");
       expect(resolved.config.maxRunDepth).toBe(3);
       expect(resolved.config.authoring.instructions).toBe("Use module config");
       expect(Object.keys(resolved.config.drivers)).toContain("default");

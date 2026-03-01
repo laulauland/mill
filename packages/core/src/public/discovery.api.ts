@@ -50,8 +50,8 @@ export const createDiscoveryPayload = async (
   return {
     discoveryVersion: 1,
     programApi: {
-      spawnRequired: ["agent", "systemPrompt", "prompt"],
-      spawnOptional: ["model"],
+      spawnRequired: ["agent", "systemPrompt", "prompt", "model"],
+      spawnOptional: [],
       resultFields: ["text", "sessionRef", "agent", "model", "driver", "exitCode", "stopReason"],
     },
     drivers,

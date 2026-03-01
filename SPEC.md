@@ -161,7 +161,6 @@ import { defineConfig } from "@mill/core";
 
 export default defineConfig({
   defaultDriver: "default",
-  defaultModel: "openai/gpt-5.3-codex",
   defaultExecutor: "direct",
 
   drivers: {
@@ -211,8 +210,8 @@ export default defineConfig({
 {
   "discoveryVersion": 1,
   "programApi": {
-    "spawnRequired": ["agent", "systemPrompt", "prompt"],
-    "spawnOptional": ["model"],
+    "spawnRequired": ["agent", "systemPrompt", "prompt", "model"],
+    "spawnOptional": [],
     "resultFields": ["text", "sessionRef", "agent", "model", "driver", "exitCode", "stopReason"]
   },
   "drivers": {
@@ -278,7 +277,7 @@ export const SpawnOptions = Schema.Struct({
   agent: Schema.NonEmptyString,
   systemPrompt: Schema.NonEmptyString,
   prompt: Schema.NonEmptyString,
-  model: Schema.optional(Schema.NonEmptyString),
+  model: Schema.NonEmptyString,
 });
 
 export type SpawnOptions = Schema.Schema.Type<typeof SpawnOptions>;

@@ -155,7 +155,6 @@ export default {
   // Optional overrides:
   // defaultDriver: "pi",
   // defaultExecutor: "direct",
-  // defaultModel: "openai-codex/gpt-5.3-codex",
   authoring: {
     instructions:
       "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation).",

@@ -49,7 +49,6 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,
@@ -77,7 +76,6 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,
@@ -95,6 +93,7 @@ describe("MillEngine sync lifecycle", () => {
                 agent: "scout",
                 systemPrompt: "You are concise.",
                 prompt: "Summarize this file.",
+                model: "openai/gpt-5.3-codex",
               });
 
               expect(result.sessionRef.length).toBeGreaterThan(0);
@@ -173,7 +172,6 @@ describe("MillEngine sync lifecycle", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,
@@ -269,7 +267,6 @@ describe("MillEngine sync lifecycle", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,
@@ -316,7 +313,6 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,
@@ -334,6 +330,7 @@ describe("MillEngine sync lifecycle", () => {
                 agent: "scout",
                 systemPrompt: "You are concise.",
                 prompt: "Inspect this run",
+                model: "openai/gpt-5.3-codex",
               }),
               () => Effect.void,
             ),
@@ -401,7 +398,6 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: driverWithRaw,
@@ -439,6 +435,7 @@ describe("MillEngine sync lifecycle", () => {
               agent: "scout",
               systemPrompt: "You are concise.",
               prompt: "watch this run",
+              model: "openai/gpt-5.3-codex",
             }),
             () => Effect.void,
           ),
@@ -477,7 +474,6 @@ describe("MillEngine sync lifecycle", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      defaultModel: "openai/gpt-5.3-codex",
       driverName: "default",
       executorName: "direct",
       driver: testDriver,

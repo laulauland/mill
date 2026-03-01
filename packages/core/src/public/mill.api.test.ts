@@ -9,6 +9,7 @@ describe("createMill", () => {
       agent: "scout",
       systemPrompt: "You are concise.",
       prompt: "Say hello",
+      model: "openai/gpt-5.3-codex",
     });
 
     expect(result.driver).toBe("default");

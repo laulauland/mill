@@ -6,7 +6,6 @@ import type { MillConfig } from "./types";
 const makeDefaults = (): MillConfig => ({
   defaultDriver: "default",
   defaultExecutor: "direct",
-  defaultModel: "openai/gpt-5.3-codex",
   drivers: {
     default: {
       description: "Catalog-backed test driver",
@@ -65,8 +64,8 @@ describe("createDiscoveryPayload", () => {
     });
 
     expect(payload.discoveryVersion).toBe(1);
-    expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt"]);
-    expect(payload.programApi.spawnOptional).toEqual(["model"]);
+    expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt", "model"]);
+    expect(payload.programApi.spawnOptional).toEqual([]);
     expect(payload.programApi.resultFields).toEqual([
       "text",
       "sessionRef",
