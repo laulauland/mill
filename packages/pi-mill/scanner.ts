@@ -290,8 +290,16 @@ export function cancelRunByPidFiles(artifactsDir: string): number {
         const command = data?.mill?.command?.trim() || "mill";
         const args = [...(data?.mill?.args ?? []), "cancel", runId];
 
-        if (data?.mill?.runsDir && data.mill.runsDir.trim().length > 0) {
-          args.push("--runs-dir", data.mill.runsDir);
+        const configuredRunsDir = data?.mill?.runsDir?.trim();
+        const isCanonicalRunJson = typeof data?.id === "string" && data.id.length > 0;
+        const inferredRunsDir = isCanonicalRunJson ? path.dirname(artifactsDir) : undefined;
+        const runsDir =
+          configuredRunsDir && configuredRunsDir.length > 0
+            ? configuredRunsDir
+            : inferredRunsDir;
+
+        if (runsDir && runsDir.length > 0) {
+          args.push("--runs-dir", runsDir);
         }
 
         const result = spawnSync(command, args, {
