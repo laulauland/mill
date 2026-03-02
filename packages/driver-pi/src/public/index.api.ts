@@ -7,6 +7,7 @@ import { makePiProcessDriver } from "../process-driver.effect";
 export interface CreatePiDriverRegistrationInput {
   readonly process?: DriverProcessConfig;
   readonly models?: ReadonlyArray<string>;
+  readonly timeoutMs?: number;
 }
 
 const normalizeModelCatalog = (models: ReadonlyArray<string>): ReadonlyArray<string> =>
@@ -89,6 +90,8 @@ export const createPiDriverRegistration = (
       process,
       models: input?.models,
     }),
-    runtime: makePiProcessDriver(process),
+    runtime: makePiProcessDriver(process, {
+      timeoutMs: input?.timeoutMs,
+    }),
   };
 };

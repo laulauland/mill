@@ -29,6 +29,8 @@ const ERROR_TERMINAL_SCRIPT =
   "console.log(JSON.stringify({type:'session',id:'session-test'}));" +
   "console.log(JSON.stringify({type:'agent_end',messages:[{role:'assistant',content:[],stopReason:'error',errorMessage:'context_length_exceeded'}]}));";
 
+const HANGING_SCRIPT = "setInterval(() => {}, 1_000);";
+
 describe("createPiDriverRegistration", () => {
   it("supports explicit model catalog overrides via codec", async () => {
     const driver = createPiDriverRegistration({
@@ -218,5 +220,39 @@ describe("createPiDriverRegistration", () => {
     expect(output.result.exitCode).toBe(1);
     expect(output.result.stopReason).toBe("error");
     expect(output.result.errorMessage).toBe("context_length_exceeded");
+  });
+
+  it("fails fast when the pi process stalls and exceeds timeout", async () => {
+    const driver = createPiDriverRegistration({
+      process: {
+        command: "bun",
+        args: ["-e", HANGING_SCRIPT, "--"],
+      },
+      timeoutMs: 100,
+      models: ["openai/gpt-5.3-codex"],
+    });
+
+    expect(driver.runtime).toBeDefined();
+
+    if (driver.runtime === undefined) {
+      return;
+    }
+
+    await expect(
+      Runtime.runPromise(runtime)(
+        Effect.provide(
+          driver.runtime.spawn({
+            runId: "run_driver_timeout",
+            runDirectory: "/tmp/run_driver_timeout",
+            spawnId: "spawn_driver_timeout",
+            agent: "scout",
+            systemPrompt: "You are concise.",
+            prompt: "Say hello",
+            model: "openai/gpt-5.3-codex",
+          }),
+          BunContext.layer,
+        ),
+      ),
+    ).rejects.toThrow("timed out");
   });
 });

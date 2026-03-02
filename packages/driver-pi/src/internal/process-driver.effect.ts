@@ -16,6 +16,23 @@ const toMessage = (error: unknown): string => {
   return String(error);
 };
 
+const DEFAULT_PI_PROCESS_TIMEOUT_MS = 60 * 60 * 1000;
+
+const resolvePiProcessTimeoutMs = (timeoutMs?: number): number => {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_PI_PROCESS_TIMEOUT_MS;
+  }
+
+  return Math.floor(timeoutMs);
+};
+
+const toPiProcessDriverError = (error: unknown): PiProcessDriverError =>
+  error instanceof PiProcessDriverError
+    ? error
+    : new PiProcessDriverError({
+        message: toMessage(error),
+      });
+
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {
     return path;
@@ -54,13 +71,19 @@ const commandForSpawn = (
   return Command.env(command, config.env);
 };
 
-export const makePiProcessDriver = (config: DriverProcessConfig): DriverRuntime => ({
+export const makePiProcessDriver = (
+  config: DriverProcessConfig,
+  options?: {
+    timeoutMs?: number;
+  },
+): DriverRuntime => ({
   name: "pi",
   spawn: (input) =>
     Effect.gen(function* () {
       const sessionPath = sessionPathForSpawn(input);
       const sessionsDirectory = sessionPath.slice(0, sessionPath.lastIndexOf("/"));
       const fileSystem = yield* FileSystem.FileSystem;
+      const timeoutMs = resolvePiProcessTimeoutMs(options?.timeoutMs);
 
       yield* Effect.mapError(
         fileSystem.makeDirectory(sessionsDirectory, { recursive: true }),
@@ -79,27 +102,25 @@ export const makePiProcessDriver = (config: DriverProcessConfig): DriverRuntime 
         model: input.model,
         command: config.command,
         sessionPath,
+        timeoutMs,
       });
 
-      const stdout = yield* Effect.mapError(
-        Command.string(command),
-        (error) =>
-          new PiProcessDriverError({
-            message: toMessage(error),
-          }),
+      const stdout = yield* Command.string(command).pipe(
+        Effect.timeoutFail({
+          duration: timeoutMs,
+          onTimeout: () =>
+            new PiProcessDriverError({
+              message: `pi process timed out after ${String(timeoutMs)}ms (runId=${input.runId}, spawnId=${input.spawnId}).`,
+            }),
+        }),
+        Effect.mapError(toPiProcessDriverError),
       );
 
-      const decoded = yield* Effect.mapError(
-        decodePiProcessOutput(stdout, {
-          agent: input.agent,
-          model: input.model,
-          spawnId: input.spawnId,
-        }),
-        (error) =>
-          new PiProcessDriverError({
-            message: toMessage(error),
-          }),
-      );
+      const decoded = yield* decodePiProcessOutput(stdout, {
+        agent: input.agent,
+        model: input.model,
+        spawnId: input.spawnId,
+      }).pipe(Effect.mapError(toPiProcessDriverError));
 
       const raw = stdout
         .split("\n")

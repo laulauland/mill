@@ -198,9 +198,14 @@ export const decodePiProcessOutput = (
     }
 
     if (!terminalSeen) {
+      const lastEventType =
+        decodedLines.length > 0
+          ? readString(decodedLines[decodedLines.length - 1]!, "type")
+          : undefined;
+
       return yield* Effect.fail(
         new PiCodecError({
-          message: "Missing terminal agent_end line from pi process output.",
+          message: `Missing terminal agent_end line from pi process output (lines=${String(decodedLines.length)}, lastType=${lastEventType ?? "unknown"}). Process may have been interrupted or stalled.`,
         }),
       );
     }
