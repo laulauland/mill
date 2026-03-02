@@ -126,6 +126,8 @@ const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunConte
 
 const millBinPath = decodeURIComponent(new URL("../bin/mill.ts", import.meta.url).pathname);
 
+const SCRIPT_ENTRYPOINT_EXTENSION = /\.(?:[mc]?[jt]sx?)$/i;
+
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {
     return path;
@@ -158,9 +160,44 @@ const workerPidPath = (runsDirectory: string, runId: string): string =>
 
 const RUN_DEPTH_ENV = "MILL_RUN_DEPTH";
 
+const resolveScriptEntrypointFromArgv = (
+  argv: ReadonlyArray<string>,
+): string | undefined => {
+  const candidate = argv[1];
+
+  if (typeof candidate !== "string") {
+    return undefined;
+  }
+
+  const trimmed = candidate.trim();
+
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  if (
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    SCRIPT_ENTRYPOINT_EXTENSION.test(trimmed)
+  ) {
+    return trimmed;
+  }
+
+  return undefined;
+};
+
+const isBunExecutablePath = (executablePath: string): boolean => {
+  const normalized = executablePath.replaceAll("\\", "/").toLowerCase();
+  return normalized.endsWith("/bun") || normalized.endsWith("/bun.exe");
+};
+
 const buildWorkerCommandArguments = (
-  hasSourceEntrypoint: boolean,
   input: LaunchWorkerInput,
+  options: {
+    readonly isBunRuntime: boolean;
+    readonly hasSourceEntrypoint: boolean;
+    readonly scriptEntrypoint: string | undefined;
+  },
 ): ReadonlyArray<string> => {
   const workerArguments = [
     "_worker",
@@ -176,19 +213,35 @@ const buildWorkerCommandArguments = (
     input.executorName,
   ];
 
-  return hasSourceEntrypoint ? ["run", millBinPath, ...workerArguments] : workerArguments;
+  if (options.isBunRuntime && options.hasSourceEntrypoint) {
+    return ["run", millBinPath, ...workerArguments];
+  }
+
+  return options.scriptEntrypoint !== undefined
+    ? [options.scriptEntrypoint, ...workerArguments]
+    : workerArguments;
 };
 
 const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => {
   await runWithBunContext(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
+      const scriptEntrypointCandidate = resolveScriptEntrypointFromArgv(process.argv);
+      const scriptEntrypoint =
+        scriptEntrypointCandidate !== undefined &&
+        (yield* fileSystem.exists(scriptEntrypointCandidate))
+          ? scriptEntrypointCandidate
+          : undefined;
       const hasSourceEntrypoint = yield* fileSystem.exists(millBinPath);
 
       const workerCommand = PlatformCommand.env(
         PlatformCommand.make(
           process.execPath,
-          ...buildWorkerCommandArguments(hasSourceEntrypoint, input),
+          ...buildWorkerCommandArguments(input, {
+            isBunRuntime: isBunExecutablePath(process.execPath),
+            hasSourceEntrypoint,
+            scriptEntrypoint,
+          }),
         ).pipe(
           PlatformCommand.workingDirectory(input.cwd),
           PlatformCommand.stdin("ignore"),

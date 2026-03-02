@@ -196,6 +196,70 @@ describe("mill run/status/wait (e2e)", () => {
     }
   }, 20_000);
 
+  it("runs correctly when invoked as a bundled Node entrypoint", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-node-bundle-e2e-"));
+    const runsDirectory = join(tempDirectory, "runs");
+    const programPath = join(tempDirectory, "program.ts");
+    const bundledCliPath = join(tempDirectory, "mill.mjs");
+
+    await writeFile(programPath, "return 'node-bundle-ok';\n", "utf-8");
+
+    try {
+      const buildExitCode = await commandExitCode(
+        Command.make(
+          "bun",
+          "build",
+          "packages/cli/src/bin/mill.ts",
+          "--bundle",
+          "--target=node",
+          "--format=esm",
+          "--outfile",
+          bundledCliPath,
+        ),
+      );
+
+      expect(buildExitCode).toBe(0);
+
+      const submitOutput = await commandOutput(
+        Command.make(
+          "node",
+          bundledCliPath,
+          "run",
+          programPath,
+          "--json",
+          "--driver",
+          "pi",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(submitOutput);
+
+      const waitOutput = await commandOutput(
+        Command.make(
+          "node",
+          bundledCliPath,
+          "wait",
+          submittedRun.runId,
+          "--timeout",
+          "8",
+          "--json",
+          "--driver",
+          "pi",
+          "--runs-dir",
+          runsDirectory,
+        ),
+      );
+
+      const waitPayload = Schema.decodeUnknownSync(StatusEnvelope)(waitOutput);
+      expect(waitPayload.id).toBe(submittedRun.runId);
+      expect(waitPayload.status).toBe("complete");
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  }, 25_000);
+
   it("fails when no active driver can be resolved", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-driver-unresolved-e2e-"));
     const runsDirectory = join(tempDirectory, "runs");
