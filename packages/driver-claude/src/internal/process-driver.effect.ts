@@ -31,11 +31,13 @@ const commandForSpawn = (config: DriverProcessConfig, input: DriverSpawnInput): 
     input.prompt,
   ).pipe(Command.stdin("ignore"));
 
-  if (config.env === undefined || Object.keys(config.env).length === 0) {
-    return command;
-  }
-
-  return Command.env(command, config.env);
+  // Prevent nested Claude Code session failures when mill itself is running
+  // inside Claude Code (CLAUDECODE=1). We intentionally blank it for the
+  // spawned claude process while preserving any caller-supplied env entries.
+  return Command.env(command, {
+    ...(config.env ?? {}),
+    CLAUDECODE: "",
+  });
 };
 
 export const makeClaudeProcessDriver = (config: DriverProcessConfig): DriverRuntime => ({
