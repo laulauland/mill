@@ -37,6 +37,7 @@ function writeRunJson(summary: RunSummary): void {
         model: r.model,
         exitCode: r.exitCode,
         text: r.text,
+        childRunId: r.childRunId,
         sessionPath: r.sessionPath,
         usage: r.usage,
       })),
@@ -383,26 +384,66 @@ export default function (pi: ExtensionAPI) {
     ): Promise<AgentToolResult<RunSummary>> {
       currentCtx = ctx;
       const params = validateParams(rawParams);
-      const runId = generateRunId();
+      const orchestrationRunId = generateRunId();
+      let publicRunId = orchestrationRunId;
+      const childRunIds = new Set<string>();
+      let firstChildResolved = false;
+      let resolveFirstChildRunId: ((runId: string) => void) | undefined;
+      const firstChildRunIdPromise = new Promise<string>((resolve) => {
+        resolveFirstChildRunId = resolve;
+      });
+
+      const recordChildRunId = (childRunId: string | undefined): void => {
+        if (!childRunId || childRunId.length === 0 || childRunIds.has(childRunId)) {
+          return;
+        }
+
+        childRunIds.add(childRunId);
+
+        if (!firstChildResolved) {
+          firstChildResolved = true;
+          publicRunId = childRunId;
+          resolveFirstChildRunId?.(childRunId);
+        }
+      };
+
+      const ingestChildRunIds = (summary: RunSummary): void => {
+        for (const result of summary.results) {
+          recordChildRunId(result.childRunId);
+        }
+      };
+
+      const toPublicSummary = (summary: RunSummary): RunSummary => ({
+        ...summary,
+        runId: publicRunId,
+        metadata: {
+          ...(summary.metadata ?? {}),
+          orchestrationRunId,
+          childRunIds: Array.from(childRunIds),
+        },
+      });
+
       const rawSessionDir = ctx.sessionManager.getSessionDir() ?? ctx.cwd;
       const piSessionKey = cwdToSessionDir(rawSessionDir);
 
       // Keep local observability in-memory/tmp only. Canonical persisted runs live under
       // mill's own global run store (~/.mill/runs).
-      observability.createRun(runId, false);
-      observability.setStatus(runId, "running", "run:start");
+      observability.createRun(orchestrationRunId, false);
+      observability.setStatus(orchestrationRunId, "running", "run:start");
 
       const parentSessionPath = ctx.sessionManager.getSessionFile() ?? undefined;
-      const run = observability.get(runId);
+      const run = observability.get(orchestrationRunId);
       const sessionDir = run?.artifactsDir ? path.join(run.artifactsDir, "sessions") : undefined;
 
       const emitUpdate = (summary: RunSummary) => {
+        ingestChildRunIds(summary);
+        const publicSummary = toPublicSummary(summary);
         onUpdate?.({
-          content: [{ type: "text", text: buildPrimaryContent(summary, true) }],
-          details: summary,
+          content: [{ type: "text", text: buildPrimaryContent(publicSummary, true) }],
+          details: publicSummary,
         });
         // Update registry so overlay reads live data
-        registry.updateSummary(runId, summary);
+        registry.updateSummary(orchestrationRunId, summary);
         // Also update widget with latest state
         widget.update(registry.getVisible(), ctx);
       };
@@ -416,10 +457,14 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{ type: "text", text: msg }],
           details: {
-            runId,
+            runId: publicRunId,
             status: "cancelled" as const,
             results: [],
             error: { code: "CONFIRMATION_REJECTED", message: msg, recoverable: true },
+            metadata: {
+              orchestrationRunId,
+              childRunIds: Array.from(childRunIds),
+            },
           },
         };
       }
@@ -431,12 +476,15 @@ export default function (pi: ExtensionAPI) {
 
       const promise = executeProgram({
         ctx,
-        runId,
+        runId: orchestrationRunId,
         code: params.code,
         task: params.task,
         cwd: ctx.cwd,
         obs: observability,
         onUpdate: emitUpdate,
+        onChildRunSubmitted: (childRunId) => {
+          recordChildRunId(childRunId);
+        },
         signal: abort.signal,
         parentSessionPath,
         piSessionKey,
@@ -449,17 +497,17 @@ export default function (pi: ExtensionAPI) {
 
       // Register in the registry
       const initialSummary: RunSummary = {
-        runId,
+        runId: orchestrationRunId,
         status: "running",
         results: [],
-        observability: observability.toSummary(runId),
+        observability: observability.toSummary(orchestrationRunId),
       };
-      registry.register(runId, initialSummary, promise, abort, { task: params.task });
+      registry.register(orchestrationRunId, initialSummary, promise, abort, { task: params.task });
 
       // Write running marker so external monitors (pi --mill) see active runs
-      const runArtifactsDir = observability.get(runId)?.artifactsDir;
+      const runArtifactsDir = observability.get(orchestrationRunId)?.artifactsDir;
       if (runArtifactsDir) {
-        writeRunningMarker(runId, params.task, runArtifactsDir, {
+        writeRunningMarker(orchestrationRunId, params.task, runArtifactsDir, {
           command: config.millCommand,
           args: config.millArgs,
           runsDir: config.millRunsDir,
@@ -473,7 +521,9 @@ export default function (pi: ExtensionAPI) {
           try {
             notifyCompletion(pi, registry, summary);
           } catch (error) {
-            observability.push(runId, "warning", "notify_failed", { error: String(error) });
+            observability.push(orchestrationRunId, "warning", "notify_failed", {
+              error: String(error),
+            });
           }
 
           try {
@@ -487,8 +537,10 @@ export default function (pi: ExtensionAPI) {
       // Wire completion: persist state first, then UI updates + async notification.
       promise.then(
         (summary) => {
+          ingestChildRunIds(summary);
+
           observability.setStatus(
-            runId,
+            orchestrationRunId,
             summary.status === "done"
               ? "done"
               : summary.status === "cancelled"
@@ -498,21 +550,25 @@ export default function (pi: ExtensionAPI) {
 
           const fullSummary: RunSummary = {
             ...summary,
-            observability: observability.toSummary(runId),
+            observability: observability.toSummary(orchestrationRunId),
             metadata: {
               task: params.task,
               millCommand: config.millCommand,
               millArgs: config.millArgs,
               millRunsDir: config.millRunsDir,
+              orchestrationRunId,
+              childRunIds: Array.from(childRunIds),
             },
           };
 
-          registry.complete(runId, fullSummary);
+          registry.complete(orchestrationRunId, fullSummary);
 
           try {
             writeRunJson(fullSummary);
           } catch (error) {
-            observability.push(runId, "warning", "write_run_json_failed", { error: String(error) });
+            observability.push(orchestrationRunId, "warning", "write_run_json_failed", {
+              error: String(error),
+            });
           }
 
           try {
@@ -525,28 +581,35 @@ export default function (pi: ExtensionAPI) {
         },
         (err) => {
           const details = toErrorDetails(err);
-          observability.setStatus(runId, details.code === "CANCELLED" ? "cancelled" : "failed");
+          observability.setStatus(
+            orchestrationRunId,
+            details.code === "CANCELLED" ? "cancelled" : "failed",
+          );
 
           const failedSummary: RunSummary = {
-            runId,
+            runId: orchestrationRunId,
             status: "failed",
             results: [],
             error: details,
-            observability: observability.toSummary(runId),
+            observability: observability.toSummary(orchestrationRunId),
             metadata: {
               task: params.task,
               millCommand: config.millCommand,
               millArgs: config.millArgs,
               millRunsDir: config.millRunsDir,
+              orchestrationRunId,
+              childRunIds: Array.from(childRunIds),
             },
           };
 
-          registry.fail(runId, details);
+          registry.fail(orchestrationRunId, details);
 
           try {
             writeRunJson(failedSummary);
           } catch (error) {
-            observability.push(runId, "warning", "write_run_json_failed", { error: String(error) });
+            observability.push(orchestrationRunId, "warning", "write_run_json_failed", {
+              error: String(error),
+            });
           }
 
           try {
@@ -565,19 +628,34 @@ export default function (pi: ExtensionAPI) {
       // Update widget immediately
       widget.update(registry.getVisible(), ctx);
 
+      // Surface canonical child run ids before returning whenever the program
+      // actually spawns. If the program exits without spawning, we fall back to
+      // the orchestration id.
+      await Promise.race([firstChildRunIdPromise, promise.then(() => undefined)]);
+
       // Return immediately with artifact paths so orchestrator can check progress
-      const artifactsDir = observability.get(runId)?.artifactsDir;
+      const artifactsDir = observability.get(orchestrationRunId)?.artifactsDir;
       const lines = [
-        `Spawned '${params.task}' → ${runId}. Running async — results will be delivered when complete.`,
+        `Spawned '${params.task}' → ${publicRunId}. Running async — results will be delivered when complete.`,
       ];
+
+      if (publicRunId !== orchestrationRunId) {
+        lines.push(`Orchestration: ${orchestrationRunId}`);
+      }
+
+      if (childRunIds.size > 1) {
+        lines.push(`Child runs: ${Array.from(childRunIds).join(", ")}`);
+      }
+
       if (artifactsDir) {
         lines.push(`Artifacts: ${artifactsDir}`);
         lines.push(`Status: ${artifactsDir}/run.json (running marker + final summary)`);
         lines.push(`Sessions: ${artifactsDir}/sessions/`);
       }
+
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: initialSummary,
+        details: toPublicSummary(initialSummary),
       };
     },
 

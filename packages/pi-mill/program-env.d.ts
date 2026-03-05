@@ -26,6 +26,8 @@ interface ExecutionResult {
   errorMessage?: string;
   step?: number;
   text: string;
+  /** Canonical mill child run id (run_...), if available. */
+  childRunId?: string;
   /** Subagent session reference (session id or .jsonl path). */
   sessionPath?: string;
 }

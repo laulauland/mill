@@ -244,6 +244,55 @@ describe("run.api integration", () => {
     }
   });
 
+  it("defaults runs directory to $HOME/.mill/runs when homeDirectory is omitted", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-home-default-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+    const previousHome = process.env.HOME;
+
+    await writeFile(programPath, "return 'home-default-ok';\n", "utf-8");
+
+    let capturedRunsDirectory: string | undefined;
+
+    try {
+      process.env.HOME = homeDirectory;
+
+      const output = await runProgramSync({
+        defaults: makeConfig(),
+        programPath,
+        cwd: tempDirectory,
+        pathExists: async () => false,
+        launchWorker: async (launchInput) => {
+          capturedRunsDirectory = launchInput.runsDirectory;
+          await runWorker({
+            defaults: makeConfig(),
+            runId: launchInput.runId,
+            programPath: launchInput.programPath,
+            cwd: launchInput.cwd,
+            runsDirectory: launchInput.runsDirectory,
+            driverName: launchInput.driverName,
+            executorName: launchInput.executorName,
+            pathExists: async () => false,
+          });
+        },
+      });
+
+      const expectedRunsDirectory = join(homeDirectory, ".mill", "runs");
+
+      expect(capturedRunsDirectory).toBe(expectedRunsDirectory);
+      expect(output.run.paths.runDir.startsWith(expectedRunsDirectory)).toBe(true);
+      expect(output.run.status).toBe("complete");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("enforces maxRunDepth recursion guard on nested run submissions", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-depth-"));
     const homeDirectory = join(tempDirectory, "home");

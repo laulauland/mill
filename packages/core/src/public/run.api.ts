@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Fiber, Runtime, Stream } from "effect";
@@ -340,7 +341,6 @@ const resolveProgramPath = (cwd: string, programPath: string): string =>
   programPath.startsWith("/") ? normalizePath(programPath) : joinPath(cwd, programPath);
 
 const resolveRunsDirectory = (
-  cwd: string,
   homeDirectory: string | undefined,
   runsDirectory: string | undefined,
 ): string => {
@@ -348,11 +348,10 @@ const resolveRunsDirectory = (
     return runsDirectory;
   }
 
-  if (homeDirectory !== undefined && homeDirectory.length > 0) {
-    return joinPath(homeDirectory, ".mill/runs");
-  }
+  const resolvedHomeDirectory =
+    homeDirectory?.trim() || process.env.HOME?.trim() || os.homedir().trim();
 
-  return joinPath(cwd, ".mill/runs");
+  return joinPath(resolvedHomeDirectory, ".mill/runs");
 };
 
 const parseInteger = (value: string | undefined): number | undefined => {
@@ -430,7 +429,7 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
   const selectedExecutor = await Runtime.runPromise(runtime)(
     executorRegistry.resolve(input.executorName),
   );
-  const runsDirectory = resolveRunsDirectory(cwd, input.homeDirectory, input.runsDirectory);
+  const runsDirectory = resolveRunsDirectory(input.homeDirectory, input.runsDirectory);
 
   return {
     selectedDriverName: selectedDriver.name,

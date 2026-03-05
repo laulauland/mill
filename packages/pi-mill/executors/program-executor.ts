@@ -171,6 +171,7 @@ export async function executeProgram(input: {
   cwd: string;
   obs: ObservabilityStore;
   onUpdate?: (summary: RunSummary) => void;
+  onChildRunSubmitted?: (runId: string, taskId: string) => void;
   signal?: AbortSignal;
   parentSessionPath?: string;
   piSessionKey?: string;
@@ -234,6 +235,7 @@ export async function executeProgram(input: {
         resultsByTask.set(result.taskId, result);
         emit("running");
       },
+      onChildRunSubmitted: input.onChildRunSubmitted,
       parentSessionPath: input.parentSessionPath,
       piSessionKey: input.piSessionKey,
       sessionDir: input.sessionDir,

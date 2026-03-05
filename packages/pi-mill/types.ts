@@ -25,6 +25,8 @@ export interface ExecutionResult {
   step?: number;
   /** Final assistant text output, auto-populated on completion. */
   text: string;
+  /** Canonical mill child run id (run_...), if available. */
+  childRunId?: string;
   /** Subagent session reference (session id or .jsonl path). Use search_thread to explore. */
   sessionPath?: string;
 }

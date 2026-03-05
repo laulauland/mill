@@ -114,6 +114,7 @@ interface SpawnInput {
   signal?: AbortSignal;
   obs: ObservabilityStore;
   onProgress?: (result: ExecutionResult) => void;
+  onSubmittedRunId?: (runId: string, taskId: string) => void;
   parentSessionPath?: string;
   piSessionKey?: string;
   sessionDir?: string;
@@ -505,6 +506,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     model: input.modelId,
     step: input.step,
     text: "",
+    childRunId: undefined,
     sessionPath: undefined,
   };
 
@@ -626,6 +628,10 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
       childRunId: submittedRunId,
     });
 
+    result.childRunId = submittedRunId;
+    input.onSubmittedRunId?.(submittedRunId, input.taskId);
+    input.onProgress?.({ ...result, messages: [] });
+
     const waitArgs = [...input.millArgs, "wait", submittedRunId, "--timeout", "31536000", "--json"];
     if (input.millRunsDir && input.millRunsDir.trim().length > 0) {
       waitArgs.push("--runs-dir", input.millRunsDir);
@@ -743,6 +749,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
     result.stopReason = decoded.stopReason;
     result.errorMessage = decoded.errorMessage;
     result.text = decoded.text;
+    result.childRunId = submittedRunId;
     result.sessionPath = decoded.sessionPath;
     result.stderr = "";
 
@@ -840,6 +847,7 @@ export function createMillRuntime(
   obs: ObservabilityStore,
   options?: {
     onTaskUpdate?: (result: ExecutionResult) => void;
+    onChildRunSubmitted?: (runId: string, taskId: string) => void;
     defaultSignal?: AbortSignal;
     parentSessionPath?: string;
     piSessionKey?: string;
@@ -857,7 +865,10 @@ export function createMillRuntime(
   >();
 
   const { millCommand, millArgs } = resolveMillCommand(options);
-  const millRunsDir = options?.millRunsDir ?? process.env.PI_FACTORY_MILL_RUNS_DIR;
+  const millRunsDir =
+    options?.millRunsDir?.trim() ||
+    process.env.PI_FACTORY_MILL_RUNS_DIR?.trim() ||
+    path.join(os.homedir(), ".mill", "runs");
 
   const millRuntime: MillRuntime = {
     runId,
@@ -906,6 +917,8 @@ export function createMillRuntime(
         signal: taskAbort.signal,
         obs,
         onProgress: (partial) => options?.onTaskUpdate?.(partial),
+        onSubmittedRunId: (submittedRunId, submittedTaskId) =>
+          options?.onChildRunSubmitted?.(submittedRunId, submittedTaskId),
         parentSessionPath: options?.parentSessionPath,
         piSessionKey: options?.piSessionKey,
         sessionDir: options?.sessionDir,
