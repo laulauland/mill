@@ -417,7 +417,7 @@ export default function (pi: ExtensionAPI) {
         ...summary,
         runId: publicRunId,
         metadata: {
-          ...(summary.metadata ?? {}),
+          ...summary.metadata,
           orchestrationRunId,
           childRunIds: Array.from(childRunIds),
         },
