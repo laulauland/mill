@@ -1,5 +1,5 @@
 import * as Command from "@effect/platform/Command";
-import { Data, Deferred, Effect, HashMap, Queue, Ref, Scope, Sink, Stream } from "effect";
+import { Data, Deferred, Effect, HashMap, Queue, Ref, Scope, Stream } from "effect";
 import type { DriverProcessConfig } from "@mill/core";
 import {
   decodeJsonRpcMessage,
@@ -68,13 +68,8 @@ export const makeAcpTransport = (
     const stdinQueue = yield* Queue.unbounded<Uint8Array>();
 
     yield* Effect.forkScoped(
-      Effect.catchAll(
-        Stream.run(
-          Stream.fromQueue(stdinQueue),
-          processHandle.stdin,
-        ),
-        (error) =>
-          Effect.logDebug("mill.driver-acp:stdin-writer-error", { error: toMessage(error) }),
+      Effect.catchAll(Stream.run(Stream.fromQueue(stdinQueue), processHandle.stdin), (error) =>
+        Effect.logDebug("mill.driver-acp:stdin-writer-error", { error: toMessage(error) }),
       ),
     );
 

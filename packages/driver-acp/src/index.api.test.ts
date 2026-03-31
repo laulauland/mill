@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { runWithRuntime } from "./test-runtime.api";
+import { runWithRuntime } from "./test-runtime";
 import {
   createClaudeAcpDriverRegistration,
   createCodexAcpDriverRegistration,
   createPiAcpDriverRegistration,
-} from "./index.api";
+} from "./index";
 
 describe("createClaudeAcpDriverRegistration", () => {
   it("provides default models", async () => {

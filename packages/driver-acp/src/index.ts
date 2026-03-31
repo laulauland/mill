@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { Effect } from "effect";
 import type { DriverCodec, DriverProcessConfig, DriverRegistration } from "@mill/core";
-import { makeAcpDriver } from "../acp-driver.effect";
-import { parsePiSettingsModels } from "../pi-settings.codec";
+import { makeAcpDriver } from "./acp-driver.effect";
+import { parsePiSettingsModels } from "./pi-settings.codec";
 
 export type AcpDriverConfig = {
   readonly command: string;

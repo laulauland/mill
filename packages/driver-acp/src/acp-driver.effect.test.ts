@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { runEffect } from "../public/test-runtime.api";
+import { runEffect } from "./test-runtime";
 import { makeAcpDriver } from "./acp-driver.effect";
 
 const FAKE_ACP_AGENT_SCRIPT = `
@@ -93,7 +93,7 @@ describe("makeAcpDriver", () => {
 
     expect(output.result.text).toBe("Hello from fake agent");
     expect(output.result.sessionRef).toBe("test-session-123");
-    expect(output.result.driver).toBe("acp");
+    expect(output.result.driver).toBe("test-acp");
     expect(output.result.exitCode).toBe(0);
     expect(output.result.stopReason).toBeUndefined();
     expect(output.events.some((e) => e.type === "tool_call")).toBe(true);

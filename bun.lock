@@ -42,27 +42,6 @@
         "@mill/core": "workspace:*",
       },
     },
-    "packages/driver-claude": {
-      "name": "@mill/driver-claude",
-      "version": "0.0.0",
-      "dependencies": {
-        "@mill/core": "workspace:*",
-      },
-    },
-    "packages/driver-codex": {
-      "name": "@mill/driver-codex",
-      "version": "0.0.0",
-      "dependencies": {
-        "@mill/core": "workspace:*",
-      },
-    },
-    "packages/driver-pi": {
-      "name": "@mill/driver-pi",
-      "version": "0.0.0",
-      "dependencies": {
-        "@mill/core": "workspace:*",
-      },
-    },
     "packages/pi-mill": {
       "name": "pi-mill",
       "version": "0.1.2",
@@ -238,12 +217,6 @@
     "@mill/core": ["@mill/core@workspace:packages/core"],
 
     "@mill/driver-acp": ["@mill/driver-acp@workspace:packages/driver-acp"],
-
-    "@mill/driver-claude": ["@mill/driver-claude@workspace:packages/driver-claude"],
-
-    "@mill/driver-codex": ["@mill/driver-codex@workspace:packages/driver-codex"],
-
-    "@mill/driver-pi": ["@mill/driver-pi@workspace:packages/driver-pi"],
 
     "@mistralai/mistralai": ["@mistralai/mistralai@1.10.0", "", { "dependencies": { "zod": "^3.20.0", "zod-to-json-schema": "^3.24.1" } }, "sha512-tdIgWs4Le8vpvPiUEWne6tK0qbVc+jMenujnvTqOjogrJUsCSQhus0tHTU1avDDh5//Rq2dFgP9mWRAdIEoBqg=="],
 
