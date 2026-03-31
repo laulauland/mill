@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { decodeMillEventJsonSync } from "../domain/event.schema";
-import { decodeRunIdSync } from "../domain/run.schema";
-import { runWithBunContext } from "../public/test-runtime.api";
+import { decodeMillEventJsonSync } from "./event.schema";
+import { decodeRunIdSync } from "./run.schema";
+import { runWithBunContext } from "./test-runtime";
 import { makeRunStore } from "./run-store.effect";
 
 describe("RunStore", () => {

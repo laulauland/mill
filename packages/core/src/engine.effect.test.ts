@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Effect, Stream } from "effect";
-import { decodeMillEventJsonSync, type MillEvent } from "../domain/event.schema";
-import { decodeRunIdSync } from "../domain/run.schema";
-import { runWithBunContext } from "../public/test-runtime.api";
-import type { DriverRuntime } from "../public/types";
+import { decodeMillEventJsonSync, type MillEvent } from "./event.schema";
+import { decodeRunIdSync } from "./run.schema";
+import { runWithBunContext } from "./test-runtime";
+import type { DriverRuntime } from "./types";
 import { makeMillEngine } from "./engine.effect";
 import { makeRunStore } from "./run-store.effect";
 

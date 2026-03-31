@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, type Effect as EffectType } from "effect";
-import { decodeRunIdSync, decodeSpawnIdSync } from "../domain/run.schema";
-import { runWithRuntime } from "../public/test-runtime.api";
+import { decodeRunIdSync, decodeSpawnIdSync } from "./run.schema";
+import { runWithRuntime } from "./test-runtime";
 import {
   applyLifecycleTransition,
   initialLifecycleGuardState,

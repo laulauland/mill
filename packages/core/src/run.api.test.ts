@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Schema from "@effect/schema/Schema";
 import { Effect } from "effect";
-import { decodeMillEventJsonSync } from "../domain/event.schema";
-import { decodeRunIdSync } from "../domain/run.schema";
-import { makeRunStore } from "../internal/run-store.effect";
-import { runWithBunContext } from "./test-runtime.api";
+import { decodeMillEventJsonSync } from "./event.schema";
+import { decodeRunIdSync } from "./run.schema";
+import { makeRunStore } from "./run-store.effect";
+import { runWithBunContext } from "./test-runtime";
 import { cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
 import type { MillConfig } from "./types";
 

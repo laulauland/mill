@@ -1,6 +1,6 @@
 import * as FileSystem from "@effect/platform/FileSystem";
 import { Data, Effect } from "effect";
-import { decodeMillEventJson, encodeMillEventJson, type MillEvent } from "../domain/event.schema";
+import { decodeMillEventJson, encodeMillEventJson, type MillEvent } from "./event.schema";
 import {
   decodeRunId,
   decodeRunRecordJson,
@@ -8,7 +8,7 @@ import {
   type RunId,
   type RunRecord,
   type RunResult,
-} from "../domain/run.schema";
+} from "./run.schema";
 import { LifecycleInvariantError, ensureRunStatusTransition } from "./lifecycle-guard.effect";
 
 export class RunNotFoundError extends Data.TaggedError("RunNotFoundError")<{ runId: string }> {}

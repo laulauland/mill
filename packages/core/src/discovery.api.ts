@@ -1,6 +1,6 @@
 import { Effect, Runtime } from "effect";
 import type { DiscoveryPayload, DriverRegistration, ResolveConfigOptions } from "./types";
-import { resolveConfig } from "./config-loader.api";
+import { resolveConfigEffect } from "./config-loader.api";
 
 const runtime = Runtime.defaultRuntime;
 
@@ -37,10 +37,13 @@ const buildDiscoveryExecutors = (
     ]),
   );
 
-export const createDiscoveryPayload = async (
+export const createDiscoveryPayloadEffect = (
   options: ResolveConfigOptions,
-): Promise<DiscoveryPayload> => {
-  const resolvedConfig = await resolveConfig(options);
+): Effect.Effect<DiscoveryPayload, unknown> =>
+  Effect.gen(function* () {
+    const resolvedConfig = yield* resolveConfigEffect(options);
+    const drivers = yield* buildDiscoveryDrivers(resolvedConfig.config.drivers);
+    const executors = buildDiscoveryExecutors(resolvedConfig.config.executors);
 
   const drivers = await Runtime.runPromise(runtime)(
     buildDiscoveryDrivers(resolvedConfig.config.drivers),

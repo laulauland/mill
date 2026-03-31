@@ -46,87 +46,93 @@ const dirname = (path: string): string => {
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
 
-const findRepoRoot = async (
+const findRepoRootEffect = (
   startDirectory: string,
-  pathExists: (path: string) => Promise<boolean>,
-): Promise<string | undefined> => {
-  let current = normalizePath(startDirectory);
+  pathExists: (path: string) => Effect.Effect<boolean, unknown, FileSystem.FileSystem>,
+): Effect.Effect<string | undefined, unknown, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    let current = normalizePath(startDirectory);
 
-  while (true) {
-    const isJjRepoRoot = await pathExists(joinPath(current, ".jj"));
-    const isGitRepoRoot = await pathExists(joinPath(current, ".git"));
+    while (true) {
+      const isJjRepoRoot = yield* pathExists(joinPath(current, ".jj"));
+      const isGitRepoRoot = yield* pathExists(joinPath(current, ".git"));
 
-    if (isJjRepoRoot || isGitRepoRoot) {
-      return current;
-    }
-
-    const parent = dirname(current);
-
-    if (parent === current) {
-      return undefined;
-    }
-
-    current = parent;
-  }
-};
-
-const resolveConfigPath = async (
-  cwd: string,
-  homeDirectory: string | undefined,
-  pathExists: (path: string) => Promise<boolean>,
-): Promise<{ source: "cwd" | "upward" | "home"; path: string } | undefined> => {
-  const normalizedCwd = normalizePath(cwd);
-  const cwdConfig = joinPath(normalizedCwd, CONFIG_FILE_NAME);
-
-  if (await pathExists(cwdConfig)) {
-    return {
-      source: "cwd",
-      path: cwdConfig,
-    };
-  }
-
-  const repoRoot = await findRepoRoot(normalizedCwd, pathExists);
-
-  if (repoRoot !== undefined) {
-    let current = repoRoot === normalizedCwd ? normalizedCwd : dirname(normalizedCwd);
-
-    while (current !== normalizedCwd) {
-      const candidate = joinPath(current, CONFIG_FILE_NAME);
-
-      if (await pathExists(candidate)) {
-        return {
-          source: "upward",
-          path: candidate,
-        };
-      }
-
-      if (current === repoRoot) {
-        break;
+      if (isJjRepoRoot || isGitRepoRoot) {
+        return current;
       }
 
       const parent = dirname(current);
 
       if (parent === current) {
-        break;
+        return undefined;
       }
 
       current = parent;
     }
-  }
+  });
 
-  if (homeDirectory !== undefined && homeDirectory.length > 0) {
-    const homeConfig = joinPath(homeDirectory, HOME_CONFIG_PATH);
+const resolveConfigPathEffect = (
+  cwd: string,
+  homeDirectory: string | undefined,
+  pathExists: (path: string) => Effect.Effect<boolean, unknown, FileSystem.FileSystem>,
+): Effect.Effect<
+  { source: "cwd" | "upward" | "home"; path: string } | undefined,
+  unknown,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const normalizedCwd = normalizePath(cwd);
+    const cwdConfig = joinPath(normalizedCwd, CONFIG_FILE_NAME);
 
-    if (await pathExists(homeConfig)) {
+    if (yield* pathExists(cwdConfig)) {
       return {
-        source: "home",
-        path: homeConfig,
+        source: "cwd",
+        path: cwdConfig,
       };
     }
-  }
 
-  return undefined;
-};
+    const repoRoot = yield* findRepoRootEffect(normalizedCwd, pathExists);
+
+    if (repoRoot !== undefined) {
+      let current = repoRoot === normalizedCwd ? normalizedCwd : dirname(normalizedCwd);
+
+      while (current !== normalizedCwd) {
+        const candidate = joinPath(current, CONFIG_FILE_NAME);
+
+        if (yield* pathExists(candidate)) {
+          return {
+            source: "upward",
+            path: candidate,
+          };
+        }
+
+        if (current === repoRoot) {
+          break;
+        }
+
+        const parent = dirname(current);
+
+        if (parent === current) {
+          break;
+        }
+
+        current = parent;
+      }
+    }
+
+    if (homeDirectory !== undefined && homeDirectory.length > 0) {
+      const homeConfig = joinPath(homeDirectory, HOME_CONFIG_PATH);
+
+      if (yield* pathExists(homeConfig)) {
+        return {
+          source: "home",
+          path: homeConfig,
+        };
+      }
+    }
+
+    return undefined;
+  });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -258,28 +264,38 @@ export const defineConfig = <T extends MillConfig>(config: T): T => config;
 
 export const processDriver = <T extends DriverRegistration>(driver: T): T => driver;
 
-export const resolveConfig = async (options: ResolveConfigOptions): Promise<ResolvedConfig> => {
-  const cwd = options.cwd ?? process.cwd();
-  const homeDirectory = options.homeDirectory ?? process.env.HOME;
-  const pathExists = options.pathExists ?? defaultPathExists;
-  const loadConfigModule = options.loadConfigModule ?? defaultLoadConfigModule;
+export const resolveConfigEffect = (
+  options: ResolveConfigOptions,
+): Effect.Effect<ResolvedConfig, unknown, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const cwd = options.cwd ?? process.cwd();
+    const homeDirectory = options.homeDirectory ?? process.env.HOME;
+    const customPathExists = options.pathExists;
+    const pathExists =
+      customPathExists === undefined
+        ? defaultPathExistsEffect
+        : (path: string) => Effect.promise(() => customPathExists(path));
+    const loadConfigModule = options.loadConfigModule ?? defaultLoadConfigModule;
 
-  const resolvedPath = await resolveConfigPath(cwd, homeDirectory, pathExists);
+    const resolvedPath = yield* resolveConfigPathEffect(cwd, homeDirectory, pathExists);
 
-  if (resolvedPath === undefined) {
+    if (resolvedPath === undefined) {
+      return {
+        source: "defaults",
+        config: options.defaults,
+      };
+    }
+
+    const loadedModule = yield* Effect.promise(() => loadConfigModule(resolvedPath.path));
+    const loadedConfig = extractConfigFromModule(loadedModule);
+
     return {
-      source: "defaults",
-      config: options.defaults,
+      source: resolvedPath.source,
+      configPath: resolvedPath.path,
+      config:
+        loadedConfig === undefined ? options.defaults : mergeConfig(options.defaults, loadedConfig),
     };
-  }
+  });
 
-  const loadedModule = await loadConfigModule(resolvedPath.path);
-  const loadedConfig = extractConfigFromModule(loadedModule);
-
-  return {
-    source: resolvedPath.source,
-    configPath: resolvedPath.path,
-    config:
-      loadedConfig === undefined ? options.defaults : mergeConfig(options.defaults, loadedConfig),
-  };
-};
+export const resolveConfig = (options: ResolveConfigOptions): Promise<ResolvedConfig> =>
+  runWithBunServices(resolveConfigEffect(options));

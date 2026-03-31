@@ -3,12 +3,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { decodeMillEventJsonSync } from "../domain/event.schema";
-import { decodeRunIdSync } from "../domain/run.schema";
-import { runWithBunContext } from "../public/test-runtime.api";
-import type { DriverRuntime } from "../public/types";
-import { makeMillEngine } from "../internal/engine.effect";
-import { makeRunStore } from "../internal/run-store.effect";
+import { decodeMillEventJsonSync } from "./event.schema";
+import { decodeRunIdSync } from "./run.schema";
+import { runWithBunContext } from "./test-runtime";
+import type { DriverRuntime } from "./types";
+import { makeMillEngine } from "./engine.effect";
+import { makeRunStore } from "./run-store.effect";
 import { runDetachedWorker } from "./worker.effect";
 
 const testDriver: DriverRuntime = {

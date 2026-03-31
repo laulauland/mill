@@ -4,15 +4,15 @@ import * as os from "node:os";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as BunContext from "@effect/platform-bun/BunContext";
 import { Effect, Fiber, Runtime, Stream } from "effect";
-import { makeMillEngine, ProgramExecutionError } from "../engine.effect";
-import { makeDriverRegistry } from "../driver-registry.effect";
-import { makeExecutorRegistry } from "../executor-registry.effect";
-import { type MillEvent } from "../event.schema";
-import { decodeRunIdSync, type RunRecord, type RunSyncOutput } from "../run.schema";
-import { runDetachedWorker } from "../worker.effect";
-import { executeProgramInProcessHost } from "../program-host.effect";
-import { publishIoEvent, type IoStreamEvent } from "../observer-hub.effect";
-import { resolveConfig } from "./config-loader.api";
+import { makeMillEngine, ProgramExecutionError } from "./engine.effect";
+import { makeDriverRegistry } from "./driver-registry.effect";
+import { makeExecutorRegistry } from "./executor-registry.effect";
+import { type MillEvent } from "./event.schema";
+import { decodeRunIdSync, type RunRecord, type RunSyncOutput } from "./run.schema";
+import { runDetachedWorker } from "./worker.effect";
+import { executeProgramInProcessHost } from "./program-host.effect";
+import { publishIoEvent, type IoStreamEvent } from "./observer-hub.effect";
+import { resolveConfigEffect } from "./config-loader.api";
 import type { ExecutorRuntime, ExtensionRegistration, ResolveConfigOptions } from "./types";
 
 const runtime = Runtime.defaultRuntime;
@@ -112,6 +112,8 @@ interface EngineContext {
   readonly runsDirectory: string;
   readonly maxRunDepth: number;
 }
+
+class RunApiError extends Data.TaggedError("RunApiError")<{ message: string }> {}
 
 const DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS = 60 * 60 * 24 * 365;
 const WORKER_PID_FILENAME = "worker.pid";
@@ -413,7 +415,6 @@ const writeSubmissionArtifacts = (
   );
 
 const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> => {
-  const cwd = input.cwd ?? process.cwd();
   const resolvedConfig = await resolveConfig(input);
   const driverRegistry = makeDriverRegistry({
     defaultDriver: resolvedConfig.config.defaultDriver,
@@ -431,22 +432,22 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
   );
   const runsDirectory = resolveRunsDirectory(input.homeDirectory, input.runsDirectory);
 
-  return {
-    selectedDriverName: selectedDriver.name,
-    selectedExecutorName: selectedExecutor.name,
-    selectedExecutorRuntime: selectedExecutor.runtime,
-    selectedExtensions: resolvedConfig.config.extensions,
-    runsDirectory,
-    maxRunDepth: resolveMaxRunDepth(resolvedConfig.config.maxRunDepth),
-    engine: makeMillEngine({
+    return {
+      selectedDriverName: selectedDriver.name,
+      selectedExecutorName: selectedExecutor.name,
+      selectedExecutorRuntime: selectedExecutor.runtime,
+      selectedExtensions: resolvedConfig.config.extensions,
       runsDirectory,
-      driverName: selectedDriver.name,
-      executorName: selectedExecutor.name,
-      driver: selectedDriver.runtime,
-      extensions: resolvedConfig.config.extensions,
-    }),
-  };
-};
+      maxRunDepth: resolveMaxRunDepth(resolvedConfig.config.maxRunDepth),
+      engine: makeMillEngine({
+        runsDirectory,
+        driverName: selectedDriver.name,
+        executorName: selectedExecutor.name,
+        driver: selectedDriver.runtime,
+        extensions: resolvedConfig.config.extensions,
+      }),
+    };
+  });
 
 const isRunTerminalEvent = (eventType: string): boolean =>
   eventType === "run:complete" || eventType === "run:failed" || eventType === "run:cancelled";
@@ -508,16 +509,16 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
   const engineContext = await makeEngineForConfig(input);
   const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
-  const currentRunDepth = resolveCurrentRunDepth();
-  const nextRunDepth = currentRunDepth + 1;
+    const currentRunDepth = resolveCurrentRunDepth();
+    const nextRunDepth = currentRunDepth + 1;
 
-  if (nextRunDepth > engineContext.maxRunDepth) {
-    return Promise.reject(
-      new Error(
-        `Run depth ${nextRunDepth} exceeds configured maxRunDepth=${engineContext.maxRunDepth}.`,
-      ),
-    );
-  }
+    if (nextRunDepth > engineContext.maxRunDepth) {
+      return yield* Effect.fail(
+        new RunApiError({
+          message: `Run depth ${nextRunDepth} exceeds configured maxRunDepth=${engineContext.maxRunDepth}.`,
+        }),
+      );
+    }
 
   const submittedRun = await runWithBunContext(
     engineContext.engine.submit({
@@ -541,24 +542,42 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
     runDepth: nextRunDepth,
   });
 
-  return submittedRun;
-};
+export const submitRun = (input: SubmitRunInput): Promise<RunRecord> =>
+  runWithBunServices(submitRunEffect(input));
 
-export const runProgramSync = async (input: RunProgramSyncInput): Promise<RunSyncOutput> => {
-  const submittedRun = await submitRun(input);
-  const timeoutSeconds = input.waitTimeoutSeconds ?? DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS;
+const runProgramSyncEffect = (
+  input: RunProgramSyncInput,
+): Effect.Effect<RunSyncOutput, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const submittedRun = yield* submitRunEffect(input);
+    const timeoutSeconds = input.waitTimeoutSeconds ?? DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS;
 
-  const terminalRun = await waitForRun({
-    defaults: input.defaults,
-    runId: submittedRun.id,
-    timeoutSeconds,
-    cwd: input.cwd,
-    homeDirectory: input.homeDirectory,
-    runsDirectory: input.runsDirectory,
-    driverName: input.driverName,
-    executorName: input.executorName,
-    pathExists: input.pathExists,
-    loadConfigModule: input.loadConfigModule,
+    const terminalRun = yield* waitForRunEffect({
+      defaults: input.defaults,
+      runId: submittedRun.id,
+      timeoutSeconds,
+      cwd: input.cwd,
+      homeDirectory: input.homeDirectory,
+      runsDirectory: input.runsDirectory,
+      driverName: input.driverName,
+      executorName: input.executorName,
+      pathExists: input.pathExists,
+      loadConfigModule: input.loadConfigModule,
+    });
+
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    const result = yield* engineContext.engine.result(decodeRunIdSync(submittedRun.id));
+
+    if (result === undefined) {
+      return yield* Effect.fail(
+        new RunApiError({ message: `Run ${submittedRun.id} completed without persisted result.` }),
+      );
+    }
+
+    return {
+      run: terminalRun,
+      result,
+    };
   });
 
   const engineContext = await makeEngineForConfig(input);
@@ -632,6 +651,9 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
                 message: String(error),
               }),
           ),
+      }),
+      Effect.sync(() => {
+        removeWorkerPidFile(runDirectory);
       }),
     );
   } finally {
@@ -741,8 +763,10 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
             Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
             (event) => emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
           ),
-        ),
-      );
+        );
+      }
+
+      return;
     }
 
     return;
@@ -779,11 +803,42 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
 
         yield* Fiber.interrupt(ioFiber);
       }),
-    ),
-  );
-};
+    );
+  });
 
-export const cancelRun = async (
+export const watchRun = (input: WatchRunInput): Promise<void> =>
+  runWithBunServices(watchRunEffect(input));
+
+const cancelRunEffect = (
+  input: CancelRunInput,
+): Effect.Effect<
+  {
+    runId: string;
+    status: RunRecord["status"];
+    alreadyTerminal: boolean;
+  },
+  unknown,
+  BunServices.BunServices
+> =>
+  Effect.gen(function* () {
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    const cancelled = yield* engineContext.engine.cancel(
+      decodeRunIdSync(input.runId),
+      input.reason,
+    );
+
+    yield* Effect.promise(() =>
+      terminateWorkerProcessTree(engineContext.runsDirectory, input.runId),
+    );
+
+    return {
+      runId: cancelled.run.id,
+      status: cancelled.run.status,
+      alreadyTerminal: cancelled.alreadyTerminal,
+    };
+  });
+
+export const cancelRun = (
   input: CancelRunInput,
 ): Promise<{
   runId: string;

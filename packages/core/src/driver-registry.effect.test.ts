@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Effect } from "effect";
-import { runWithRuntime } from "../public/test-runtime.api";
-import type { DriverRegistration } from "../public/types";
+import { runWithRuntime } from "./test-runtime";
+import type { DriverRegistration } from "./types";
 import { makeDriverRegistry } from "./driver-registry.effect";
 
 const makeDriver = (name: string): DriverRegistration => ({

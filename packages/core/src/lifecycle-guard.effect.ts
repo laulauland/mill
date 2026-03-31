@@ -1,6 +1,6 @@
 import { Data, Effect } from "effect";
-import type { MillEvent } from "../domain/event.schema";
-import type { RunStatus } from "../domain/run.schema";
+import type { MillEvent } from "./event.schema";
+import type { RunStatus } from "./run.schema";
 
 type RunTerminalEventType = Extract<
   MillEvent["type"],
