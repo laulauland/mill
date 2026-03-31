@@ -3,9 +3,13 @@ language: TypeScript
 severity: error
 message: Promise contracts are allowed only in boundary APIs.
 ignores:
-  - "**/src/public/**"
   - "**/*.api.ts"
   - "**/*.d.ts"
+  - "**/*.test.ts"
+  - "packages/*/src/index.ts"
+  - "packages/*/src/types.ts"
+  - "packages/*/src/test-runtime.ts"
+  - "packages/*/src/mill.ts"
 rule:
   any:
     - pattern: "Promise<$T>"

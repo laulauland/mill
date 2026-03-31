@@ -3,9 +3,11 @@ language: TypeScript
 severity: error
 message: Interfaces are allowed only in public boundary modules and declaration files.
 ignores:
-  - "**/src/public/**"
+  - "**/*.api.ts"
   - "**/*.d.ts"
   - "**/*.effect.ts"
   - "**/*.service.ts"
+  - "packages/*/src/index.ts"
+  - "packages/*/src/types.ts"
 rule:
   pattern: "interface $NAME { $$$BODY }"

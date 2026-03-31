@@ -32,20 +32,12 @@ describe("check-exports", () => {
 
       await writeFile(
         join(workspaceRoot, "packages", "core", "package.json"),
-        JSON.stringify(
-          { name: "@fixture/core", exports: { ".": "./src/public/index.api.ts" } },
-          null,
-          2,
-        ),
+        JSON.stringify({ name: "@fixture/core", exports: { ".": "./src/index.ts" } }, null, 2),
         "utf-8",
       );
       await writeFile(
         join(workspaceRoot, "tools", "kit", "package.json"),
-        JSON.stringify(
-          { name: "@fixture/kit", exports: { ".": "./src/public/index.api.ts" } },
-          null,
-          2,
-        ),
+        JSON.stringify({ name: "@fixture/kit", exports: { ".": "./src/index.ts" } }, null, 2),
         "utf-8",
       );
 
@@ -81,7 +73,7 @@ describe("check-exports", () => {
           {
             name: "@fixture/core",
             exports: {
-              ".": "./src/public/index.api.ts",
+              ".": "./src/index.ts",
               "./bad": {
                 import: "./dist/internal/runtime.js",
                 default: ["./dist/domain/model.js", "./dist/public/index.js"],
@@ -128,7 +120,7 @@ describe("check-exports", () => {
           {
             name: "@fixture/core",
             exports: {
-              ".": "./src/public/index.api.ts",
+              ".": "./src/index.ts",
               "./internal": "./dist/public/re-export.js",
               "./runtime/worker": {
                 import: "./dist/public/runtime-worker.js",
@@ -150,7 +142,9 @@ describe("check-exports", () => {
   });
 
   it("recognizes internal export paths", () => {
-    expect(isInternalExportPath("./src/public/index.api.ts")).toBe(false);
+    expect(isInternalExportPath("./src/index.ts")).toBe(false);
+    expect(isInternalExportPath("./src/engine.effect.ts")).toBe(true);
+    expect(isInternalExportPath("./src/run.schema.ts")).toBe(true);
     expect(isInternalExportPath("./src/internal/engine.effect.ts")).toBe(true);
     expect(isInternalExportPath("./dist/domain/run.schema.js")).toBe(true);
     expect(isInternalExportPath("./dist/runtime/worker.effect.js")).toBe(true);

@@ -3,9 +3,11 @@ language: TypeScript
 severity: error
 message: Runtime.runPromise bridge is allowed only in public boundary and CLI entry adapters.
 ignores:
-  - "**/src/public/**"
-  - "**/src/bin/**"
   - "**/*.api.ts"
+  - "**/*.test.ts"
+  - "packages/*/src/index.ts"
+  - "packages/*/src/test-runtime.ts"
+  - "packages/*/src/mill.ts"
 rule:
   any:
     - pattern: "Runtime.runPromise($A)"

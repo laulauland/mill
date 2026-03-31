@@ -42,21 +42,13 @@ describe("guardrail harness", () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "mill-guardrail-boundary-"));
 
     try {
-      const badPublicPath = join(fixtureRoot, "packages", "core", "src", "public", "bad.ts");
-      const badInternalPath = join(
-        fixtureRoot,
-        "packages",
-        "core",
-        "src",
-        "internal",
-        "bridge.effect.ts",
-      );
-      await mkdir(join(fixtureRoot, "packages", "core", "src", "public"), { recursive: true });
-      await mkdir(join(fixtureRoot, "packages", "core", "src", "internal"), { recursive: true });
+      const badPublicPath = join(fixtureRoot, "packages", "core", "src", "bad.api.ts");
+      const badInternalPath = join(fixtureRoot, "packages", "core", "src", "bridge.effect.ts");
+      await mkdir(join(fixtureRoot, "packages", "core", "src"), { recursive: true });
 
       await writeFile(
         badPublicPath,
-        ['import { makeEngine } from "../internal/engine.effect";'].join("\n"),
+        ['import { makeEngine } from "./engine.effect";'].join("\n"),
         "utf-8",
       );
       await writeFile(
@@ -94,15 +86,8 @@ describe("guardrail harness", () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "mill-guardrail-runtime-"));
 
     try {
-      const badInternalPath = join(
-        fixtureRoot,
-        "packages",
-        "core",
-        "src",
-        "internal",
-        "bad.effect.ts",
-      );
-      await mkdir(join(fixtureRoot, "packages", "core", "src", "internal"), { recursive: true });
+      const badInternalPath = join(fixtureRoot, "packages", "core", "src", "bad.effect.ts");
+      await mkdir(join(fixtureRoot, "packages", "core", "src"), { recursive: true });
 
       await writeFile(
         badInternalPath,
@@ -124,7 +109,7 @@ describe("guardrail harness", () => {
           "scan",
           "--config",
           astGrepConfigPath,
-          "packages/core/src/internal",
+          "packages/core/src",
           "--error",
           "--filter",
           "no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)",

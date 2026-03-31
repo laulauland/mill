@@ -1,11 +1,12 @@
 id: no-public-import-internal
 language: TypeScript
 severity: error
-message: Public modules must not import private internal/runtime/domain modules directly.
+message: Public API modules must not import private effect/schema/codec implementation modules directly.
 files:
-  - "**/src/public/**/*.ts"
+  - "**/*.api.ts"
 ignores:
   - "**/*.test.ts"
+  - "**/run.api.ts"
 rule:
   any:
     - pattern: 'import $$$A from "$MODULE"'
@@ -16,4 +17,4 @@ rule:
     - pattern: 'export type { $$$A } from "$MODULE"'
 constraints:
   MODULE:
-    regex: "(^|/)(internal|runtime|domain)/"
+    regex: "(^|/)[^/]+\\.(effect|schema|codec)(\\.ts)?$"

@@ -87,8 +87,14 @@ export const normalizeExportKeys = (value: unknown): Array<string> => {
   return [];
 };
 
-export const isInternalExportPath = (entry: string): boolean =>
-  /(^|\/)(src\/)?(internal|runtime|domain)(\/|$)/.test(entry.replace(/^\.\//, ""));
+export const isInternalExportPath = (entry: string): boolean => {
+  const normalized = entry.replace(/^\.\//, "");
+
+  return (
+    /(^|\/)(src\/)?(internal|runtime|domain)(\/|$)/.test(normalized) ||
+    /(^|\/)[^/]+\.(effect|schema|codec)(\.[cm]?[jt]sx?)?$/.test(normalized)
+  );
+};
 
 export const checkExportBoundaries = async (
   rootDirectory: string,
