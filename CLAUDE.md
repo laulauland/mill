@@ -14,6 +14,6 @@
 
 ## Boundary policy
 
-- Public API boundary: `src/public/**` and `*.api.ts`
-- Domain contracts: `src/domain/**` and `*.schema.ts`
-- Internal/runtime orchestration: `src/internal/**`, `src/runtime/**`, `*.effect.ts`
+- Public API boundary: `*.api.ts` plus flat entry files such as `index.ts`, `types.ts`, `test-runtime.ts`, and CLI `mill.ts`
+- Domain contracts: `*.schema.ts`
+- Internal/runtime orchestration: `*.effect.ts`

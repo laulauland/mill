@@ -11,10 +11,10 @@ Rule of thumb (strict):
 
 Concretely:
 
-- Public boundary (`src/public/**`, ambient `*.d.ts`):
+- Public boundary (`*.api.ts`, approved flat entry files like `src/index.ts` / `src/types.ts`, ambient `*.d.ts`):
   - can expose `Promise<T>`
   - can use `interface` for ergonomics
-- Internal/domain/runtime (`src/internal/**`, `src/domain/**`, `src/runtime/**`):
+- Internal/domain/runtime (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`):
   - no public Promise contracts
   - domain shapes must be defined by `@effect/schema/Schema`
   - no interface-based domain modelling
@@ -187,19 +187,14 @@ Target platform services:
 
 ```text
 src/
-  public/
-    mill.api.ts              # Promise-based user API
-    discovery.api.ts         # Promise-based core discovery payload builders
-    types.ts                 # user-facing interfaces allowed
-  domain/
-    run.schema.ts            # Schema-based domain models (no interfaces)
-    spawn.schema.ts
-  internal/
-    engine.effect.ts         # internal Effect programs/services
-    run-store.effect.ts
-    driver.effect.ts
-  runtime/
-    worker.effect.ts
+  index.ts                   # public package barrel / package entrypoint
+  types.ts                   # user-facing interfaces allowed
+  *.api.ts                   # Promise-based public adapters
+  *.schema.ts                # Schema-based domain models (no interfaces)
+  *.effect.ts                # internal Effect programs/services/runtime helpers
+  *.codec.ts                 # decode/encode modules
+  test-runtime.ts            # test-only boundary helper
+  mill.ts                    # CLI executable entrypoint (cli package)
 ```
 
 Naming rules:
@@ -215,7 +210,7 @@ If a file defines domain entities and is not `*.schema.ts`, it is considered a s
 Allowed (public boundary):
 
 ```ts
-// src/public/mill.api.ts
+// src/mill.api.ts
 export interface Mill {
   spawn(input: SpawnInput): Promise<SpawnOutput>;
 }
@@ -224,7 +219,7 @@ export interface Mill {
 Required (internal):
 
 ```ts
-// src/internal/engine.effect.ts
+// src/engine.effect.ts
 export const submit = (
   input: SubmitRunInput,
 ): Effect.Effect<SubmitRunOutput, SubmitError, RunStore | DriverRegistry> =>
@@ -236,7 +231,7 @@ export const submit = (
 Required (domain):
 
 ```ts
-// src/domain/run.schema.ts
+// src/run.schema.ts
 export const RunRecord = Schema.Struct({
   id: RunId,
   status: RunStatus,
@@ -248,7 +243,7 @@ export type RunRecord = Schema.Schema.Type<typeof RunRecord>;
 Disallowed:
 
 ```ts
-// src/domain/run.ts
+// src/run.ts
 export interface RunRecord {
   // lint error
   id: string;
@@ -265,7 +260,7 @@ export interface RunRecord {
   - `Effect.runPromiseExit`
   - `Runtime.runPromiseExit`
 - Bridge location:
-  - boundary adapters only (`src/public/**`, CLI boundary entrypoints)
+  - boundary adapters only (`*.api.ts`, approved flat entry files, CLI boundary entrypoints)
 
 Decode policy:
 
@@ -504,8 +499,8 @@ CLI is a thin wrapper around SDK service methods.
 
 ### 18.1 Package export boundary
 
-`package.json` exports must expose only public entrypoints (`src/public/**` build outputs).
+`package.json` exports must expose only public entrypoints (`src/index.ts` and other explicit public barrels).
 
-- consumers must not import `src/internal/**` / `src/runtime/**` directly
+- consumers must not import non-exported implementation files (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`) directly
 - internal modules are considered private implementation detail
 - CI should fail if an internal path is exported

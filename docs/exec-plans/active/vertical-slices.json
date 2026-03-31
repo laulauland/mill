@@ -13,14 +13,14 @@
         "Driver model list in discovery is sourced via driver codec catalog path, not hardcoded in CLI."
       ],
       "deliverables": [
-        "`packages/core/src/public/discovery.api.ts` plus config loader internals.",
-        "`packages/cli/src/public/index.api.ts` routing for discovery/help modes.",
-        "`packages/driver-pi/src/public/index.api.ts` catalog-backed registration surface."
+        "`packages/core/src/discovery.api.ts` plus config loader internals.",
+        "`packages/cli/src/index.ts` routing for discovery/help modes.",
+        "`packages/driver-acp/src/index.ts` catalog-backed registration surface."
       ],
       "testCommands": [
-        "bun test packages/core/src/public/discovery.api.test.ts",
-        "bun test packages/cli/src/public/index.api.test.ts",
-        "bun test packages/driver-pi/src"
+        "bun test packages/core/src/discovery.api.test.ts",
+        "bun test packages/cli/src/index.api.test.ts",
+        "bun test packages/driver-acp/src"
       ]
     },
     {
@@ -35,16 +35,16 @@
         "`spawn:complete` payload includes non-empty `sessionRef` (SPEC invariant #2)."
       ],
       "deliverables": [
-        "`packages/core/src/domain/*.schema.ts` for run/spawn/event unions.",
-        "`packages/core/src/internal/run-store.effect.ts` and sync lifecycle in `engine.effect.ts`.",
+        "`packages/core/src/*.schema.ts` for run/spawn/event unions.",
+        "`packages/core/src/run-store.effect.ts` and sync lifecycle in `engine.effect.ts`.",
         "CLI handlers for `run --sync` and `status` in `packages/cli`.",
-        "`packages/driver-pi` codec + process-driver implementation using `Command.make(cmd, ...args)`."
+        "`packages/driver-acp` codec + process-driver implementation using `Command.make(cmd, ...args)`."
       ],
       "testCommands": [
-        "bun test packages/core/src/domain",
-        "bun test packages/core/src/internal",
+        "bun test packages/core/src",
+        "bun test packages/core/src",
         "bun test packages/cli/src",
-        "bun test packages/driver-pi/src"
+        "bun test packages/driver-acp/src"
       ]
     },
     {
@@ -64,9 +64,9 @@
         "Driver-pi test fixtures for malformed or duplicate terminal event sequences."
       ],
       "testCommands": [
-        "bun test packages/core/src/internal",
-        "bun test packages/cli/src/public",
-        "bun test packages/driver-pi/src"
+        "bun test packages/core/src",
+        "bun test packages/cli/src",
+        "bun test packages/driver-acp/src"
       ]
     },
     {
@@ -81,15 +81,15 @@
         "`--sync` is implemented as submit + wait composition over the same lifecycle implementation."
       ],
       "deliverables": [
-        "`packages/core/src/runtime/worker.effect.ts` detached worker runtime.",
+        "`packages/core/src/worker.effect.ts` detached worker runtime.",
         "CLI async submit wiring and private worker entrypoint.",
-        "Detached worker integration path exercising `packages/driver-pi`."
+        "Detached worker integration path exercising `packages/driver-acp`."
       ],
       "testCommands": [
-        "bun test packages/core/src/runtime",
-        "bun test packages/core/src/internal",
+        "bun test packages/core/src",
+        "bun test packages/core/src",
         "bun test packages/cli/src/bin",
-        "bun test packages/driver-pi/src"
+        "bun test packages/driver-acp/src"
       ]
     },
     {
@@ -106,13 +106,13 @@
       "deliverables": [
         "Core driver/executor registries and extension hook/event plumbing.",
         "CLI flag handling for driver/executor selection and `init` skeleton.",
-        "Public adapters in `driver-claude` and `driver-codex` aligned to generic contracts."
+        "Public ACP registrations aligned to generic contracts."
       ],
       "testCommands": [
-        "bun test packages/core/src/public",
-        "bun test packages/core/src/internal",
+        "bun test packages/core/src",
+        "bun test packages/core/src",
         "bun test packages/cli/src",
-        "bun test packages/driver-pi/src packages/driver-claude/src packages/driver-codex/src"
+        "bun test packages/driver-acp/src"
       ]
     },
     {
@@ -147,13 +147,13 @@
       "deliverables": [
         "Core observer stream + inspect/cancel implementations tied to event log and in-memory fanout.",
         "CLI handlers for `watch`, `inspect`, `cancel`, and `ls` with strict JSON stdout contract.",
-        "Driver session bridge interface plus driver-pi implementation for `inspect --session`."
+        "Driver session bridge interface plus driver-acp implementation for `inspect --session`."
       ],
       "testCommands": [
-        "bun test packages/core/src/internal",
-        "bun test packages/core/src/runtime",
+        "bun test packages/core/src",
+        "bun test packages/core/src",
         "bun test packages/cli/src",
-        "bun test packages/driver-pi/src",
+        "bun test packages/driver-acp/src",
         "bun test"
       ]
     }

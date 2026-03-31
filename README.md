@@ -18,7 +18,7 @@ Or build from source (requires [Bun](https://bun.sh)):
 git clone https://github.com/laulauland/mill.git && cd mill
 bun install
 VERSION=$(node -p 'require("./packages/cli/package.json").version')
-bun build --compile packages/cli/src/bin/mill.ts --outfile mill --define "__MILL_VERSION__=\"$VERSION\""
+bun build --compile packages/cli/src/mill.ts --outfile mill --define "__MILL_VERSION__=\"$VERSION\""
 mv mill ~/.local/bin/  # or anywhere on your PATH
 ```
 
@@ -127,28 +127,26 @@ Recursion guard:
 
 ## Drivers
 
-Drivers translate `mill.spawn()` into whatever protocol the agent needs. Ships with Claude, Codex, and pi drivers. Write your own by implementing a codec that parses process output into structured events.
+Drivers translate `mill.spawn()` into whatever protocol the agent needs. Mill now ships a unified ACP driver package that bundles Claude, Codex, and pi registrations. Write your own by implementing a codec/runtime pair that parses process output into structured events.
 
-| Package               | Purpose                                    |
-| --------------------- | ------------------------------------------ |
-| `@mill/core`          | Engine, lifecycle, API, config             |
-| `@mill/cli`           | CLI commands                               |
-| `@mill/driver-claude` | Claude driver                              |
-| `@mill/driver-codex`  | Codex driver                               |
-| `@mill/driver-pi`     | Pi driver                                  |
-| `pi-mill`             | Pi extension for mill as execution backend |
+| Package            | Purpose                                                 |
+| ------------------ | ------------------------------------------------------- |
+| `@mill/core`       | Engine, lifecycle, API, config                          |
+| `@mill/cli`        | CLI commands                                            |
+| `@mill/driver-acp` | Unified ACP-based Claude / Codex / pi driver registries |
+| `pi-mill`          | Pi extension for mill as execution backend              |
 
-Model catalog source by driver:
+Model catalog source by built-in driver registration:
 
-- `@mill/driver-pi`: reads `~/.pi/agent/settings.json` (`enabledModels`) by default, unless overridden in config.
-- `@mill/driver-claude`: built-in default catalog (`sonnet`, `opus`, `haiku`) unless overridden in config.
-- `@mill/driver-codex`: built-in default catalog (`openai-codex/gpt-5.3-codex`) unless overridden in config.
+- `pi` (`@mill/driver-acp`): reads `~/.pi/agent/settings.json` (`enabledModels`) by default, unless overridden in config.
+- `claude` (`@mill/driver-acp`): built-in default catalog (`sonnet`, `opus`, `haiku`) unless overridden in config.
+- `codex` (`@mill/driver-acp`): built-in default catalog (`openai-codex/gpt-5.3-codex`) unless overridden in config.
 
 These driver catalogs flow into CLI help (`mill --help`, `mill <command> --help`) through the selected driver's `codec.modelCatalog`. In short: driver registration is how model availability is communicated to the CLI/main agent.
 
 ## Internals
 
-Built on [Effect](https://effect.website). Public API is Promise-based (`src/public/**/*.api.ts`). Engine, drivers, and persistence are Effect-first with Schema-validated domain types.
+Built on [Effect](https://effect.website). Public API is Promise-based (`*.api.ts` plus flat entry files such as `src/index.ts` / `src/types.ts`). Engine, drivers, and persistence are Effect-first with Schema-validated domain types.
 
 Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON event log, results, per-spawn session transcripts.
 

@@ -8,7 +8,7 @@ Each slice intentionally spans:
 
 - `@mill/core` (engine/domain/runtime)
 - `@mill/cli` (user-facing commands)
-- at least one driver package (`@mill/driver-pi`, then multi-driver where relevant)
+- at least one driver package (`@mill/driver-acp`, then multi-registration where relevant)
 
 ---
 
@@ -21,7 +21,7 @@ Ship a reliable authoring/discovery entrypoint so humans/agents can self-serve u
 
 - core: discovery payload builder + config resolution service
 - cli: `mill`, `--help`, `--help --json` output adapters
-- driver-pi: model catalog surfaced into discovery
+- driver-acp: model catalog surfaced into discovery
 
 **Acceptance criteria**
 
@@ -33,17 +33,17 @@ Ship a reliable authoring/discovery entrypoint so humans/agents can self-serve u
 
 **Deliverables**
 
-- `packages/core/src/public/discovery.api.ts` + config loader internals.
-- `packages/cli/src/public/index.api.ts` command routing for discovery modes.
-- `packages/driver-pi/src/public/index.api.ts` exposes catalog-backed registration.
+- `packages/core/src/discovery.api.ts` + config loader internals.
+- `packages/cli/src/index.ts` command routing for discovery modes.
+- `packages/driver-acp/src/index.ts` exposes catalog-backed registration.
 
 **Test commands**
 
-- `bun test packages/core/src/public/discovery.api.test.ts`
-- `bun test packages/core/src/public/config-loader.api.test.ts`
-- `bun test packages/cli/src/public/index.api.test.ts`
-- `bun test packages/cli/src/public/index.e2e.test.ts`
-- `bun test packages/driver-pi/src`
+- `bun test packages/core/src/discovery.api.test.ts`
+- `bun test packages/core/src/config-loader.api.test.ts`
+- `bun test packages/cli/src/index.api.test.ts`
+- `bun test packages/cli/src/index.e2e.test.ts`
+- `bun test packages/driver-acp/src`
 
 **Status (2026-02-23)**
 
@@ -51,7 +51,7 @@ Ship a reliable authoring/discovery entrypoint so humans/agents can self-serve u
 - ✅ Hardened config resolution to skip upward lookup when no repo root is detected (prevents unrelated parent config capture outside repos).
 - ✅ Implemented discovery payload builder with required SPEC §7 fields and `discoveryVersion: 1`.
 - ✅ CLI routing now supports `mill`, `--help`, `--help --json` with JSON on stdout and human help on stdout in non-JSON mode (stderr reserved for diagnostics).
-- ✅ Driver discovery models flow through driver codec catalog (`driver.codec.modelCatalog`) via `@mill/driver-pi` registration.
+- ✅ Driver discovery models flow through driver codec catalog (`driver.codec.modelCatalog`) via `@mill/driver-acp` registration.
 - ✅ Added unit/integration/e2e coverage for config resolution, discovery payload, CLI wiring, and `mill --help --json` command path.
 - ✅ Extended config-loader tests + implementation to support computed `authoring.instructions` const-expression forms in `mill.config.ts` (not just inline string literals), while preserving SPEC §6.1 resolution order.
 - ✅ Re-ran full workspace `bun test` after S1 hardening; suite remains green.
@@ -67,7 +67,7 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 
 - core: run/store/event schemas + engine `runSync/submit/status`
 - cli: `run --sync`, `status`
-- driver-pi: process driver + codec -> tier-1 event mapping
+- driver-acp: process driver + codec -> tier-1 event mapping
 
 **Acceptance criteria**
 
@@ -79,28 +79,28 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 
 **Deliverables**
 
-- `packages/core/src/domain/*.schema.ts` for run/spawn/event unions.
-- `packages/core/src/internal/run-store.effect.ts`, `engine.effect.ts` sync lifecycle.
+- `packages/core/src/*.schema.ts` for run/spawn/event unions.
+- `packages/core/src/run-store.effect.ts`, `engine.effect.ts` sync lifecycle.
 - `packages/cli` command handlers for `run --sync` and `status` JSON/human output.
-- `packages/driver-pi` codec + process-driver implementation using `Command.make(cmd, ...args)`.
+- `packages/driver-acp` codec + process-driver implementation using `Command.make(cmd, ...args)`.
 
 **Test commands**
 
-- `bun test packages/core/src/domain`
-- `bun test packages/core/src/internal`
+- `bun test packages/core/src`
+- `bun test packages/core/src`
 - `bun test packages/cli/src`
-- `bun test packages/driver-pi/src`
+- `bun test packages/driver-acp/src`
 
 **Status (2026-02-23)**
 
-- ✅ Added Tier-1 event discriminated union schemas in `packages/core/src/domain/event.schema.ts` with persisted decode helpers (`Schema.parseJson` + `Schema.decodeUnknown*`).
+- ✅ Added Tier-1 event discriminated union schemas in `packages/core/src/event.schema.ts` with persisted decode helpers (`Schema.parseJson` + `Schema.decodeUnknown*`).
 - ✅ Expanded run/spawn schema contracts with typed decode utilities for persisted artifacts (`run.json`, `result.json`) and runtime validation of `SpawnResult` (`sessionRef` non-empty).
-- ✅ Implemented `packages/core/src/internal/run-store.effect.ts` for run directory creation and append-only `events.ndjson` persistence.
-- ✅ Implemented sync lifecycle orchestration in `packages/core/src/internal/engine.effect.ts` (run start/status, spawn mapping, run terminal persistence).
-- ✅ Implemented `run --sync` and `status` CLI command handlers in `packages/cli/src/public/index.api.ts`, with JSON mode contract preserved on stdout.
-- ✅ Implemented process-backed pi driver runtime in `packages/driver-pi` with codec decoding and command invocation via `Command.make(cmd, ...args)`.
+- ✅ Implemented `packages/core/src/run-store.effect.ts` for run directory creation and append-only `events.ndjson` persistence.
+- ✅ Implemented sync lifecycle orchestration in `packages/core/src/engine.effect.ts` (run start/status, spawn mapping, run terminal persistence).
+- ✅ Implemented `run --sync` and `status` CLI command handlers in `packages/cli/src/index.ts`, with JSON mode contract preserved on stdout.
+- ✅ Implemented process-backed ACP driver runtime in `packages/driver-acp` with codec decoding and command invocation via `Command.make(cmd, ...args)`.
 - ✅ Added unit/integration/e2e coverage for schemas, run store, engine↔driver flow, CLI `run --sync`, CLI `status`, and persisted artifact verification.
-- ✅ Re-ran targeted slice suites (`core/domain`, `core/internal`, `cli/src`, `driver-pi/src`) with green results.
+- ✅ Re-ran targeted slice suites (`core/src`, `cli/src`, `driver-acp/src`) with green results.
 
 ---
 
@@ -113,7 +113,7 @@ Enforce lifecycle correctness guarantees before detached execution complexity is
 
 - core: state machine guards + terminal-event idempotence/rejection + `wait`
 - cli: `wait <runId> --timeout <seconds>`
-- driver-pi: deterministic fixture stream to simulate duplicate/late terminal events
+- driver-acp: deterministic fixture stream to simulate duplicate/late terminal events
 
 **Acceptance criteria**
 
@@ -131,20 +131,20 @@ Enforce lifecycle correctness guarantees before detached execution complexity is
 
 **Test commands**
 
-- `bun test packages/core/src/internal`
-- `bun test packages/cli/src/public`
-- `bun test packages/driver-pi/src`
+- `bun test packages/core/src`
+- `bun test packages/cli/src`
+- `bun test packages/driver-acp/src`
 
 **Status (2026-02-23)**
 
-- ✅ Added core lifecycle transition guards in `packages/core/src/internal/lifecycle-guard.effect.ts` and unit coverage for terminal single-shot / terminal→non-terminal rejection paths.
+- ✅ Added core lifecycle transition guards in `packages/core/src/lifecycle-guard.effect.ts` and unit coverage for terminal single-shot / terminal→non-terminal rejection paths.
 - ✅ Hardened run status transitions in `RunStore` so terminal statuses are immutable (`complete|failed|cancelled` cannot transition further).
 - ✅ Implemented `MillEngine.wait(runId, timeout)` with deterministic polling over persisted events plus typed timeout error (`WaitTimeoutError`).
 - ✅ `wait` now validates persisted event streams with lifecycle guards and tracks terminal observation without allowing post-terminal transitions.
 - ✅ Implemented deterministic terminal policy: duplicate terminal emissions are rejected via `LifecycleInvariantError` (not ignored).
 - ✅ Added CLI `wait` command (`mill wait <runId> --timeout <seconds> [--json]`) with JSON/human output parity.
 - ✅ Added typed JSON timeout contract for CLI (`{ ok: false, error: { _tag: "WaitTimeoutError", runId, timeoutSeconds, message } }`) and non-zero timeout exit code.
-- ✅ Added driver-pi malformed fixture coverage for duplicate/invalid terminal output ordering in codec + runtime integration tests.
+- ✅ Added driver-acp malformed fixture coverage for duplicate/invalid terminal output ordering in codec + runtime integration tests.
 - ✅ Added integration/e2e coverage for persisted/live wait behavior and timeout behavior.
 - ✅ Re-ran full workspace `bun test`; suite is green.
 
@@ -159,7 +159,7 @@ Implement async-by-default submission with private worker process semantics.
 
 - core/runtime: worker orchestration, submit metadata, status updates
 - cli: `run` (default async), `_worker` private command path, `status`
-- driver-pi: exercised in worker-executed program spawns
+- driver-acp: exercised in worker-executed program spawns
 
 **Acceptance criteria**
 
@@ -171,20 +171,20 @@ Implement async-by-default submission with private worker process semantics.
 
 **Deliverables**
 
-- `packages/core/src/runtime/worker.effect.ts` detached worker runtime.
+- `packages/core/src/worker.effect.ts` detached worker runtime.
 - CLI wiring for async submit path and private worker entrypoint.
 - Driver-pi execution exercised by detached worker integration tests.
 
 **Test commands**
 
-- `bun test packages/core/src/runtime`
-- `bun test packages/core/src/internal`
-- `bun test packages/cli/src/bin`
-- `bun test packages/driver-pi/src`
+- `bun test packages/core/src`
+- `bun test packages/core/src`
+- `bun test packages/cli/src`
+- `bun test packages/driver-acp/src`
 
 **Status (2026-02-25)**
 
-- ✅ Implemented `runDetachedWorker` in `packages/core/src/runtime/worker.effect.ts` for detached execution lifecycle.
+- ✅ Implemented `runDetachedWorker` in `packages/core/src/worker.effect.ts` for detached execution lifecycle.
 - ✅ CLI `run` command submits asynchronously by default and returns `runId` immediately with `pending`/`running` status.
 - ✅ Private `_worker` command path exists with contract `mill _worker --run-id <id> --program <path> --runs-dir <dir>` and performs idempotent `finalizeTerminal`.
 - ✅ Worker writes program copy (`program.ts`), program host artifacts (`program-host.ts`, `program-host.marker`), and worker log (`logs/worker.log`) to run directory.
@@ -219,14 +219,14 @@ Reach configurable runtime composition while preserving strict boundary contract
 
 - Core registries + extension hook/event plumbing.
 - CLI flag handling for driver/executor selection and `init` skeleton.
-- Public adapters in `driver-claude` and `driver-codex` aligned to generic contracts (no vendor logic in core).
+- Public ACP registrations aligned to generic contracts (no vendor logic in core).
 
 **Test commands**
 
-- `bun test packages/core/src/public`
-- `bun test packages/core/src/internal`
+- `bun test packages/core/src`
+- `bun test packages/core/src`
 - `bun test packages/cli/src`
-- `bun test packages/driver-pi/src packages/driver-claude/src packages/driver-codex/src`
+- `bun test packages/driver-acp/src`
 
 **Status (2026-02-25)**
 
@@ -250,7 +250,7 @@ Lock architecture constraints so future slices cannot regress Effect/boundary sa
 
 - core: boundary-compliant module names/contracts validated by rules
 - cli: boundary adapter checks + no internal imports from public API
-- driver packages: process safety and decode/env/time/random constraints validated across at least driver-pi
+- driver packages: process safety and decode/env/time/random constraints validated across driver-acp
 
 **Acceptance criteria**
 
@@ -311,14 +311,14 @@ Complete observer/control semantics for robust long-running orchestration operat
 
 **Test commands**
 
-- `bun test packages/core/src/internal`
-- `bun test packages/core/src/runtime`
+- `bun test packages/core/src`
+- `bun test packages/core/src`
 - `bun test packages/cli/src`
 - `bun test`
 
 **Status (2026-02-26)**
 
-- ✅ Added core observer fanout hub (`packages/core/src/internal/observer-hub.effect.ts`) and wired engine tier-1/tier-2 publishing to persisted append + in-memory live subscribers.
+- ✅ Added core observer fanout hub (`packages/core/src/observer-hub.effect.ts`) and wired engine tier-1/tier-2 publishing to persisted append + in-memory live subscribers.
 - ✅ Extended `MillEngine` with `watch`, `watchIo`, `cancel`, and `list` semantics.
 - ✅ Hardened append path synchronization against concurrent terminal transitions by rehydrating lifecycle guard state from persisted events before each append.
 - ✅ Added CLI `watch` channel/source/spawn filters and removed the separate `inspect` command surface.

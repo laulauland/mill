@@ -30,13 +30,13 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
    - No vendor-specific driver concepts in core contracts.
    - Vendor specifics belong in codecs and config.
 6. **Boundary clarity is mandatory**
-   - `src/public/**` / `*.api.ts`: user-facing Promise + interface contracts.
-   - `src/internal/**`, `src/domain/**`, `src/runtime/**`: Effect contracts + Schema domain models.
+   - `*.api.ts` plus flat public entry files (`src/index.ts`, `src/types.ts`, `src/test-runtime.ts`, CLI `src/mill.ts`): user-facing Promise + interface contracts.
+   - `*.effect.ts`, `*.schema.ts`, `*.codec.ts`: internal Effect contracts + Schema/codec implementation modules.
    - Internal interfaces are capability-only (method signatures), never domain shape definitions.
    - The boundary must be visible in filenames and enforced via ast-grep.
 7. **Promise bridge is explicit and singular**
    - Only `Runtime.runPromise` is allowed as the Effect→Promise bridge.
-   - It is allowed only at public boundary adapters (`src/public/**`, CLI entry adapters).
+   - It is allowed only at public boundary adapters (`*.api.ts`, approved flat entry files, CLI entry adapters).
    - `Effect.runPromise*` and `Runtime.runPromiseExit` are disallowed.
 8. **No shell-string command execution**
    - Drivers must construct commands as argument vectors (`Command.make(cmd, ...args)`).
@@ -51,7 +51,7 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
 
 11. **Internal module boundaries are strict**
 
-- Public modules must not import from `src/internal/**` directly.
+- Public modules must not import private implementation files directly.
 - Package exports expose only public API entrypoints.
 
 12. **Terminal state is single-shot**

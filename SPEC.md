@@ -35,13 +35,13 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
    - No vendor-specific driver concepts in core contracts.
    - Vendor specifics belong in codecs and config.
 6. **Boundary clarity is mandatory**
-   - `src/public/**` / `*.api.ts`: user-facing Promise + interface contracts.
-   - `src/internal/**`, `src/domain/**`, `src/runtime/**`: Effect contracts + Schema domain models.
+   - `*.api.ts` plus flat public entry files (`src/index.ts`, `src/types.ts`, `src/test-runtime.ts`, CLI `src/mill.ts`): user-facing Promise + interface contracts.
+   - `*.effect.ts`, `*.schema.ts`, `*.codec.ts`: internal Effect contracts + Schema/codec implementation modules.
    - Internal interfaces are capability-only (method signatures), never domain shape definitions.
    - The boundary must be visible in filenames and enforced via ast-grep.
 7. **Promise bridge is explicit and singular**
    - Only `Runtime.runPromise` is allowed as the Effect→Promise bridge.
-   - It is allowed only at public boundary adapters (`src/public/**`, CLI entry adapters).
+   - It is allowed only at public boundary adapters (`*.api.ts`, approved flat entry files, CLI entry adapters).
    - `Effect.runPromise*` and `Runtime.runPromiseExit` are disallowed.
 8. **No shell-string command execution**
    - Drivers must construct commands as argument vectors (`Command.make(cmd, ...args)`).
@@ -53,7 +53,7 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
    - `Date.now()` and `Math.random()` are disallowed in runtime/domain internals.
    - Use injected Effect services (`Clock`, `Random`) instead.
 11. **Internal module boundaries are strict**
-   - Public modules must not import from `src/internal/**` directly.
+   - Public modules must not import private implementation files directly.
    - Package exports expose only public API entrypoints.
 12. **Terminal state is single-shot**
    - Each run/spawn emits exactly one terminal event (`complete` | `failed` | `cancelled`).
@@ -243,10 +243,10 @@ Rule of thumb (strict):
 
 Concretely:
 
-- Public boundary (`src/public/**`, ambient `*.d.ts`):
+- Public boundary (`*.api.ts`, approved flat entry files like `src/index.ts` / `src/types.ts`, ambient `*.d.ts`):
   - can expose `Promise<T>`
   - can use `interface` for ergonomics
-- Internal/domain/runtime (`src/internal/**`, `src/domain/**`, `src/runtime/**`):
+- Internal/domain/runtime (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`):
   - no public Promise contracts
   - domain shapes must be defined by `@effect/schema/Schema`
   - no interface-based domain modelling
@@ -406,19 +406,14 @@ Target platform services:
 
 ```text
 src/
-  public/
-    mill.api.ts              # Promise-based user API
-    discovery.api.ts         # Promise-based CLI/discovery payload builders
-    types.ts                 # user-facing interfaces allowed
-  domain/
-    run.schema.ts            # Schema-based domain models (no interfaces)
-    spawn.schema.ts
-  internal/
-    engine.effect.ts         # internal Effect programs/services
-    run-store.effect.ts
-    driver.effect.ts
-  runtime/
-    worker.effect.ts
+  index.ts                   # public package barrel / package entrypoint
+  types.ts                   # user-facing interfaces allowed
+  *.api.ts                   # Promise-based public adapters
+  *.schema.ts                # Schema-based domain models (no interfaces)
+  *.effect.ts                # internal Effect programs/services/runtime helpers
+  *.codec.ts                 # decode/encode modules
+  test-runtime.ts            # test-only boundary helper
+  mill.ts                    # CLI executable entrypoint (cli package)
 ```
 
 Naming rules:
@@ -434,7 +429,7 @@ If a file defines domain entities and is not `*.schema.ts`, it is considered a s
 Allowed (public boundary):
 
 ```ts
-// src/public/mill.api.ts
+// src/mill.api.ts
 export interface Mill {
   spawn(input: SpawnInput): Promise<SpawnOutput>;
 }
@@ -443,7 +438,7 @@ export interface Mill {
 Required (internal):
 
 ```ts
-// src/internal/engine.effect.ts
+// src/engine.effect.ts
 export const submit = (
   input: SubmitRunInput,
 ): Effect.Effect<SubmitRunOutput, SubmitError, RunStore | DriverRegistry> =>
@@ -455,7 +450,7 @@ export const submit = (
 Required (domain):
 
 ```ts
-// src/domain/run.schema.ts
+// src/run.schema.ts
 export const RunRecord = Schema.Struct({
   id: RunId,
   status: RunStatus,
@@ -467,7 +462,7 @@ export type RunRecord = Schema.Schema.Type<typeof RunRecord>;
 Disallowed:
 
 ```ts
-// src/domain/run.ts
+// src/run.ts
 export interface RunRecord { // lint error
   id: string;
   status: string;
@@ -483,7 +478,7 @@ export interface RunRecord { // lint error
   - `Effect.runPromiseExit`
   - `Runtime.runPromiseExit`
 - Bridge location:
-  - boundary adapters only (`src/public/**`, CLI boundary entrypoints)
+  - boundary adapters only (`*.api.ts`, approved flat entry files, CLI boundary entrypoints)
 
 Decode policy:
 
@@ -735,9 +730,9 @@ CLI is a thin wrapper around SDK service methods.
 
 ### 18.1 Package export boundary
 
-`package.json` exports must expose only public entrypoints (`src/public/**` build outputs).
+`package.json` exports must expose only public entrypoints (`src/index.ts` and other explicit public barrels).
 
-- consumers must not import `src/internal/**` / `src/runtime/**` directly
+- consumers must not import non-exported implementation files (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`) directly
 - internal modules are considered private implementation detail
 - CI should fail if an internal path is exported
 
@@ -807,14 +802,14 @@ ruleDirs:
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "lint:ast-grep:test": "ast-grep test --config .ast-grep/sgconfig.yml --skip-snapshot-tests",
-    "lint:ast-grep": "ast-grep scan --config .ast-grep/sgconfig.yml src --error",
-    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml src/internal src/domain src/runtime --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import)'",
+    "lint:ast-grep": "bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety",
+    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import)'",
     "lint:boundary": "ast-grep scan --config .ast-grep/sgconfig.yml src --error --filter 'no-(interface-outside-public|promise-outside-public|interface-for-domain-models|effect-runpromise|runtime-runpromise-outside-boundary|public-import-internal)'",
-    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml src/internal src/domain src/runtime --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)'",
+    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)'",
     "lint:exports": "bun run scripts/check-exports.ts",
     "format": "oxfmt . --write",
     "format:check": "oxfmt . --check",
-    "check": "bun run lint:ast-grep:test && bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety && bun run lint:exports && bun run lint:ast-grep && bun run lint && bun run format:check && bun run typecheck && bun test"
+    "check": "bun run lint:ast-grep:test && bun run lint:exports && bun run lint:ast-grep && bun run lint && bun run format:check && bun run typecheck && bun test"
   }
 }
 ```
@@ -849,8 +844,8 @@ ruleDirs:
 - enforce Effect-centric architecture and composability
 - enforce boundary policy:
   - `no-interface-for-domain-models`: domain entities must come from `Schema`
-  - `no-interface-outside-public`: interfaces are allowed only in `src/public/**` and `*.d.ts` (plus explicit allowlist files like config declarations)
-  - `no-promise-outside-public`: Promise-returning contracts are allowed only at user boundary files (`*.api.ts`, `src/public/**`)
+  - `no-interface-outside-public`: interfaces are allowed only in `*.api.ts`, `*.d.ts`, and explicit flat public entry allowlists (`src/index.ts`, `src/types.ts`)
+  - `no-promise-outside-public`: Promise-returning contracts are allowed only at user boundary files (`*.api.ts` plus approved flat public entry files)
   - `no-effect-runpromise`: ban `Effect.runPromise*` usage entirely
   - `no-runtime-runpromise-outside-boundary`: only `Runtime.runPromise` may bridge, and only in boundary adapters
   - `no-public-import-internal`: public API modules cannot import private internals directly
@@ -864,7 +859,7 @@ ruleDirs:
 Practical exception policy:
 
 - internal service capability interfaces (method-only, Effect return types) are allowed in `*.service.ts` / `*.effect.ts` through explicit ast-grep rule allow patterns
-- any interface with data fields in `src/domain/**`, `src/internal/**`, `src/runtime/**` is a lint error
+- any interface with data fields outside approved public entry files is a lint error
 - codec/schema files are allowlisted for parsing operations; all downstream modules consume decoded typed values
 
 ### 19.6 Required contract tests

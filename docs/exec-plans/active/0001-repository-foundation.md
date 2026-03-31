@@ -9,9 +9,7 @@ Implement the baseline monorepo scaffold and guardrail toolchain for `mill` per 
 - Bun workspace monorepo with:
   - `packages/core`
   - `packages/cli`
-  - `packages/driver-pi`
-  - `packages/driver-claude`
-  - `packages/driver-codex`
+  - `packages/driver-acp`
 - Baseline Effect dependencies (`effect`, `@effect/platform`, `@effect/platform-bun`, `@effect/schema`)
 - Constraint toolchain files/scripts
 - Minimal compileable package wiring + baseline tests

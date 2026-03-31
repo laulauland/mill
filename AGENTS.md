@@ -14,7 +14,7 @@
 
 ## Guardrail reminder
 
-- Respect file boundary naming (`public/*.api.ts`, `domain/*.schema.ts`, `internal/runtime/*.effect.ts`).
+- Respect file boundary naming (`*.api.ts`, `*.schema.ts`, `*.effect.ts`) and flat package `src/` layouts.
 - Use only public package exports across packages.
 
 ## Commits
@@ -27,7 +27,7 @@ Use conventional commits. The changelog is generated from these prefixes:
 
 ## Releasing
 
-Binary: `mill`. CLI entrypoint: `packages/cli/src/bin/mill.ts`. Version lives in `packages/cli/package.json`.
+Binary: `mill`. CLI entrypoint: `packages/cli/src/mill.ts`. Version lives in `packages/cli/package.json`.
 
 To cut a release:
 

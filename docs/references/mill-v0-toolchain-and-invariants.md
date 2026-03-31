@@ -66,14 +66,14 @@ ruleDirs:
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "lint:ast-grep:test": "ast-grep test --config .ast-grep/sgconfig.yml --skip-snapshot-tests",
-    "lint:ast-grep": "ast-grep scan --config .ast-grep/sgconfig.yml src --error",
-    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml src/internal src/domain src/runtime --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import)'",
+    "lint:ast-grep": "bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety",
+    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import)'",
     "lint:boundary": "ast-grep scan --config .ast-grep/sgconfig.yml src --error --filter 'no-(interface-outside-public|promise-outside-public|interface-for-domain-models|effect-runpromise|runtime-runpromise-outside-boundary|public-import-internal)'",
-    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml src/internal src/domain src/runtime --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)'",
+    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)'",
     "lint:exports": "bun run scripts/check-exports.ts",
     "format": "oxfmt . --write",
     "format:check": "oxfmt . --check",
-    "check": "bun run lint:ast-grep:test && bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety && bun run lint:exports && bun run lint:ast-grep && bun run lint && bun run format:check && bun run typecheck && bun test"
+    "check": "bun run lint:ast-grep:test && bun run lint:exports && bun run lint:ast-grep && bun run lint && bun run format:check && bun run typecheck && bun test"
   }
 }
 ```
@@ -108,8 +108,8 @@ ruleDirs:
 - enforce Effect-centric architecture and composability
 - enforce boundary policy:
   - `no-interface-for-domain-models`: domain entities must come from `Schema`
-  - `no-interface-outside-public`: interfaces are allowed only in `src/public/**` and `*.d.ts` (plus explicit allowlist files like config declarations)
-  - `no-promise-outside-public`: Promise-returning contracts are allowed only at user boundary files (`*.api.ts`, `src/public/**`)
+  - `no-interface-outside-public`: interfaces are allowed only in `*.api.ts`, `*.d.ts`, and explicit flat public entry allowlists (`src/index.ts`, `src/types.ts`)
+  - `no-promise-outside-public`: Promise-returning contracts are allowed only at user boundary files (`*.api.ts` plus approved flat public entry files)
   - `no-effect-runpromise`: ban `Effect.runPromise*` usage entirely
   - `no-runtime-runpromise-outside-boundary`: only `Runtime.runPromise` may bridge, and only in boundary adapters
   - `no-public-import-internal`: public API modules cannot import private internals directly
@@ -123,7 +123,7 @@ ruleDirs:
 Practical exception policy:
 
 - internal service capability interfaces (method-only, Effect return types) are allowed in `*.service.ts` / `*.effect.ts` through explicit ast-grep rule allow patterns
-- any interface with data fields in `src/domain/**`, `src/internal/**`, `src/runtime/**` is a lint error
+- any interface with data fields outside approved public entry files is a lint error
 - codec/schema files are allowlisted for parsing operations; all downstream modules consume decoded typed values
 
 ### 19.6 Required contract tests
