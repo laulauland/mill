@@ -105,8 +105,47 @@ const EventTypeEnvelope = Schema.parseJson(
   }),
 );
 
+const FAKE_ACP_AGENT_SCRIPT = `
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+const write = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+
+  if (msg.method === "initialize") {
+    write({ jsonrpc: "2.0", id: msg.id, result: {
+      protocolVersion: "0.1",
+      serverInfo: { name: "fake-agent", version: "0.0.1" },
+      capabilities: {}
+    }});
+    return;
+  }
+
+  if (msg.method === "session/new") {
+    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "test-session-123" }});
+    return;
+  }
+
+  if (msg.method === "session/prompt") {
+    const sessionId = msg.params?.sessionId || "test-session-123";
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "Hello from " }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "fake agent" }});
+    write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" }});
+  }
+});
+`;
+
+const TEST_ACP_ENV = {
+  MILL_ACP_COMMAND: "bun",
+  MILL_ACP_ARGS_JSON: JSON.stringify(["-e", FAKE_ACP_AGENT_SCRIPT]),
+} as const;
+
 const withNeutralRunDepthEnv = (command: Command.Command): Command.Command =>
   Command.env(command, {
+    ...TEST_ACP_ENV,
+    HOME: "",
     MILL_RUN_DEPTH: "",
   });
 
@@ -123,7 +162,7 @@ const commandExitCode = (command: Command.Command): Promise<number> =>
 describe("mill help (e2e)", () => {
   it("does not expose discovery subcommand", async () => {
     const exitCode = await commandExitCode(
-      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "discovery", "--json"),
+      Command.make("bun", "run", "packages/cli/src/mill.ts", "discovery", "--json"),
     );
 
     expect(exitCode).toBe(1);
@@ -131,7 +170,7 @@ describe("mill help (e2e)", () => {
 
   it("prints top-level help via built-in --help", async () => {
     const output = await commandOutput(
-      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "--help"),
+      Command.make("bun", "run", "packages/cli/src/mill.ts", "--help"),
     );
 
     expect(output).toContain("Usage: mill <command>");
@@ -144,7 +183,7 @@ describe("mill help (e2e)", () => {
 
   it("prints per-command help via built-in --help", async () => {
     const output = await commandOutput(
-      Command.make("bun", "run", "packages/cli/src/bin/mill.ts", "run", "--help"),
+      Command.make("bun", "run", "packages/cli/src/mill.ts", "run", "--help"),
     );
 
     expect(output).toContain("$ run [--json] [--sync]");
@@ -173,7 +212,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "run",
           programPath,
           "--sync",
@@ -209,7 +248,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "build",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "--bundle",
           "--target=node",
           "--format=esm",
@@ -273,7 +312,7 @@ describe("mill run/status/wait (e2e)", () => {
           Command.make(
             "bun",
             "run",
-            "packages/cli/src/bin/mill.ts",
+            "packages/cli/src/mill.ts",
             "run",
             programPath,
             "--sync",
@@ -286,6 +325,7 @@ describe("mill run/status/wait (e2e)", () => {
             CODEX_THREAD_ID: "",
             CODEX_SANDBOX: "",
             CODEX_SANDBOX_NETWORK_DISABLED: "",
+            HOME: "",
           },
         ),
       );
@@ -315,7 +355,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "run",
           programPath,
           "--json",
@@ -333,7 +373,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "status",
           submitPayload.runId,
           "--json",
@@ -351,7 +391,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "wait",
           submitPayload.runId,
           "--timeout",
@@ -381,7 +421,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "_worker",
           "--run-id",
           submitPayload.runId,
@@ -435,7 +475,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "run",
           programPath,
           "--sync",
@@ -458,7 +498,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "status",
           runPayload.run.id,
           "--json",
@@ -477,7 +517,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "wait",
           runPayload.run.id,
           "--timeout",
@@ -535,7 +575,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "run",
           completeProgramPath,
           "--json",
@@ -550,7 +590,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "run",
           cancelProgramPath,
           "--json",
@@ -568,7 +608,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "cancel",
           cancelRun.runId,
           "--json",
@@ -587,7 +627,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "wait",
           cancelRun.runId,
           "--timeout",
@@ -607,7 +647,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "wait",
           completeRun.runId,
           "--timeout",
@@ -627,7 +667,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "watch",
           "--run",
           completeRun.runId,
@@ -661,7 +701,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "watch",
           "--run",
           cancelRun.runId,
@@ -691,7 +731,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "ls",
           "--json",
           "--driver",
@@ -765,7 +805,7 @@ describe("mill run/status/wait (e2e)", () => {
         Command.make(
           "bun",
           "run",
-          "packages/cli/src/bin/mill.ts",
+          "packages/cli/src/mill.ts",
           "wait",
           runId,
           "--timeout",

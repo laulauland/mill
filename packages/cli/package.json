@@ -2,11 +2,11 @@
   "name": "@mill/cli",
   "version": "0.1.7",
   "bin": {
-    "mill": "./src/bin/mill.ts"
+    "mill": "./src/mill.ts"
   },
   "type": "module",
   "exports": {
-    ".": "./src/public/index.api.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@mill/core": "workspace:*",

@@ -17,6 +17,7 @@ import {
   submitRun,
   waitForRun,
   watchRun,
+  type DriverProcessConfig,
   type LaunchWorkerInput,
 } from "@mill/core";
 import {
@@ -52,7 +53,7 @@ const runtime = Runtime.defaultRuntime;
 
 const readVersionFromPackageJson = (): string | undefined => {
   try {
-    const packageJsonPath = new URL("../../package.json", import.meta.url);
+    const packageJsonPath = new URL("../package.json", import.meta.url);
     const parsed = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as {
       readonly version?: unknown;
     };
@@ -104,29 +105,114 @@ const createDirectExecutor = () => ({
   },
 });
 
-const defaultConfig = defineConfig({
-  defaultDriver: "",
-  defaultExecutor: "direct",
-  maxRunDepth: 1,
-  drivers: {
-    pi: processDriver(createPiAcpDriverRegistration()),
-    claude: processDriver(createClaudeAcpDriverRegistration()),
-    codex: processDriver(createCodexAcpDriverRegistration()),
-  },
-  executors: {
-    direct: createDirectExecutor(),
-  },
-  extensions: [],
-  authoring: {
-    instructions:
-      "Use systemPrompt for WHO and prompt for WHAT. Prefer cheaper models for search and stronger models for synthesis.",
-  },
-});
+const normalizeOptionalText = (value: string | undefined): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const parseStringArrayJson = (raw: string | undefined): ReadonlyArray<string> | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const parseStringRecordJson = (
+  raw: string | undefined,
+): Readonly<Record<string, string>> | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const entries = Object.entries(parsed).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    );
+
+    return Object.fromEntries(entries);
+  } catch {
+    return undefined;
+  }
+};
+
+const readAcpProcessOverride = (
+  env: Readonly<Record<string, string | undefined>>,
+  prefix: "MILL_PI_ACP" | "MILL_CLAUDE_ACP" | "MILL_CODEX_ACP",
+): DriverProcessConfig | undefined => {
+  const command = normalizeOptionalText(env[`${prefix}_COMMAND`] ?? env.MILL_ACP_COMMAND);
+
+  if (command === undefined) {
+    return undefined;
+  }
+
+  const args = parseStringArrayJson(env[`${prefix}_ARGS_JSON`] ?? env.MILL_ACP_ARGS_JSON) ?? [];
+  const processEnv = parseStringRecordJson(env[`${prefix}_ENV_JSON`] ?? env.MILL_ACP_ENV_JSON);
+
+  return {
+    command,
+    args,
+    env: processEnv,
+  } satisfies DriverProcessConfig;
+};
+
+const createDefaultConfig = (env: Readonly<Record<string, string | undefined>>) =>
+  defineConfig({
+    defaultDriver: "",
+    defaultExecutor: "direct",
+    maxRunDepth: 1,
+    drivers: {
+      pi: processDriver(
+        createPiAcpDriverRegistration({
+          process: readAcpProcessOverride(env, "MILL_PI_ACP"),
+          homeDirectory: normalizeOptionalText(env.HOME),
+        }),
+      ),
+      claude: processDriver(
+        createClaudeAcpDriverRegistration({
+          process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP"),
+        }),
+      ),
+      codex: processDriver(
+        createCodexAcpDriverRegistration({
+          process: readAcpProcessOverride(env, "MILL_CODEX_ACP"),
+        }),
+      ),
+    },
+    executors: {
+      direct: createDirectExecutor(),
+    },
+    extensions: [],
+    authoring: {
+      instructions:
+        "Use systemPrompt for WHO and prompt for WHAT. Prefer cheaper models for search and stronger models for synthesis.",
+    },
+  });
+
+const resolveDefaults = (options: RunCliOptions) => createDefaultConfig(options.env ?? process.env);
 
 const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>): Promise<A> =>
   Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
 
-const millBinPath = decodeURIComponent(new URL("../bin/mill.ts", import.meta.url).pathname);
+const millBinPath = decodeURIComponent(new URL("./mill.ts", import.meta.url).pathname);
 
 const SCRIPT_ENTRYPOINT_EXTENSION = /\.(?:[mc]?[jt]sx?)$/i;
 
@@ -222,7 +308,10 @@ const buildWorkerCommandArguments = (
     : workerArguments;
 };
 
-const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => {
+const launchDetachedWorker = async (
+  input: LaunchWorkerInput,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<void> => {
   await runWithBunContext(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -233,6 +322,12 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
           ? scriptEntrypointCandidate
           : undefined;
       const hasSourceEntrypoint = yield* fileSystem.exists(millBinPath);
+      const workerEnv = Object.fromEntries(
+        Object.entries({
+          ...env,
+          [RUN_DEPTH_ENV]: String(input.runDepth),
+        }).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      );
 
       const workerCommand = PlatformCommand.env(
         PlatformCommand.make(
@@ -248,9 +343,7 @@ const launchDetachedWorker = async (input: LaunchWorkerInput): Promise<void> => 
           PlatformCommand.stdout("ignore"),
           PlatformCommand.stderr("ignore"),
         ),
-        {
-          [RUN_DEPTH_ENV]: String(input.runDepth),
-        },
+        workerEnv,
       );
 
       const detachedScope = yield* Scope.make();
@@ -406,7 +499,7 @@ const resolveActiveDriver = async (
   requestedDriverName: string | undefined,
 ): Promise<ActiveDriverResolution> => {
   const resolvedConfig = await resolveConfig({
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     pathExists: options.pathExists,
@@ -455,7 +548,7 @@ const runCommand = async (
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   const runInput = {
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     programPath: command.program,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
@@ -464,7 +557,8 @@ const runCommand = async (
     executorName: fromOption(command.executor),
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
-    launchWorker: options.launchWorker ?? launchDetachedWorker,
+    launchWorker:
+      options.launchWorker ?? ((input) => launchDetachedWorker(input, options.env ?? process.env)),
     metadata,
   } as const;
 
@@ -514,7 +608,7 @@ const workerCommand = async (
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   const output = await runWorker({
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     runId: command.runId,
     programPath: command.program,
     cwd: options.cwd,
@@ -592,7 +686,7 @@ const statusCommand = async (
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   const output = await getRunStatus({
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     runId: command.runId,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
@@ -634,7 +728,7 @@ const waitCommand = async (
 
   const [waitResult] = await Promise.allSettled([
     waitForRun({
-      defaults: defaultConfig,
+      defaults: resolveDefaults(options),
       runId: command.runId,
       timeoutSeconds,
       cwd: options.cwd,
@@ -729,7 +823,7 @@ const watchCommand = async (
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   await watchRun({
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     runId: fromOption(command.run),
     channel: fromOption(command.channel),
     source: fromOption(command.source),
@@ -764,7 +858,7 @@ const cancelCommand = async (
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   const cancelled = await cancelRun({
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     runId: command.runId,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
@@ -801,7 +895,7 @@ const lsCommand = async (
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
   const runs = await listRuns({
-    defaults: defaultConfig,
+    defaults: resolveDefaults(options),
     status: fromOption(command.status),
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
@@ -1091,7 +1185,7 @@ const resolveHelpContextForHelp = async (
 
   try {
     const resolvedConfig = await resolveConfig({
-      defaults: defaultConfig,
+      defaults: resolveDefaults(options),
       cwd: options.cwd,
       homeDirectory: options.homeDirectory,
       pathExists: options.pathExists,
@@ -1100,7 +1194,8 @@ const resolveHelpContextForHelp = async (
 
     const instructions = resolvedConfig.config.authoring.instructions;
     const hasAuthoringOverride =
-      resolvedConfig.source !== "defaults" && instructions !== defaultConfig.authoring.instructions;
+      resolvedConfig.source !== "defaults" &&
+      instructions !== resolveDefaults(options).authoring.instructions;
 
     authoring = hasAuthoringOverride
       ? {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { runCli } from "../public/index.api";
+import { runCli } from "./index";
 
 const code = await runCli(process.argv.slice(2));
 process.exit(code);

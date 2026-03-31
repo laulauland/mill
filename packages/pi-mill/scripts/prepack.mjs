@@ -37,7 +37,7 @@ run(
   "bun",
   [
     "build",
-    path.join(repoRoot, "packages", "cli", "src", "bin", "mill.ts"),
+    path.join(repoRoot, "packages", "cli", "src", "mill.ts"),
     "--bundle",
     "--target=node",
     "--format=esm",

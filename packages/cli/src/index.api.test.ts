@@ -3,10 +3,55 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Schema from "@effect/schema/Schema";
-import { runCli } from "./index.api";
+import { runCli } from "./index";
+
+const FAKE_ACP_AGENT_SCRIPT = `
+const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+const write = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+
+  if (msg.method === "initialize") {
+    write({ jsonrpc: "2.0", id: msg.id, result: {
+      protocolVersion: "0.1",
+      serverInfo: { name: "fake-agent", version: "0.0.1" },
+      capabilities: {}
+    }});
+    return;
+  }
+
+  if (msg.method === "session/new") {
+    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "test-session-123" }});
+    return;
+  }
+
+  if (msg.method === "session/prompt") {
+    const sessionId = msg.params?.sessionId || "test-session-123";
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "Hello from " }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "fake agent" }});
+    write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" }});
+  }
+});
+`;
+
+const TEST_ACP_ENV = {
+  MILL_ACP_COMMAND: "bun",
+  MILL_ACP_ARGS_JSON: JSON.stringify(["-e", FAKE_ACP_AGENT_SCRIPT]),
+} as const;
 
 const TEST_HARNESS_ENV = {
+  ...TEST_ACP_ENV,
   CODEX_THREAD_ID: "test-thread-id",
+} as const;
+
+const NO_HARNESS_ENV = {
+  CLAUDECODE: "",
+  CODEX_THREAD_ID: "",
+  CODEX_SANDBOX: "",
+  CODEX_SANDBOX_NETWORK_DISABLED: "",
 } as const;
 
 const runCliForTest = async (
@@ -19,8 +64,11 @@ const runCliForTest = async (
 
   try {
     return await runCli(argv, {
-      env: TEST_HARNESS_ENV,
-      ...(options ?? {}),
+      ...options,
+      env: {
+        ...TEST_HARNESS_ENV,
+        ...options?.env,
+      },
     });
   } finally {
     if (previousDepth === undefined) {
@@ -420,7 +468,7 @@ describe("runCli", () => {
         cwd: tempDirectory,
         homeDirectory,
         pathExists: async () => false,
-        env: {},
+        env: NO_HARNESS_ENV,
         io: {
           stdout: (line) => {
             stdout.push(line);
@@ -846,6 +894,8 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        "await new Promise((resolve) => setTimeout(resolve, 100));",
+        'console.log("program-io");',
         "const scan = await mill.spawn({",
         '  agent: "scout",',
         '  systemPrompt: "You are concise.",',
@@ -1009,7 +1059,7 @@ describe("runCli", () => {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       pathExists: async () => false,
-      env: {},
+      env: NO_HARNESS_ENV,
       io: {
         stdout: (line) => {
           stdout.push(line);
