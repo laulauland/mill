@@ -1,5 +1,6 @@
 import { Effect } from "effect";
-import type { Mill, SpawnInput, SpawnOutput } from "./types";
+import { spawnOutputToTaskResult, taskInputToSpawnInput } from "./task.api";
+import type { Mill, SpawnInput, SpawnOutput, TaskInput, TaskResult } from "./types";
 
 const buildSpawnOutput = (input: SpawnInput): SpawnOutput => ({
   text: `noop response for ${input.agent}`,
@@ -10,9 +11,16 @@ const buildSpawnOutput = (input: SpawnInput): SpawnOutput => ({
   exitCode: 0,
 });
 
+const runSpawn = (input: SpawnInput): Promise<SpawnOutput> =>
+  Effect.runPromise(Effect.succeed(buildSpawnOutput(input)));
+
+const runTask = async (input: TaskInput): Promise<TaskResult> =>
+  spawnOutputToTaskResult(await runSpawn(taskInputToSpawnInput(input)));
+
 export const createMill = (): Promise<Mill> =>
   Effect.runPromise(
     Effect.succeed({
-      spawn: (input: SpawnInput) => Effect.runPromise(Effect.succeed(buildSpawnOutput(input))),
+      spawn: runSpawn,
+      task: runTask,
     }),
   );

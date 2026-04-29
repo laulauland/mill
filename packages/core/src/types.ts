@@ -1,5 +1,127 @@
 import type * as Effect from "effect/Effect";
 
+export interface AgentProvider {
+  readonly driver: string;
+  readonly model: string;
+  readonly displayName?: string;
+}
+
+export type SteeringPolicy = "queue" | "interrupt" | "reject";
+
+export interface TaskInput {
+  readonly agent: AgentProvider;
+  readonly prompt: string;
+  readonly system?: string;
+  readonly role?: string;
+  readonly steering?: SteeringPolicy;
+  readonly metadata?: Readonly<Record<string, string>>;
+}
+
+export interface TaskRef {
+  readonly runId: string;
+  readonly taskId: string;
+}
+
+export type TaskCommand =
+  | {
+      readonly type: "message";
+      readonly content: string;
+      readonly mode?: SteeringPolicy;
+    }
+  | {
+      readonly type: "context";
+      readonly content: string;
+      readonly from?: TaskRef | string;
+      readonly mode?: SteeringPolicy;
+    }
+  | {
+      readonly type: "interrupt";
+      readonly content: string;
+      readonly reason?: string;
+    }
+  | {
+      readonly type: "cancel";
+      readonly reason?: string;
+    };
+
+export type TaskStatus =
+  | "idle"
+  | "starting"
+  | "running"
+  | "waiting"
+  | "queued"
+  | "interrupting"
+  | "complete"
+  | "failed"
+  | "cancelled";
+
+export interface QueuedTaskMessage {
+  readonly type: "message" | "context";
+  readonly content: string;
+  readonly from?: TaskRef | string;
+  readonly mode: SteeringPolicy;
+}
+
+export interface TaskSnapshot {
+  readonly id: string;
+  readonly runId?: string;
+  readonly ref?: TaskRef;
+  readonly status: TaskStatus;
+  readonly input: TaskInput;
+  readonly text: string;
+  readonly thought: string;
+  readonly queue: ReadonlyArray<QueuedTaskMessage>;
+  readonly sessionRef?: string;
+  readonly result?: TaskResult;
+  readonly error?: string;
+}
+
+export interface RunSnapshot {
+  readonly id: string;
+  readonly status: "idle" | "running" | "complete" | "failed" | "cancelled";
+  readonly tasks: Readonly<Record<string, TaskSnapshot>>;
+  readonly result?: unknown;
+  readonly error?: string;
+}
+
+export interface TaskActor {
+  readonly id: string;
+  readonly done: Promise<TaskResult>;
+  readonly start: () => TaskActor;
+  readonly stop: () => TaskActor;
+  readonly cancel: (reason?: string) => TaskActor;
+  readonly send: (command: TaskCommand) => TaskActor;
+  readonly subscribe: (listener: (snapshot: TaskSnapshot) => void) => {
+    readonly unsubscribe: () => void;
+  };
+  readonly getSnapshot: () => TaskSnapshot;
+}
+
+export interface RunActor {
+  readonly id: string;
+  readonly done: Promise<unknown>;
+  readonly start: () => RunActor;
+  readonly stop: () => RunActor;
+  readonly cancel: (reason?: string) => RunActor;
+  readonly task: (input: TaskInput) => TaskActor;
+  readonly taskRef: (taskId: string) => TaskActor;
+  readonly subscribe: (listener: (snapshot: RunSnapshot) => void) => {
+    readonly unsubscribe: () => void;
+  };
+  readonly getSnapshot: () => RunSnapshot;
+}
+
+export interface TaskResult {
+  readonly text: string;
+  readonly sessionRef: string;
+  readonly role: string;
+  readonly model: string;
+  readonly driver: string;
+  readonly exitCode: number;
+  readonly stopReason?: string;
+  readonly errorMessage?: string;
+}
+
 export interface SpawnInput {
   readonly agent: string;
   readonly systemPrompt: string;
@@ -101,6 +223,7 @@ export interface ExtensionRegistration {
 
 export interface Mill {
   spawn(input: SpawnInput): Promise<SpawnOutput>;
+  task(input: TaskInput): Promise<TaskResult>;
 }
 
 export interface DriverProcessConfig {

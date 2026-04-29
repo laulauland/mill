@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createMill } from "./mill.api";
+import { codex } from "./task.api";
 
 describe("createMill", () => {
   it("returns a Promise-based mill API backed by Effect core", async () => {
@@ -15,5 +16,20 @@ describe("createMill", () => {
     expect(result.driver).toBe("default");
     expect(result.sessionRef).toBe("session/noop");
     expect(result.exitCode).toBe(0);
+  });
+
+  it("supports task vocabulary through the Promise API", async () => {
+    const mill = await createMill();
+
+    const result = await mill.task({
+      agent: codex("openai-codex/gpt-5.3-codex"),
+      system: "You are concise.",
+      prompt: "Say hello",
+      role: "scout",
+    });
+
+    expect(result.role).toBe("scout");
+    expect(result.model).toBe("openai-codex/gpt-5.3-codex");
+    expect(result.driver).toBe("default");
   });
 });
