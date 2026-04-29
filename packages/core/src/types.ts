@@ -86,6 +86,7 @@ export interface RunSnapshot {
 
 export interface TaskActor {
   readonly id: string;
+  readonly ref: TaskRef;
   readonly done: Promise<TaskResult>;
   readonly start: () => TaskActor;
   readonly stop: () => TaskActor;
@@ -224,6 +225,8 @@ export interface ExtensionRegistration {
 export interface Mill {
   spawn(input: SpawnInput): Promise<SpawnOutput>;
   task(input: TaskInput): Promise<TaskResult>;
+  taskActor(input: TaskInput): TaskActor;
+  runActor(): RunActor;
 }
 
 export interface DriverProcessConfig {

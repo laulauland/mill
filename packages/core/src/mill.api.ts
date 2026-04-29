@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { createRunActor, createTaskActor } from "./task-actor.api";
 import { spawnOutputToTaskResult, taskInputToSpawnInput } from "./task.api";
 import type { Mill, SpawnInput, SpawnOutput, TaskInput, TaskResult } from "./types";
 
@@ -22,5 +23,7 @@ export const createMill = (): Promise<Mill> =>
     Effect.succeed({
       spawn: runSpawn,
       task: runTask,
+      taskActor: (input: TaskInput) => createTaskActor(input, { execute: runTask }),
+      runActor: () => createRunActor(),
     }),
   );

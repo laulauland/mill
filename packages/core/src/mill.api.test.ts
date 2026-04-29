@@ -32,4 +32,22 @@ describe("createMill", () => {
     expect(result.model).toBe("openai-codex/gpt-5.3-codex");
     expect(result.driver).toBe("default");
   });
+
+  it("creates task actors without starting them", async () => {
+    const mill = await createMill();
+
+    const task = mill.taskActor({
+      agent: codex("openai-codex/gpt-5.3-codex"),
+      prompt: "Say hello",
+      role: "scout",
+    });
+
+    expect(task.getSnapshot().status).toBe("idle");
+
+    task.start();
+    const result = await task.done;
+
+    expect(result.role).toBe("scout");
+    expect(task.getSnapshot().status).toBe("complete");
+  });
 });
