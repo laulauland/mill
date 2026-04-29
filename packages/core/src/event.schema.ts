@@ -1,4 +1,4 @@
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 import {
   RunId,
   RunResult,
@@ -156,13 +156,13 @@ export const ExtensionErrorEvent = Schema.Struct({
   type: Schema.Literal("extension:error"),
   payload: Schema.Struct({
     extensionName: Schema.NonEmptyString,
-    hook: Schema.Literal("setup", "onEvent"),
+    hook: Schema.Literals(["setup", "onEvent"]),
     message: Schema.String,
   }),
 });
 export type ExtensionErrorEvent = Schema.Schema.Type<typeof ExtensionErrorEvent>;
 
-export const MillEvent = Schema.Union(
+export const MillEvent = Schema.Union([
   RunStartEvent,
   RunStatusEvent,
   RunCompleteEvent,
@@ -178,12 +178,12 @@ export const MillEvent = Schema.Union(
   SpawnCompleteEvent,
   SpawnCancelledEvent,
   ExtensionErrorEvent,
-);
+]);
 export type MillEvent = Schema.Schema.Type<typeof MillEvent>;
 
-export const MillEventJson = Schema.parseJson(MillEvent);
+export const MillEventJson = Schema.fromJsonString(MillEvent);
 
-export const decodeMillEventJson = Schema.decodeUnknown(MillEventJson);
+export const decodeMillEventJson = Schema.decodeUnknownEffect(MillEventJson);
 export const decodeMillEventJsonSync = Schema.decodeUnknownSync(MillEventJson);
 
 export const encodeMillEventJson = (event: MillEvent): string => JSON.stringify(event);

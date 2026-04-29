@@ -1,4 +1,4 @@
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 import { SpawnResult } from "./spawn.schema";
 
 export const SchemaVersion = Schema.Literal(1);
@@ -10,10 +10,10 @@ export type RunId = Schema.Schema.Type<typeof RunId>;
 export const SpawnId = Schema.String.pipe(Schema.brand("SpawnId"));
 export type SpawnId = Schema.Schema.Type<typeof SpawnId>;
 
-export const RunStatus = Schema.Literal("pending", "running", "complete", "failed", "cancelled");
+export const RunStatus = Schema.Literals(["pending", "running", "complete", "failed", "cancelled"]);
 export type RunStatus = Schema.Schema.Type<typeof RunStatus>;
 
-export const RunTerminalStatus = Schema.Literal("complete", "failed", "cancelled");
+export const RunTerminalStatus = Schema.Literals(["complete", "failed", "cancelled"]);
 export type RunTerminalStatus = Schema.Schema.Type<typeof RunTerminalStatus>;
 
 export const RunPaths = Schema.Struct({
@@ -24,10 +24,7 @@ export const RunPaths = Schema.Struct({
 });
 export type RunPaths = Schema.Schema.Type<typeof RunPaths>;
 
-export const RunMetadata = Schema.Record({
-  key: Schema.String,
-  value: Schema.String,
-});
+export const RunMetadata = Schema.Record(Schema.String, Schema.String);
 export type RunMetadata = Schema.Schema.Type<typeof RunMetadata>;
 
 export const RunRecord = Schema.Struct({
@@ -60,17 +57,17 @@ export const RunSyncOutput = Schema.Struct({
 });
 export type RunSyncOutput = Schema.Schema.Type<typeof RunSyncOutput>;
 
-export const RunRecordJson = Schema.parseJson(RunRecord);
-export const RunResultJson = Schema.parseJson(RunResult);
-export const RunSyncOutputJson = Schema.parseJson(RunSyncOutput);
+export const RunRecordJson = Schema.fromJsonString(RunRecord);
+export const RunResultJson = Schema.fromJsonString(RunResult);
+export const RunSyncOutputJson = Schema.fromJsonString(RunSyncOutput);
 
-export const decodeRunId = Schema.decodeUnknown(RunId);
+export const decodeRunId = Schema.decodeUnknownEffect(RunId);
 export const decodeRunIdSync = Schema.decodeUnknownSync(RunId);
-export const decodeSpawnId = Schema.decodeUnknown(SpawnId);
+export const decodeSpawnId = Schema.decodeUnknownEffect(SpawnId);
 export const decodeSpawnIdSync = Schema.decodeUnknownSync(SpawnId);
-export const decodeRunRecordJson = Schema.decodeUnknown(RunRecordJson);
+export const decodeRunRecordJson = Schema.decodeUnknownEffect(RunRecordJson);
 export const decodeRunRecordJsonSync = Schema.decodeUnknownSync(RunRecordJson);
-export const decodeRunResultJson = Schema.decodeUnknown(RunResultJson);
+export const decodeRunResultJson = Schema.decodeUnknownEffect(RunResultJson);
 export const decodeRunResultJsonSync = Schema.decodeUnknownSync(RunResultJson);
-export const decodeRunSyncOutputJson = Schema.decodeUnknown(RunSyncOutputJson);
+export const decodeRunSyncOutputJson = Schema.decodeUnknownEffect(RunSyncOutputJson);
 export const decodeRunSyncOutputJsonSync = Schema.decodeUnknownSync(RunSyncOutputJson);

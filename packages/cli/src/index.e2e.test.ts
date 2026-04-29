@@ -2,14 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as Command from "@effect/platform/Command";
-import * as Schema from "@effect/schema/Schema";
-import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Runtime } from "effect";
+import * as Schema from "effect/Schema";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Effect } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const runtime = Runtime.defaultRuntime;
-
-const RunSyncEnvelope = Schema.parseJson(
+const RunSyncEnvelope = Schema.fromJsonString(
   Schema.Struct({
     run: Schema.Struct({
       id: Schema.String,
@@ -40,10 +38,10 @@ const RunSyncEnvelope = Schema.parseJson(
   }),
 );
 
-const RunSubmitEnvelope = Schema.parseJson(
+const RunSubmitEnvelope = Schema.fromJsonString(
   Schema.Struct({
     runId: Schema.String,
-    status: Schema.Union(Schema.Literal("pending"), Schema.Literal("running")),
+    status: Schema.Union([Schema.Literal("pending"), Schema.Literal("running")]),
     paths: Schema.Struct({
       runDir: Schema.String,
       runFile: Schema.String,
@@ -53,14 +51,14 @@ const RunSubmitEnvelope = Schema.parseJson(
   }),
 );
 
-const StatusEnvelope = Schema.parseJson(
+const StatusEnvelope = Schema.fromJsonString(
   Schema.Struct({
     id: Schema.String,
     status: Schema.String,
   }),
 );
 
-const CancelEnvelope = Schema.parseJson(
+const CancelEnvelope = Schema.fromJsonString(
   Schema.Struct({
     runId: Schema.String,
     status: Schema.String,
@@ -68,8 +66,8 @@ const CancelEnvelope = Schema.parseJson(
   }),
 );
 
-const WatchOutputEnvelope = Schema.parseJson(
-  Schema.Union(
+const WatchOutputEnvelope = Schema.fromJsonString(
+  Schema.Union([
     Schema.Struct({
       kind: Schema.Literal("event"),
       runId: Schema.String,
@@ -81,16 +79,16 @@ const WatchOutputEnvelope = Schema.parseJson(
     Schema.Struct({
       kind: Schema.Literal("io"),
       runId: Schema.String,
-      source: Schema.Union(Schema.Literal("driver"), Schema.Literal("program")),
-      stream: Schema.Union(Schema.Literal("stdout"), Schema.Literal("stderr")),
+      source: Schema.Union([Schema.Literal("driver"), Schema.Literal("program")]),
+      stream: Schema.Union([Schema.Literal("stdout"), Schema.Literal("stderr")]),
       line: Schema.String,
       timestamp: Schema.String,
       spawnId: Schema.optional(Schema.String),
     }),
-  ),
+  ]),
 );
 
-const ListEnvelope = Schema.parseJson(
+const ListEnvelope = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -99,7 +97,7 @@ const ListEnvelope = Schema.parseJson(
   ),
 );
 
-const EventTypeEnvelope = Schema.parseJson(
+const EventTypeEnvelope = Schema.fromJsonString(
   Schema.Struct({
     type: Schema.String,
   }),
@@ -148,27 +146,61 @@ const TEST_ACP_ENV = {
   MILL_ACP_ARGS_JSON: JSON.stringify(["-e", FAKE_ACP_AGENT_SCRIPT]),
 } as const;
 
-const withNeutralRunDepthEnv = (command: Command.Command): Command.Command =>
-  Command.env(command, {
+const makeCommand = (command: string, ...args: ReadonlyArray<string>): ChildProcess.Command =>
+  ChildProcess.make(command, args);
+
+const envCommand = (
+  command: ChildProcess.Command,
+  env: Readonly<Record<string, string | undefined>>,
+): ChildProcess.Command => {
+  if (!ChildProcess.isStandardCommand(command)) {
+    return command;
+  }
+
+  return ChildProcess.make(command.command, command.args, {
+    ...command.options,
+    env: {
+      ...command.options.env,
+      ...env,
+    },
+    extendEnv: true,
+  });
+};
+
+const withNeutralRunDepthEnv = (command: ChildProcess.Command): ChildProcess.Command =>
+  envCommand(command, {
     ...TEST_ACP_ENV,
     HOME: "",
     MILL_RUN_DEPTH: "",
   });
 
-const commandOutput = (command: Command.Command): Promise<string> =>
-  Runtime.runPromise(runtime)(
-    Effect.provide(Command.string(withNeutralRunDepthEnv(command)), BunContext.layer),
+const commandOutput = (command: ChildProcess.Command): Promise<string> =>
+  Effect.runPromise(
+    Effect.provide(
+      ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
+        spawner.string(withNeutralRunDepthEnv(command)),
+      ),
+      BunServices.layer,
+    ),
   );
 
-const commandExitCode = (command: Command.Command): Promise<number> =>
-  Runtime.runPromise(runtime)(
-    Effect.provide(Command.exitCode(withNeutralRunDepthEnv(command)), BunContext.layer),
+const commandExitCode = (command: ChildProcess.Command): Promise<number> =>
+  Effect.runPromise(
+    Effect.provide(
+      Effect.map(
+        ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
+          spawner.exitCode(withNeutralRunDepthEnv(command)),
+        ),
+        Number,
+      ),
+      BunServices.layer,
+    ),
   );
 
 describe("mill help (e2e)", () => {
   it("does not expose discovery subcommand", async () => {
     const exitCode = await commandExitCode(
-      Command.make("bun", "run", "packages/cli/src/mill.ts", "discovery", "--json"),
+      makeCommand("bun", "run", "packages/cli/src/mill.ts", "discovery", "--json"),
     );
 
     expect(exitCode).toBe(1);
@@ -176,7 +208,7 @@ describe("mill help (e2e)", () => {
 
   it("prints top-level help via built-in --help", async () => {
     const output = await commandOutput(
-      Command.make("bun", "run", "packages/cli/src/mill.ts", "--help"),
+      makeCommand("bun", "run", "packages/cli/src/mill.ts", "--help"),
     );
 
     expect(output).toContain("Usage: mill <command>");
@@ -189,7 +221,7 @@ describe("mill help (e2e)", () => {
 
   it("prints per-command help via built-in --help", async () => {
     const output = await commandOutput(
-      Command.make("bun", "run", "packages/cli/src/mill.ts", "run", "--help"),
+      makeCommand("bun", "run", "packages/cli/src/mill.ts", "run", "--help"),
     );
 
     expect(output).toContain("$ run [--json] [--sync]");
@@ -215,7 +247,7 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const runOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -251,7 +283,7 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const buildExitCode = await commandExitCode(
-        Command.make(
+        makeCommand(
           "bun",
           "build",
           "packages/cli/src/mill.ts",
@@ -266,7 +298,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(buildExitCode).toBe(0);
 
       const submitOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "node",
           bundledCliPath,
           "run",
@@ -282,7 +314,7 @@ describe("mill run/status/wait (e2e)", () => {
       const submittedRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(submitOutput);
 
       const waitOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "node",
           bundledCliPath,
           "wait",
@@ -314,8 +346,8 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const exitCode = await commandExitCode(
-        Command.env(
-          Command.make(
+        envCommand(
+          makeCommand(
             "bun",
             "run",
             "packages/cli/src/mill.ts",
@@ -358,7 +390,7 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const submitOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -376,7 +408,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(submitPayload.runId.length).toBeGreaterThan(0);
 
       const statusOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -394,7 +426,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(statusPayload.id).toBe(submitPayload.runId);
 
       const waitOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -424,7 +456,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(workerLog.length).toBeGreaterThan(0);
 
       const workerExitCode = await commandExitCode(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -478,7 +510,7 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const runOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -501,7 +533,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(runPayload.result.spawns).toHaveLength(0);
 
       const statusOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -520,7 +552,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(statusPayload.status).toBe("complete");
 
       const waitOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -578,7 +610,7 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const submitCompleteOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -593,7 +625,7 @@ describe("mill run/status/wait (e2e)", () => {
       );
 
       const submitCancelOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -611,7 +643,7 @@ describe("mill run/status/wait (e2e)", () => {
       const cancelRun = Schema.decodeUnknownSync(RunSubmitEnvelope)(submitCancelOutput);
 
       const cancelOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -630,7 +662,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(cancelPayload.status).toBe("cancelled");
 
       const waitCancelledOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -650,7 +682,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(waitCancelled.status).toBe("cancelled");
 
       const waitCompleteOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -670,7 +702,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(waitComplete.status).toBe("complete");
 
       const watchOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -704,7 +736,7 @@ describe("mill run/status/wait (e2e)", () => {
       expect(watchTerminalCount).toBe(1);
 
       const watchCancelledOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -734,7 +766,7 @@ describe("mill run/status/wait (e2e)", () => {
       ).toBe(true);
 
       const listOutput = await commandOutput(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",
@@ -808,7 +840,7 @@ describe("mill run/status/wait (e2e)", () => {
 
     try {
       const exitCode = await commandExitCode(
-        Command.make(
+        makeCommand(
           "bun",
           "run",
           "packages/cli/src/mill.ts",

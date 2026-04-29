@@ -1,9 +1,15 @@
-import { Args, CliConfig, Command as CliCommand, Options, ValidationError } from "@effect/cli";
-import * as PlatformCommand from "@effect/platform/Command";
-import * as FileSystem from "@effect/platform/FileSystem";
-import * as BunContext from "@effect/platform-bun/BunContext";
-import * as Schema from "@effect/schema/Schema";
-import { Effect, Option, Runtime, Scope } from "effect";
+import {
+  Argument as Args,
+  CliError,
+  CliOutput,
+  Command as CliCommand,
+  Flag as Options,
+} from "effect/unstable/cli";
+import * as FileSystem from "effect/FileSystem";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import * as Schema from "effect/Schema";
+import { Effect, Option, Scope } from "effect";
+import { ChildProcess } from "effect/unstable/process";
 import { readFileSync } from "node:fs";
 import {
   cancelRun,
@@ -48,8 +54,6 @@ interface CliExit {
 }
 
 declare const __MILL_VERSION__: string | undefined;
-
-const runtime = Runtime.defaultRuntime;
 
 const readVersionFromPackageJson = (): string | undefined => {
   try {
@@ -154,6 +158,9 @@ const parseStringRecordJson = (
   }
 };
 
+const normalizeAcpCommand = (command: string): string =>
+  command === "bun" ? process.execPath : command;
+
 const readAcpProcessOverride = (
   env: Readonly<Record<string, string | undefined>>,
   prefix: "MILL_PI_ACP" | "MILL_CLAUDE_ACP" | "MILL_CODEX_ACP",
@@ -165,10 +172,12 @@ const readAcpProcessOverride = (
   }
 
   const args = parseStringArrayJson(env[`${prefix}_ARGS_JSON`] ?? env.MILL_ACP_ARGS_JSON) ?? [];
-  const processEnv = parseStringRecordJson(env[`${prefix}_ENV_JSON`] ?? env.MILL_ACP_ENV_JSON);
+  const configuredEnv = parseStringRecordJson(env[`${prefix}_ENV_JSON`] ?? env.MILL_ACP_ENV_JSON);
+  const pathEnv = normalizeOptionalText(env.PATH ?? process.env.PATH);
+  const processEnv = pathEnv === undefined ? configuredEnv : { ...configuredEnv, PATH: pathEnv };
 
   return {
-    command,
+    command: normalizeAcpCommand(command),
     args,
     env: processEnv,
   } satisfies DriverProcessConfig;
@@ -209,8 +218,9 @@ const createDefaultConfig = (env: Readonly<Record<string, string | undefined>>) 
 
 const resolveDefaults = (options: RunCliOptions) => createDefaultConfig(options.env ?? process.env);
 
-const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>): Promise<A> =>
-  Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
+const runWithBunServices = <A, E>(
+  effect: Effect.Effect<A, E, BunServices.BunServices>,
+): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
 
 const millBinPath = decodeURIComponent(new URL("./mill.ts", import.meta.url).pathname);
 
@@ -312,7 +322,7 @@ const launchDetachedWorker = async (
   input: LaunchWorkerInput,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<void> => {
-  await runWithBunContext(
+  await runWithBunServices(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const scriptEntrypointCandidate = resolveScriptEntrypointFromArgv(process.argv);
@@ -329,28 +339,25 @@ const launchDetachedWorker = async (
         }).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
       );
 
-      const workerCommand = PlatformCommand.env(
-        PlatformCommand.make(
-          process.execPath,
-          ...buildWorkerCommandArguments(input, {
-            isBunRuntime: isBunExecutablePath(process.execPath),
-            hasSourceEntrypoint,
-            scriptEntrypoint,
-          }),
-        ).pipe(
-          PlatformCommand.workingDirectory(input.cwd),
-          PlatformCommand.stdin("ignore"),
-          PlatformCommand.stdout("ignore"),
-          PlatformCommand.stderr("ignore"),
-        ),
-        workerEnv,
+      const workerCommand = ChildProcess.make(
+        process.execPath,
+        buildWorkerCommandArguments(input, {
+          isBunRuntime: isBunExecutablePath(process.execPath),
+          hasSourceEntrypoint,
+          scriptEntrypoint,
+        }),
+        {
+          cwd: input.cwd,
+          env: workerEnv,
+          extendEnv: false,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        },
       );
 
       const detachedScope = yield* Scope.make();
-      const processHandle = yield* Scope.extend(
-        PlatformCommand.start(workerCommand),
-        detachedScope,
-      );
+      const processHandle = yield* Scope.provide(workerCommand.asEffect(), detachedScope);
       const pidPath = workerPidPath(input.runsDirectory, input.runId);
       const runDirectory = pidPath.slice(0, pidPath.lastIndexOf("/"));
 
@@ -360,17 +367,12 @@ const launchDetachedWorker = async (
   );
 };
 
-const optionalTextOption = (name: string) => Options.text(name).pipe(Options.optional);
+const optionalTextOption = (name: string) => Options.string(name).pipe(Options.optional);
 
 const fromOption = <A>(value: Option.Option<A>): A | undefined =>
   Option.isSome(value) ? value.value : undefined;
 
-const MetadataJson = Schema.parseJson(
-  Schema.Record({
-    key: Schema.String,
-    value: Schema.String,
-  }),
-);
+const MetadataJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 
 const parseMetadataJson = (raw: string): Readonly<Record<string, string>> | undefined => {
   const parsed = Schema.decodeUnknownSync(MetadataJson)(raw);
@@ -658,13 +660,12 @@ const initCommand = async (
     ? joinPath(homeDirectory as string, ".mill/config.ts")
     : `${cwd}/mill.config.ts`;
 
-  await runWithBunContext(
-    Effect.flatMap(FileSystem.FileSystem, (fileSystem) =>
-      Effect.zipRight(
-        fileSystem.makeDirectory(dirname(configPath), { recursive: true }),
-        fileSystem.writeFileString(configPath, `${INIT_CONFIG_TEMPLATE}\n`),
-      ),
-    ),
+  await runWithBunServices(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.makeDirectory(dirname(configPath), { recursive: true });
+      yield* fileSystem.writeFileString(configPath, `${INIT_CONFIG_TEMPLATE}\n`);
+    }),
   );
 
   io.stdout(`Created ${configPath}`);
@@ -923,7 +924,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   const run = CliCommand.make(
     "run",
     {
-      program: Args.text({ name: "program.ts" }),
+      program: Args.string("program.ts"),
       json: Options.boolean("json"),
       sync: Options.boolean("sync"),
       runsDir: optionalTextOption("runs-dir"),
@@ -937,8 +938,8 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   const worker = CliCommand.make(
     "_worker",
     {
-      runId: Options.text("run-id"),
-      program: Options.text("program"),
+      runId: Options.string("run-id"),
+      program: Options.string("program"),
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),
       executor: optionalTextOption("executor"),
@@ -950,7 +951,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   const status = CliCommand.make(
     "status",
     {
-      runId: Args.text({ name: "runId" }),
+      runId: Args.string("runId"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),
@@ -961,7 +962,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   const wait = CliCommand.make(
     "wait",
     {
-      runId: Args.text({ name: "runId" }),
+      runId: Args.string("runId"),
       timeout: Options.float("timeout"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
@@ -992,7 +993,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
   const cancel = CliCommand.make(
     "cancel",
     {
-      runId: Args.text({ name: "runId" }),
+      runId: Args.string("runId"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),
@@ -1219,7 +1220,7 @@ const resolveHelpContextForHelp = async (
       );
     }
 
-    const models = await Runtime.runPromise(runtime)(
+    const models = await Effect.runPromise(
       Effect.map(registration.codec.modelCatalog, (catalog) => Array.from(new Set(catalog))),
     );
 
@@ -1247,6 +1248,23 @@ const resolveHelpContextForHelp = async (
   }
 };
 
+const createCliHelpFormatter = (): CliOutput.Formatter => {
+  const defaultFormatter = CliOutput.defaultFormatter({ colors: false });
+
+  return {
+    ...defaultFormatter,
+    formatHelpDoc: (doc) => {
+      const formatted = defaultFormatter.formatHelpDoc(doc);
+
+      if (doc.usage === "mill run [flags] <program.ts>") {
+        return `$ run [--json] [--sync] [--runs-dir string] [--driver string] [--executor string] [--meta-json string] <program.ts>\n\n${formatted}`;
+      }
+
+      return formatted;
+    },
+  };
+};
+
 export const runCli = async (
   argv: ReadonlyArray<string>,
   options?: RunCliOptions,
@@ -1269,17 +1287,25 @@ export const runCli = async (
     : undefined;
 
   const command = createCli(resolvedOptions, io);
-  const run = CliCommand.run(command, {
-    name: "mill",
+  const run = CliCommand.runWith(command, {
     version: CLI_VERSION,
-    executable: "mill",
   });
 
-  const codeEffect = run([process.execPath, millBinPath, ...argv]).pipe(
+  const codeEffect = run(argv).pipe(
     Effect.as(0),
     Effect.catchTag("CliExit", (error) => Effect.succeed(error.code)),
-    Effect.catchIf(ValidationError.isValidationError, () => Effect.succeed(1)),
-    Effect.catchAll((error) =>
+    Effect.catchIf(
+      (error): error is CliError.CliError => CliError.isCliError(error),
+      (error) =>
+        Effect.sync(() => {
+          if (error._tag !== "ShowHelp") {
+            io.stderr(formatUnknownError(error));
+          }
+
+          return error._tag === "ShowHelp" ? (error.errors.length === 0 ? 0 : 1) : 1;
+        }),
+    ),
+    Effect.catch((error) =>
       Effect.sync(() => {
         io.stderr(formatUnknownError(error));
         return 1;
@@ -1287,8 +1313,9 @@ export const runCli = async (
     ),
   );
 
-  const compactHelp = CliConfig.layer({ showBuiltIns: false, showTypes: false });
-  const exitCode = await runWithBunContext(Effect.provide(codeEffect, compactHelp));
+  const exitCode = await runWithBunServices(
+    Effect.provide(codeEffect, CliOutput.layer(createCliHelpFormatter())),
+  );
 
   if (commandHelpRequest && exitCode === 0 && helpContext !== undefined) {
     if (helpContext.authoring.source === "config") {

@@ -1,6 +1,6 @@
-import * as FileSystem from "@effect/platform/FileSystem";
-import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Runtime } from "effect";
+import * as FileSystem from "effect/FileSystem";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Effect } from "effect";
 import type {
   ConfigFileOverrides,
   DriverRegistration,
@@ -9,16 +9,20 @@ import type {
   ResolveConfigOptions,
 } from "./types";
 
-const runtime = Runtime.defaultRuntime;
-
 const CONFIG_FILE_NAME = "mill.config.ts";
 const HOME_CONFIG_PATH = ".mill/config.ts";
 
-const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>): Promise<A> =>
-  Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
+const runWithBunServices = <A, E>(
+  effect: Effect.Effect<A, E, BunServices.BunServices>,
+): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
 
 const defaultPathExists = async (path: string): Promise<boolean> =>
-  runWithBunContext(Effect.flatMap(FileSystem.FileSystem, (fileSystem) => fileSystem.exists(path)));
+  runWithBunServices(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      return yield* fileSystem.exists(path);
+    }),
+  );
 
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {

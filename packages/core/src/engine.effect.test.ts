@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Effect, Stream } from "effect";
 import { decodeMillEventJsonSync, type MillEvent } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
-import { runWithBunContext } from "./test-runtime";
+import { runWithBunServices } from "./test-runtime";
 import type { DriverRuntime } from "./types";
 import { makeMillEngine } from "./engine.effect";
 import { makeRunStore } from "./run-store.effect";
@@ -56,7 +56,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      const submitted = await runWithBunContext(
+      const submitted = await runWithBunServices(
         engine.submit({
           runId,
           programPath: "/tmp/program.ts",
@@ -83,7 +83,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      const output = await runWithBunContext(
+      const output = await runWithBunServices(
         engine.runSync({
           runId,
           programPath: "/tmp/program.ts",
@@ -105,7 +105,7 @@ describe("MillEngine sync lifecycle", () => {
       expect(output.result.spawns).toHaveLength(1);
       expect(output.run.status).toBe("complete");
 
-      const status = await runWithBunContext(engine.status(runId));
+      const status = await runWithBunServices(engine.status(runId));
       expect(status.status).toBe("complete");
 
       const eventsContent = await readFile(output.run.paths.eventsFile, "utf-8");
@@ -179,7 +179,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",
@@ -188,7 +188,7 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.appendEvent(runId, {
           schemaVersion: 1,
           runId,
@@ -201,7 +201,7 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.appendEvent(runId, {
           schemaVersion: 1,
           runId,
@@ -217,7 +217,7 @@ describe("MillEngine sync lifecycle", () => {
       const appendTerminal = (async () => {
         await delay(50);
 
-        await runWithBunContext(
+        await runWithBunServices(
           store.appendEvent(runId, {
             schemaVersion: 1,
             runId,
@@ -236,7 +236,7 @@ describe("MillEngine sync lifecycle", () => {
           }),
         );
 
-        await runWithBunContext(
+        await runWithBunServices(
           store.setResult(
             runId,
             {
@@ -251,7 +251,7 @@ describe("MillEngine sync lifecycle", () => {
         );
       })();
 
-      const waitedRun = await runWithBunContext(engine.wait(runId, "2 seconds"));
+      const waitedRun = await runWithBunServices(engine.wait(runId, "2 seconds"));
 
       expect(waitedRun.status).toBe("complete");
       await appendTerminal;
@@ -274,7 +274,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",
@@ -283,7 +283,7 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.appendEvent(runId, {
           schemaVersion: 1,
           runId,
@@ -296,7 +296,7 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      const waitError = await runWithBunContext(Effect.flip(engine.wait(runId, 40)));
+      const waitError = await runWithBunServices(Effect.flip(engine.wait(runId, 40)));
 
       expect(waitError).toMatchObject({
         _tag: "WaitTimeoutError",
@@ -320,7 +320,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         engine.runSync({
           runId,
           programPath: "/tmp/program.ts",
@@ -337,7 +337,7 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      const inspectedRun = await runWithBunContext(engine.inspect({ runId }));
+      const inspectedRun = await runWithBunServices(engine.inspect({ runId }));
       expect(inspectedRun.kind).toBe("run");
 
       if (inspectedRun.kind === "run") {
@@ -352,7 +352,7 @@ describe("MillEngine sync lifecycle", () => {
         return;
       }
 
-      const inspectedSpawn = await runWithBunContext(
+      const inspectedSpawn = await runWithBunServices(
         engine.inspect({ runId, spawnId: spawnStart.payload.spawnId }),
       );
 
@@ -405,7 +405,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         engine.submit({
           runId,
           programPath: "/tmp/program.ts",
@@ -441,7 +441,7 @@ describe("MillEngine sync lifecycle", () => {
           ),
       });
 
-      const [tier1EventsChunk, ioEventsChunk] = await runWithBunContext(
+      const [tier1EventsChunk, ioEventsChunk] = await runWithBunServices(
         Effect.map(
           Effect.all([watchTier1Effect, watchIoEffect, executionEffect], {
             concurrency: "unbounded",
@@ -481,7 +481,7 @@ describe("MillEngine sync lifecycle", () => {
     });
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",
@@ -492,7 +492,7 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.appendEvent(runId, {
           schemaVersion: 1,
           runId,
@@ -505,13 +505,13 @@ describe("MillEngine sync lifecycle", () => {
         }),
       );
 
-      await runWithBunContext(engine.cancel(runId));
-      await runWithBunContext(engine.cancel(runId));
+      await runWithBunServices(engine.cancel(runId));
+      await runWithBunServices(engine.cancel(runId));
 
-      const run = await runWithBunContext(engine.status(runId));
+      const run = await runWithBunServices(engine.status(runId));
       expect(run.status).toBe("cancelled");
 
-      const events = await runWithBunContext(store.readEvents(runId));
+      const events = await runWithBunServices(store.readEvents(runId));
       const cancelledCount = events.filter((event) => event.type === "run:cancelled").length;
       const terminalCount = events.filter((event) => runTerminalTypes.has(event.type)).length;
 

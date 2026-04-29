@@ -1,8 +1,6 @@
-import { Effect, Runtime } from "effect";
+import { Effect } from "effect";
 import type { DiscoveryPayload, DriverRegistration, ResolveConfigOptions } from "./types";
 import { resolveConfigEffect } from "./config-loader.api";
-
-const runtime = Runtime.defaultRuntime;
 
 const buildDiscoveryDrivers = (
   drivers: Readonly<Record<string, DriverRegistration>>,
@@ -45,9 +43,7 @@ export const createDiscoveryPayloadEffect = (
     const drivers = yield* buildDiscoveryDrivers(resolvedConfig.config.drivers);
     const executors = buildDiscoveryExecutors(resolvedConfig.config.executors);
 
-  const drivers = await Runtime.runPromise(runtime)(
-    buildDiscoveryDrivers(resolvedConfig.config.drivers),
-  );
+  const drivers = await Effect.runPromise(buildDiscoveryDrivers(resolvedConfig.config.drivers));
   const executors = buildDiscoveryExecutors(resolvedConfig.config.executors);
 
   return {

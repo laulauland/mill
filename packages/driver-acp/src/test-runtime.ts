@@ -1,13 +1,11 @@
-import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Runtime, type Scope } from "effect";
-
-const runtime = Runtime.defaultRuntime;
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Effect, type Scope } from "effect";
 
 export const runWithRuntime = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
-  Runtime.runPromise(runtime)(effect);
+  Effect.runPromise(effect);
 
-export const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>): Promise<A> =>
-  Runtime.runPromise(runtime)(Effect.scoped(Effect.provide(effect, BunContext.layer)));
+export const runWithBunServices = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>): Promise<A> =>
+  Effect.runPromise(Effect.scoped(Effect.provide(effect, BunServices.layer)));
 
 export const runEffect = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
-  Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
+  Effect.runPromise(Effect.provide(effect, BunServices.layer));

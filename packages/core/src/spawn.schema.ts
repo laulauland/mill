@@ -1,4 +1,4 @@
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 
 export const SpawnOptions = Schema.Struct({
   agent: Schema.NonEmptyString,
@@ -22,7 +22,7 @@ export const SpawnResult = Schema.Struct({
 
 export type SpawnResult = Schema.Schema.Type<typeof SpawnResult>;
 
-export const decodeSpawnOptions = Schema.decodeUnknown(SpawnOptions);
+export const decodeSpawnOptions = Schema.decodeUnknownEffect(SpawnOptions);
 export const decodeSpawnOptionsSync = Schema.decodeUnknownSync(SpawnOptions);
-export const decodeSpawnResult = Schema.decodeUnknown(SpawnResult);
+export const decodeSpawnResult = Schema.decodeUnknownEffect(SpawnResult);
 export const decodeSpawnResultSync = Schema.decodeUnknownSync(SpawnResult);

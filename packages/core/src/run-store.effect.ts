@@ -1,5 +1,5 @@
-import * as FileSystem from "@effect/platform/FileSystem";
-import { Data, Effect } from "effect";
+import * as FileSystem from "effect/FileSystem";
+import { Data, Effect, Exit } from "effect";
 import { decodeMillEventJson, encodeMillEventJson, type MillEvent } from "./event.schema";
 import {
   decodeRunId,
@@ -239,21 +239,21 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
         runDirectories,
         (runDirectory) =>
           Effect.gen(function* () {
-            const decodedRunId = yield* Effect.either(decodeRunId(runDirectory));
+            const decodedRunId = yield* Effect.exit(decodeRunId(runDirectory));
 
-            if (decodedRunId._tag === "Left") {
+            if (Exit.isFailure(decodedRunId)) {
               return undefined;
             }
 
-            const maybeRun = yield* Effect.either(
-              storeGetRun(input.runsDirectory, decodedRunId.right),
+            const maybeRun = yield* Effect.exit(
+              storeGetRun(input.runsDirectory, decodedRunId.value),
             );
 
-            if (maybeRun._tag === "Left") {
+            if (Exit.isFailure(maybeRun)) {
               return undefined;
             }
 
-            return maybeRun.right;
+            return maybeRun.value;
           }),
         {
           concurrency: "unbounded",

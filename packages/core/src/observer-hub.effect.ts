@@ -58,7 +58,7 @@ const ensureTier1GlobalPubSub = (): Effect.Effect<PubSub.PubSub<MillEvent>> =>
   });
 
 export const publishTier1Event = (runId: string, event: MillEvent): Effect.Effect<void> =>
-  Effect.zipRight(
+  Effect.andThen(
     Effect.asVoid(
       Effect.flatMap(ensureTier1PubSub(runId), (pubSub) => PubSub.publish(pubSub, event)),
     ),
@@ -73,10 +73,10 @@ export const publishIoEvent = (event: IoStreamEvent): Effect.Effect<void> =>
   );
 
 export const watchTier1Live = (runId: string): Stream.Stream<MillEvent, never> =>
-  Stream.unwrapScoped(Effect.map(ensureTier1PubSub(runId), (pubSub) => Stream.fromPubSub(pubSub)));
+  Stream.unwrap(Effect.map(ensureTier1PubSub(runId), (pubSub) => Stream.fromPubSub(pubSub)));
 
 export const watchIoLive = (runId: string): Stream.Stream<IoStreamEvent, never> =>
-  Stream.unwrapScoped(Effect.map(ensureIoPubSub(runId), (pubSub) => Stream.fromPubSub(pubSub)));
+  Stream.unwrap(Effect.map(ensureIoPubSub(runId), (pubSub) => Stream.fromPubSub(pubSub)));
 
 export const watchTier1GlobalLive = (): Stream.Stream<MillEvent, never> =>
-  Stream.unwrapScoped(Effect.map(ensureTier1GlobalPubSub(), (pubSub) => Stream.fromPubSub(pubSub)));
+  Stream.unwrap(Effect.map(ensureTier1GlobalPubSub(), (pubSub) => Stream.fromPubSub(pubSub)));

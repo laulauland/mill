@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 import { runCli } from "./index";
 
 const FAKE_ACP_AGENT_SCRIPT = `
@@ -85,7 +85,7 @@ const runCliForTest = async (
   }
 };
 
-const RunSyncEnvelope = Schema.parseJson(
+const RunSyncEnvelope = Schema.fromJsonString(
   Schema.Struct({
     run: Schema.Struct({
       id: Schema.String,
@@ -116,10 +116,10 @@ const RunSyncEnvelope = Schema.parseJson(
   }),
 );
 
-const RunSubmitEnvelope = Schema.parseJson(
+const RunSubmitEnvelope = Schema.fromJsonString(
   Schema.Struct({
     runId: Schema.String,
-    status: Schema.Union(Schema.Literal("pending"), Schema.Literal("running")),
+    status: Schema.Union([Schema.Literal("pending"), Schema.Literal("running")]),
     paths: Schema.Struct({
       runDir: Schema.String,
       runFile: Schema.String,
@@ -129,7 +129,7 @@ const RunSubmitEnvelope = Schema.parseJson(
   }),
 );
 
-const StatusEnvelope = Schema.parseJson(
+const StatusEnvelope = Schema.fromJsonString(
   Schema.Struct({
     id: Schema.String,
     status: Schema.String,
@@ -144,8 +144,8 @@ const StatusEnvelope = Schema.parseJson(
   }),
 );
 
-const WatchOutputEnvelope = Schema.parseJson(
-  Schema.Union(
+const WatchOutputEnvelope = Schema.fromJsonString(
+  Schema.Union([
     Schema.Struct({
       kind: Schema.Literal("event"),
       runId: Schema.String,
@@ -157,16 +157,16 @@ const WatchOutputEnvelope = Schema.parseJson(
     Schema.Struct({
       kind: Schema.Literal("io"),
       runId: Schema.String,
-      source: Schema.Union(Schema.Literal("driver"), Schema.Literal("program")),
-      stream: Schema.Union(Schema.Literal("stdout"), Schema.Literal("stderr")),
+      source: Schema.Union([Schema.Literal("driver"), Schema.Literal("program")]),
+      stream: Schema.Union([Schema.Literal("stdout"), Schema.Literal("stderr")]),
       line: Schema.String,
       timestamp: Schema.String,
       spawnId: Schema.optional(Schema.String),
     }),
-  ),
+  ]),
 );
 
-const CancelEnvelope = Schema.parseJson(
+const CancelEnvelope = Schema.fromJsonString(
   Schema.Struct({
     runId: Schema.String,
     status: Schema.String,
@@ -174,7 +174,7 @@ const CancelEnvelope = Schema.parseJson(
   }),
 );
 
-const ListEnvelope = Schema.parseJson(
+const ListEnvelope = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -183,7 +183,7 @@ const ListEnvelope = Schema.parseJson(
   ),
 );
 
-const WaitTimeoutEnvelope = Schema.parseJson(
+const WaitTimeoutEnvelope = Schema.fromJsonString(
   Schema.Struct({
     ok: Schema.Literal(false),
     error: Schema.Struct({

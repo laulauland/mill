@@ -1,4 +1,4 @@
-import * as FileSystem from "@effect/platform/FileSystem";
+import * as FileSystem from "effect/FileSystem";
 import { Clock, Effect } from "effect";
 import type { RunId, RunSyncOutput } from "./run.schema";
 import { ProgramExecutionError, type MillEngine, type RunSyncInput } from "./engine.effect";
@@ -107,7 +107,7 @@ export const runDetachedWorker = (
         executeProgram: input.executeProgram,
       }),
       (error) =>
-        Effect.zipRight(
+        Effect.andThen(
           appendWorkerLog(
             workerLogPath,
             `worker:failed runId=${input.runId} message=${String(error)}`,

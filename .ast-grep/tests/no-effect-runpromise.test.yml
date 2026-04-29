@@ -1,9 +1,7 @@
 id: no-effect-runpromise
 valid:
   - |
-    const run = Runtime.runPromise(runtime)(effect);
-invalid:
-  - |
     const output = await Effect.runPromise(effect);
+invalid:
   - |
     const exit = await Effect.runPromiseExit(effect);

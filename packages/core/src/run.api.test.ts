@@ -3,16 +3,16 @@ import { describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 import { Effect } from "effect";
 import { decodeMillEventJsonSync } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
 import { makeRunStore } from "./run-store.effect";
-import { runWithBunContext } from "./test-runtime";
+import { runWithBunServices } from "./test-runtime";
 import { cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
 import type { MillConfig } from "./types";
 
-const ProgramResultEnvelope = Schema.parseJson(
+const ProgramResultEnvelope = Schema.fromJsonString(
   Schema.Struct({
     note: Schema.optional(Schema.String),
     driver: Schema.optional(Schema.String),
@@ -117,7 +117,7 @@ const makeConfig = (): MillConfig => ({
       runtime: {
         name: "direct",
         runProgram: (input) =>
-          Effect.zipRight(
+          Effect.andThen(
             Effect.sync(() => {
               (globalThis as { __millExecutorName?: string }).__millExecutorName = "direct";
             }),
@@ -130,7 +130,7 @@ const makeConfig = (): MillConfig => ({
       runtime: {
         name: "vm",
         runProgram: (input) =>
-          Effect.zipRight(
+          Effect.andThen(
             Effect.sync(() => {
               (globalThis as { __millExecutorName?: string }).__millExecutorName = "vm";
             }),
@@ -367,7 +367,7 @@ describe("run.api integration", () => {
     }
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",

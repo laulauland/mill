@@ -9,7 +9,7 @@ const makeExecutor = (name: string): ExecutorRegistration => ({
   runtime: {
     name,
     runProgram: (input) =>
-      Effect.zipRight(
+      Effect.andThen(
         Effect.sync(() => {
           (globalThis as { __millExecutorName?: string }).__millExecutorName = name;
         }),

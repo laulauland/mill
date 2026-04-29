@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { decodeMillEventJsonSync } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
-import { runWithBunContext } from "./test-runtime";
+import { runWithBunServices } from "./test-runtime";
 import { makeRunStore } from "./run-store.effect";
 
 describe("RunStore", () => {
@@ -16,7 +16,7 @@ describe("RunStore", () => {
     const store = makeRunStore({ runsDirectory });
 
     try {
-      const runRecord = await runWithBunContext(
+      const runRecord = await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",
@@ -29,7 +29,7 @@ describe("RunStore", () => {
       expect(runRecord.paths.eventsFile.endsWith("events.ndjson")).toBe(true);
       expect(runRecord.paths.resultFile.endsWith("result.json")).toBe(true);
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.appendEvent(runId, {
           schemaVersion: 1,
           runId,
@@ -42,7 +42,7 @@ describe("RunStore", () => {
         }),
       );
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.appendEvent(runId, {
           schemaVersion: 1,
           runId,
@@ -80,7 +80,7 @@ describe("RunStore", () => {
     const store = makeRunStore({ runsDirectory });
 
     try {
-      await runWithBunContext(
+      await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",
@@ -89,7 +89,7 @@ describe("RunStore", () => {
         }),
       );
 
-      await runWithBunContext(
+      await runWithBunServices(
         store.setResult(
           runId,
           {
@@ -103,7 +103,7 @@ describe("RunStore", () => {
         ),
       );
 
-      const transitionError = await runWithBunContext(
+      const transitionError = await runWithBunServices(
         Effect.flip(store.setStatus(runId, "running", "2026-02-23T20:00:03.000Z")),
       );
 

@@ -1,11 +1,9 @@
-import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Runtime } from "effect";
-
-const runtime = Runtime.defaultRuntime;
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Effect } from "effect";
 
 export const runWithRuntime = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
-  Runtime.runPromise(runtime)(effect);
+  Effect.runPromise(effect);
 
-export const runWithBunContext = <A, E>(
-  effect: Effect.Effect<A, E, BunContext.BunContext>,
-): Promise<A> => Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
+export const runWithBunServices = <A, E>(
+  effect: Effect.Effect<A, E, BunServices.BunServices>,
+): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));

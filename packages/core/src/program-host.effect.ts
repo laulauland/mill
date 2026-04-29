@@ -1,6 +1,6 @@
-import * as Command from "@effect/platform/Command";
-import * as FileSystem from "@effect/platform/FileSystem";
+import * as FileSystem from "effect/FileSystem";
 import { Cause, Data, Effect, Exit, Fiber, Queue, Ref, Stream } from "effect";
+import { ChildProcess } from "effect/unstable/process";
 import {
   ProgramHostProtocolPrefix,
   decodeProgramHostInboundMessage,
@@ -222,7 +222,11 @@ const createProgramHostSource = (
     "      message: error instanceof Error ? error.message : String(error),",
     "    });",
     "  } finally {",
+    '    process.stdin.removeAllListeners("data");',
     "    process.stdin.pause();",
+    '    if (typeof process.stdin.destroy === "function") {',
+    "      process.stdin.destroy();",
+    "    }",
     "  }",
     "};",
     "",
@@ -310,16 +314,15 @@ export const executeProgramInProcessHost = (
       );
 
       const programHostExecutable = resolveProgramHostExecutable();
-      const baseCommand = Command.make(programHostExecutable, "run", hostProgramPath).pipe(
-        Command.workingDirectory(input.workingDirectory),
-        Command.stdin("pipe"),
-        Command.stdout("pipe"),
-        Command.stderr("pipe"),
-      );
-      const command =
-        input.env === undefined || Object.keys(input.env).length === 0
-          ? baseCommand
-          : Command.env(baseCommand, input.env);
+      const command = ChildProcess.make(programHostExecutable, ["run", hostProgramPath], {
+        cwd: input.workingDirectory,
+        env: input.env,
+        extendEnv: input.env !== undefined && Object.keys(input.env).length > 0,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        detached: false,
+      });
 
       yield* Effect.logDebug("mill.program-host:start", {
         runId: input.runId,
@@ -329,7 +332,7 @@ export const executeProgramInProcessHost = (
       });
 
       const processHandle = yield* Effect.mapError(
-        Command.start(command),
+        command.asEffect(),
         (error) =>
           new ProgramHostError({
             runId: input.runId,
@@ -344,11 +347,11 @@ export const executeProgramInProcessHost = (
 
       const responseQueue = yield* Queue.unbounded<Uint8Array>();
 
-      const stdinFiber = yield* Effect.forkScoped(
-        Stream.run(Stream.fromQueue(responseQueue, { shutdown: true }), processHandle.stdin),
+      const stdinFiber = yield* Effect.forkDetach(
+        Stream.run(Stream.fromQueue(responseQueue), processHandle.stdin),
       );
 
-      const stdoutFiber = yield* Effect.forkScoped(
+      const stdoutFiber = yield* Effect.forkDetach(
         Stream.runForEach(Stream.splitLines(Stream.decodeText(processHandle.stdout)), (line) =>
           Effect.gen(function* () {
             if (!line.startsWith(ProgramHostProtocolPrefix)) {
@@ -362,23 +365,24 @@ export const executeProgramInProcessHost = (
             }
 
             const protocolPayload = line.slice(ProgramHostProtocolPrefix.length);
-            const decoded = yield* Effect.either(decodeProgramHostInboundMessage(protocolPayload));
+            const decoded = yield* Effect.exit(decodeProgramHostInboundMessage(protocolPayload));
 
-            if (decoded._tag === "Left") {
+            if (Exit.isFailure(decoded)) {
+              const message = summarizeCause(decoded.cause);
               yield* completeResult(protocolResultRef, {
                 kind: "result",
                 ok: false,
-                message: `Malformed program host payload: ${toMessage(decoded.left)}`,
+                message: `Malformed program host payload: ${message}`,
               });
               yield* Effect.logDebug("mill.program-host:malformed-payload", {
                 runId: input.runId,
-                message: toMessage(decoded.left),
+                message,
               });
-              yield* Effect.ignore(processHandle.kill("SIGTERM"));
+              yield* Effect.ignore(processHandle.kill({ killSignal: "SIGTERM" }));
               return;
             }
 
-            const message = decoded.right;
+            const message = decoded.value;
 
             if (message.kind === "result") {
               yield* completeResult(protocolResultRef, message);
@@ -442,7 +446,7 @@ export const executeProgramInProcessHost = (
         ),
       );
 
-      const stderrFiber = yield* Effect.forkScoped(
+      const stderrFiber = yield* Effect.forkDetach(
         Stream.runForEach(Stream.splitLines(Stream.decodeText(processHandle.stderr)), (line) =>
           Effect.gen(function* () {
             yield* Ref.update(stderrLinesRef, (lines) => [...lines, line]);
@@ -457,50 +461,31 @@ export const executeProgramInProcessHost = (
         ),
       );
 
-      const exitCode = yield* Effect.mapError(
-        processHandle.exitCode,
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Program host process failed before completion: ${toMessage(error)}`,
-          }),
-      );
+      const exitCodeExit = yield* Effect.exit(processHandle.exitCode);
+      const exitCode = Exit.isSuccess(exitCodeExit) ? Number(exitCodeExit.value) : undefined;
 
       yield* Effect.logDebug("mill.program-host:exit", {
         runId: input.runId,
         pid: Number(processHandle.pid),
-        exitCode,
+        exitCode: exitCode ?? "unknown",
       });
 
       yield* Queue.shutdown(responseQueue);
-      yield* Effect.ignore(Fiber.join(stdinFiber));
-
-      yield* Effect.mapError(
-        Fiber.join(stdoutFiber),
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Program host stdout processing failed: ${toMessage(error)}`,
-          }),
-      );
-
-      yield* Effect.mapError(
-        Fiber.join(stderrFiber),
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Program host stderr processing failed: ${toMessage(error)}`,
-          }),
-      );
+      yield* Fiber.await(stdinFiber);
+      yield* Fiber.await(stdoutFiber);
+      yield* Fiber.await(stderrFiber);
 
       const stderrLines = yield* Ref.get(stderrLinesRef);
       const protocolResult = yield* Ref.get(protocolResultRef);
 
       if (protocolResult === undefined) {
+        const exitMessage = Exit.isFailure(exitCodeExit)
+          ? summarizeCause(exitCodeExit.cause)
+          : `exitCode=${exitCode}`;
         return yield* Effect.fail(
           new ProgramHostError({
             runId: input.runId,
-            message: `Program host exited without result (exitCode=${exitCode}).${extensionMessage(
+            message: `Program host exited without result (${exitMessage}).${extensionMessage(
               stderrLines,
             )}`,
           }),
@@ -516,7 +501,7 @@ export const executeProgramInProcessHost = (
         );
       }
 
-      if (exitCode !== 0) {
+      if (exitCode !== undefined && exitCode !== 0) {
         return yield* Effect.fail(
           new ProgramHostError({
             runId: input.runId,

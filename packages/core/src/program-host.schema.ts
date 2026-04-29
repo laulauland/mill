@@ -1,4 +1,4 @@
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 import { SpawnOptions } from "./spawn.schema";
 
 export const ProgramHostProtocolPrefix = "__MILL_HOST__";
@@ -24,7 +24,7 @@ export const ProgramHostExtensionRequestMessage = Schema.Struct({
 export const ProgramHostSuccessResultMessage = Schema.Struct({
   kind: Schema.Literal("result"),
   ok: Schema.Literal(true),
-  value: Schema.Unknown,
+  value: Schema.optional(Schema.Unknown),
 });
 
 export const ProgramHostFailureResultMessage = Schema.Struct({
@@ -33,18 +33,20 @@ export const ProgramHostFailureResultMessage = Schema.Struct({
   message: Schema.String,
 });
 
-export const ProgramHostInboundMessage = Schema.Union(
+export const ProgramHostInboundMessage = Schema.Union([
   ProgramHostSpawnRequestMessage,
   ProgramHostExtensionRequestMessage,
   ProgramHostSuccessResultMessage,
   ProgramHostFailureResultMessage,
-);
+]);
 
 export type ProgramHostInboundMessage = Schema.Schema.Type<typeof ProgramHostInboundMessage>;
 
-const ProgramHostInboundMessageJson = Schema.parseJson(ProgramHostInboundMessage);
+const ProgramHostInboundMessageJson = Schema.fromJsonString(ProgramHostInboundMessage);
 
-export const decodeProgramHostInboundMessage = Schema.decodeUnknown(ProgramHostInboundMessageJson);
+export const decodeProgramHostInboundMessage = Schema.decodeUnknownEffect(
+  ProgramHostInboundMessageJson,
+);
 
 export const ProgramHostSuccessResponseMessage = Schema.Struct({
   kind: Schema.Literal("response"),
@@ -60,9 +62,9 @@ export const ProgramHostFailureResponseMessage = Schema.Struct({
   message: Schema.String,
 });
 
-export const ProgramHostResponseMessage = Schema.Union(
+export const ProgramHostResponseMessage = Schema.Union([
   ProgramHostSuccessResponseMessage,
   ProgramHostFailureResponseMessage,
-);
+]);
 
 export type ProgramHostResponseMessage = Schema.Schema.Type<typeof ProgramHostResponseMessage>;

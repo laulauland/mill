@@ -211,7 +211,7 @@ Reach configurable runtime composition while preserving strict boundary contract
 
 1. **Test intent:** unit (registry/bridge), integration (selected driver/executor path), e2e (`run --driver ... --executor ...`).
 2. CLI resolves configured defaults and explicit `--driver/--executor` overrides correctly.
-3. Extension `api` methods are injected onto `globalThis.mill` and bridge via `Runtime.runPromise` only at boundary adapters.
+3. Extension `api` methods are injected onto `globalThis.mill` and bridge via `Effect.runPromise` only at boundary adapters.
 4. Extension hook failures emit structured error events without crashing the run by default.
 5. Discovery/help metadata reflects registered drivers and authoring guidance from resolved config.
 
@@ -232,7 +232,7 @@ Reach configurable runtime composition while preserving strict boundary contract
 
 - ✅ Implemented driver and executor registries (`makeDriverRegistry`, `makeExecutorRegistry`) in core.
 - ✅ CLI resolves configured defaults and honors explicit `--driver` and `--executor` overrides.
-- ✅ Extension API methods are injected onto `globalThis.mill` via program host with proper `Runtime.runPromise` bridging.
+- ✅ Extension API methods are injected onto `globalThis.mill` via program host with proper `Effect.runPromise` bridging.
 - ✅ Extension hook failures emit `extension:error` events without crashing the run.
 - ✅ Discovery payload includes registered driver models and authoring guidance from config.
 - ✅ `mill init` command creates scaffold `mill.config.ts` with all three drivers and direct executor.
@@ -256,7 +256,7 @@ Lock architecture constraints so future slices cannot regress Effect/boundary sa
 
 1. **Test intent:** rule-level unit tests + integration tests that run guardrail scans from Bun test harness.
 2. Required ast-grep rules from SPEC §19 exist and pass against positive/negative fixtures.
-3. Boundary rules enforce: Promise/interface only in public boundary, no public->internal imports, bridge restrictions (`Runtime.runPromise` only at boundary).
+3. Boundary rules enforce: Promise/interface only in public boundary, no public->internal imports, bridge restrictions (`Effect.runPromise` only at boundary).
 4. Runtime safety rules enforce: no shell-string execution, no internal `process.env`/`Date.now`/`Math.random`, JSON parse only in codec/schema modules.
 5. Export boundary check prevents internal path exports from any package.
 

@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import * as FileSystem from "@effect/platform/FileSystem";
-import * as BunContext from "@effect/platform-bun/BunContext";
-import { Effect, Fiber, Runtime, Stream } from "effect";
-import { makeMillEngine, ProgramExecutionError } from "./engine.effect";
+import * as FileSystem from "effect/FileSystem";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Cause, Data, Effect, Exit, Fiber, Stream } from "effect";
+import { makeMillEngine, ProgramExecutionError, WaitTimeoutError } from "./engine.effect";
 import { makeDriverRegistry } from "./driver-registry.effect";
 import { makeExecutorRegistry } from "./executor-registry.effect";
 import { type MillEvent } from "./event.schema";
@@ -14,8 +14,6 @@ import { executeProgramInProcessHost } from "./program-host.effect";
 import { publishIoEvent, type IoStreamEvent } from "./observer-hub.effect";
 import { resolveConfigEffect } from "./config-loader.api";
 import type { ExecutorRuntime, ExtensionRegistration, ResolveConfigOptions } from "./types";
-
-const runtime = Runtime.defaultRuntime;
 
 interface BaseRunInput extends ResolveConfigOptions {
   readonly driverName?: string;
@@ -388,31 +386,32 @@ const resolveMaxRunDepth = (configured: number | undefined): number => {
   return configured;
 };
 
-const runWithBunContext = <A, E>(effect: Effect.Effect<A, E, BunContext.BunContext>): Promise<A> =>
-  Runtime.runPromise(runtime)(Effect.provide(effect, BunContext.layer));
+const runWithBunServices = <A, E>(
+  effect: Effect.Effect<A, E, BunServices.BunServices>,
+): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
 
 const readProgramSource = (
   programPath: string,
-): Effect.Effect<string, unknown, BunContext.BunContext> =>
-  Effect.flatMap(FileSystem.FileSystem, (fileSystem) =>
-    fileSystem.readFileString(programPath, "utf-8"),
-  );
+): Effect.Effect<string, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return yield* fileSystem.readFileString(programPath, "utf-8");
+  });
 
 const writeSubmissionArtifacts = (
   run: RunRecord,
   programSource: string,
-): Effect.Effect<void, unknown, BunContext.BunContext> =>
-  Effect.flatMap(FileSystem.FileSystem, (fileSystem) =>
-    Effect.gen(function* () {
-      const copiedProgramPath = joinPath(run.paths.runDir, "program.ts");
-      const logsDirectory = joinPath(run.paths.runDir, "logs");
-      const workerLogPath = joinPath(logsDirectory, "worker.log");
+): Effect.Effect<void, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const copiedProgramPath = joinPath(run.paths.runDir, "program.ts");
+    const logsDirectory = joinPath(run.paths.runDir, "logs");
+    const workerLogPath = joinPath(logsDirectory, "worker.log");
 
-      yield* fileSystem.writeFileString(copiedProgramPath, programSource);
-      yield* fileSystem.makeDirectory(logsDirectory, { recursive: true });
-      yield* fileSystem.writeFileString(workerLogPath, "");
-    }),
-  );
+    yield* fileSystem.writeFileString(copiedProgramPath, programSource);
+    yield* fileSystem.makeDirectory(logsDirectory, { recursive: true });
+    yield* fileSystem.writeFileString(workerLogPath, "");
+  });
 
 const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> => {
   const resolvedConfig = await resolveConfig(input);
@@ -424,12 +423,8 @@ const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> 
     defaultExecutor: resolvedConfig.config.defaultExecutor,
     executors: resolvedConfig.config.executors,
   });
-  const selectedDriver = await Runtime.runPromise(runtime)(
-    driverRegistry.resolve(input.driverName),
-  );
-  const selectedExecutor = await Runtime.runPromise(runtime)(
-    executorRegistry.resolve(input.executorName),
-  );
+  const selectedDriver = await Effect.runPromise(driverRegistry.resolve(input.driverName));
+  const selectedExecutor = await Effect.runPromise(executorRegistry.resolve(input.executorName));
   const runsDirectory = resolveRunsDirectory(input.homeDirectory, input.runsDirectory);
 
     return {
@@ -505,7 +500,7 @@ const filterIoEvent = (
 export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
   const cwd = input.cwd ?? process.cwd();
   const programPath = resolveProgramPath(cwd, input.programPath);
-  const programSource = await runWithBunContext(readProgramSource(programPath));
+  const programSource = await runWithBunServices(readProgramSource(programPath));
   const engineContext = await makeEngineForConfig(input);
   const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
@@ -520,7 +515,7 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
       );
     }
 
-  const submittedRun = await runWithBunContext(
+  const submittedRun = await runWithBunServices(
     engineContext.engine.submit({
       runId,
       programPath,
@@ -528,7 +523,7 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
     }),
   );
 
-  await runWithBunContext(writeSubmissionArtifacts(submittedRun, programSource));
+  await runWithBunServices(writeSubmissionArtifacts(submittedRun, programSource));
 
   const copiedProgramPath = joinPath(submittedRun.paths.runDir, "program.ts");
 
@@ -581,7 +576,7 @@ const runProgramSyncEffect = (
   });
 
   const engineContext = await makeEngineForConfig(input);
-  const result = await runWithBunContext(
+  const result = await runWithBunServices(
     engineContext.engine.result(decodeRunIdSync(submittedRun.id)),
   );
 
@@ -598,7 +593,7 @@ const runProgramSyncEffect = (
 export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> => {
   const cwd = input.cwd ?? process.cwd();
   const programPath = resolveProgramPath(cwd, input.programPath);
-  const programSource = await runWithBunContext(readProgramSource(programPath));
+  const programSource = await runWithBunServices(readProgramSource(programPath));
   const engineContext = await makeEngineForConfig(input);
   const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
   const workerPidPath = workerPidPathFor(runDirectory);
@@ -608,7 +603,7 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
   fs.writeFileSync(workerPidPath, `${process.pid}\n`, "utf-8");
 
   try {
-    return await runWithBunContext(
+    return await runWithBunServices(
       runDetachedWorker({
         engine: engineContext.engine,
         runId: decodeRunIdSync(input.runId),
@@ -664,13 +659,29 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
 export const getRunStatus = async (input: GetRunStatusInput): Promise<RunRecord> => {
   const engineContext = await makeEngineForConfig(input);
 
-  return runWithBunContext(engineContext.engine.status(decodeRunIdSync(input.runId)));
+  return runWithBunServices(engineContext.engine.status(decodeRunIdSync(input.runId)));
+};
+
+const isWaitTimeoutError = (error: unknown): error is WaitTimeoutError =>
+  typeof error === "object" &&
+  error !== null &&
+  "_tag" in error &&
+  error._tag === "WaitTimeoutError";
+
+const findWaitTimeoutError = (cause: Cause.Cause<unknown>): WaitTimeoutError | undefined => {
+  for (const reason of cause.reasons) {
+    if (Cause.isFailReason(reason) && isWaitTimeoutError(reason.error)) {
+      return reason.error;
+    }
+  }
+
+  return undefined;
 };
 
 export const waitForRun = async (input: WaitForRunInput): Promise<RunRecord> => {
   const engineContext = await makeEngineForConfig(input);
-  const waitOutcome = await runWithBunContext(
-    Effect.either(
+  const waitOutcome = await runWithBunServices(
+    Effect.exit(
       engineContext.engine.wait(
         decodeRunIdSync(input.runId),
         Math.round(input.timeoutSeconds * 1000),
@@ -678,11 +689,17 @@ export const waitForRun = async (input: WaitForRunInput): Promise<RunRecord> => 
     ),
   );
 
-  if (waitOutcome._tag === "Right") {
-    return waitOutcome.right;
+  if (Exit.isSuccess(waitOutcome)) {
+    return waitOutcome.value;
   }
 
-  return Promise.reject(waitOutcome.left);
+  const timeoutError = findWaitTimeoutError(waitOutcome.cause);
+
+  if (timeoutError !== undefined) {
+    return Promise.reject(timeoutError);
+  }
+
+  return Promise.reject(new Error(Cause.pretty(waitOutcome.cause)));
 };
 
 export const watchRun = async (input: WatchRunInput): Promise<void> => {
@@ -715,7 +732,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
   const engineContext = await makeEngineForConfig(input);
 
   if (input.runId === undefined) {
-    await runWithBunContext(
+    await runWithBunServices(
       Effect.scoped(
         Stream.runForEach(engineContext.engine.watchAll(input.sinceTimeIso), (event) =>
           emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
@@ -737,7 +754,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
   );
 
   if (channel === "events") {
-    await runWithBunContext(
+    await runWithBunServices(
       Effect.scoped(
         Stream.runForEach(
           Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
@@ -749,7 +766,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     return;
   }
 
-  const currentRun = await runWithBunContext(engineContext.engine.status(runId));
+  const currentRun = await runWithBunServices(engineContext.engine.status(runId));
 
   if (
     currentRun.status === "complete" ||
@@ -757,7 +774,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     currentRun.status === "cancelled"
   ) {
     if (channel === "all") {
-      await runWithBunContext(
+      await runWithBunServices(
         Effect.scoped(
           Stream.runForEach(
             Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
@@ -773,7 +790,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
   }
 
   if (channel === "io") {
-    await runWithBunContext(
+    await runWithBunServices(
       Effect.raceFirst(
         Effect.scoped(
           Stream.runForEach(ioStream, (event) =>
@@ -787,7 +804,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     return;
   }
 
-  await runWithBunContext(
+  await runWithBunServices(
     Effect.scoped(
       Effect.gen(function* () {
         const ioFiber = yield* Effect.forkScoped(
@@ -846,7 +863,7 @@ export const cancelRun = (
   alreadyTerminal: boolean;
 }> => {
   const engineContext = await makeEngineForConfig(input);
-  const cancelled = await runWithBunContext(
+  const cancelled = await runWithBunServices(
     engineContext.engine.cancel(decodeRunIdSync(input.runId), input.reason),
   );
 
@@ -862,5 +879,5 @@ export const cancelRun = (
 export const listRuns = async (input: ListRunsInput): Promise<ReadonlyArray<RunRecord>> => {
   const engineContext = await makeEngineForConfig(input);
 
-  return runWithBunContext(engineContext.engine.list(input.status));
+  return runWithBunServices(engineContext.engine.list(input.status));
 };

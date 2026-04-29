@@ -4,6 +4,6 @@ valid:
     const output = effect;
 invalid:
   - |
-    const output = Runtime.runPromise(runtime)(effect);
+    const output = Effect.runPromise(effect);
   - |
-    const output = Runtime.runPromiseExit(runtime)(effect);
+    const output = Effect.runPromiseExit(effect);

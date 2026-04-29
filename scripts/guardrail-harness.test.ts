@@ -38,7 +38,7 @@ describe("guardrail harness", () => {
     expect(result.failures).toHaveLength(0);
   });
 
-  it("fails boundary checks for public -> internal imports and Runtime.runPromise outside boundary", async () => {
+  it("fails boundary checks for public -> internal imports and Effect.runPromise outside boundary", async () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "mill-guardrail-boundary-"));
 
     try {
@@ -53,10 +53,9 @@ describe("guardrail harness", () => {
       );
       await writeFile(
         badInternalPath,
-        [
-          'import * as Runtime from "effect/Runtime";',
-          "const run = Runtime.runPromise(runtime)(effect);",
-        ].join("\n"),
+        ['import * as Effect from "effect/Effect";', "const run = Effect.runPromise(effect);"].join(
+          "\n",
+        ),
         "utf-8",
       );
 
@@ -92,7 +91,7 @@ describe("guardrail harness", () => {
       await writeFile(
         badInternalPath,
         [
-          'import * as Command from "@effect/platform/Command";',
+          'import * as Command from "effect/unstable/process";',
           'const payload = JSON.parse("{}") as Record<string, unknown>;',
           "const token = process.env.API_TOKEN;",
           "const now = Date.now();",

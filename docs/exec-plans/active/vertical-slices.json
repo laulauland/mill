@@ -99,7 +99,7 @@
       "acceptanceCriteria": [
         "Test intent: unit (registry/bridge), integration (selected driver/executor path), e2e (`run --driver ... --executor ...`).",
         "CLI resolves configured defaults and explicit `--driver/--executor` overrides correctly.",
-        "Extension `api` methods are injected onto `globalThis.mill` and bridge through `Runtime.runPromise` only at boundary adapters.",
+        "Extension `api` methods are injected onto `globalThis.mill` and bridge through `Effect.runPromise` only at boundary adapters.",
         "Extension hook failures emit structured error events without crashing the run by default.",
         "Discovery/help metadata reflects registered drivers and authoring guidance from resolved config."
       ],
@@ -122,7 +122,7 @@
       "acceptanceCriteria": [
         "Test intent: rule-level unit tests plus integration tests that run guardrail scans from a Bun test harness.",
         "Required ast-grep rules from SPEC §19 exist and pass against positive/negative fixtures.",
-        "Boundary rules enforce Promise/interface location, public->internal import bans, and bridge restrictions (`Runtime.runPromise` boundary-only).",
+        "Boundary rules enforce Promise/interface location, public->internal import bans, and bridge restrictions (`Effect.runPromise` boundary-only).",
         "Runtime safety rules enforce no shell-string execution, no internal `process.env`/`Date.now`/`Math.random`, and JSON parse only in codec/schema modules.",
         "Export boundary check prevents internal path exports from any package."
       ],

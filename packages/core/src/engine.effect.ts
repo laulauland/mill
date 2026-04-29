@@ -262,7 +262,7 @@ const notifyExtensionHookFailures = (
   hook: "setup" | "onEvent",
   message: string,
 ): Effect.Effect<void, never> =>
-  Effect.catchAll(
+  Effect.catch(
     appendExtensionErrorEvent(
       lifecycleStateRef,
       sequenceRef,
@@ -1121,14 +1121,16 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
       const timeoutMillis = toTimeoutMillis(timeout);
 
       return waitForRunTerminal(runStore, runId).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: timeoutMillis,
-          onTimeout: () =>
-            new WaitTimeoutError({
-              runId,
-              timeoutMillis,
-              message: `Timed out waiting for terminal event for run ${runId} after ${timeoutMillis}ms.`,
-            }),
+          orElse: () =>
+            Effect.fail(
+              new WaitTimeoutError({
+                runId,
+                timeoutMillis,
+                message: `Timed out waiting for terminal event for run ${runId} after ${timeoutMillis}ms.`,
+              }),
+            ),
         }),
       );
     },
@@ -1136,14 +1138,14 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
     list: (status) => runStore.listRuns(status),
 
     watch: (runId) =>
-      Stream.unwrapScoped(
+      Stream.unwrap(
         Effect.map(runStore.readEvents(runId), (persistedEvents) =>
           Stream.concat(Stream.fromIterable(persistedEvents), watchTier1Live(runId)),
         ),
       ),
 
     watchAll: (sinceTimeIso) =>
-      Stream.unwrapScoped(
+      Stream.unwrap(
         Effect.gen(function* () {
           if (sinceTimeIso !== undefined && !isSinceTimeIso(sinceTimeIso)) {
             return Stream.fail(
@@ -1174,9 +1176,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
       ),
 
     watchIo: (runId) =>
-      Stream.unwrapScoped(
-        Effect.zipRight(runStore.getRun(runId), Effect.succeed(watchIoLive(runId))),
-      ),
+      Stream.unwrap(Effect.andThen(runStore.getRun(runId), Effect.succeed(watchIoLive(runId)))),
 
     inspect: (ref) =>
       Effect.gen(function* () {

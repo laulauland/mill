@@ -10,7 +10,7 @@ Implement the baseline monorepo scaffold and guardrail toolchain for `mill` per 
   - `packages/core`
   - `packages/cli`
   - `packages/driver-acp`
-- Baseline Effect dependencies (`effect`, `@effect/platform`, `@effect/platform-bun`, `@effect/schema`)
+- Baseline Effect v4 dependencies (`effect`, `@effect/platform-bun`)
 - Constraint toolchain files/scripts
 - Minimal compileable package wiring + baseline tests
 - Docs split from `SPEC.md` into cedar-style `docs/` tree

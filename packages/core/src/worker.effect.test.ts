@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { decodeMillEventJsonSync } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
-import { runWithBunContext } from "./test-runtime";
+import { runWithBunServices } from "./test-runtime";
 import type { DriverRuntime } from "./types";
 import { makeMillEngine } from "./engine.effect";
 import { makeRunStore } from "./run-store.effect";
@@ -47,7 +47,7 @@ describe("runDetachedWorker", () => {
     });
 
     try {
-      const submittedRun = await runWithBunContext(
+      const submittedRun = await runWithBunServices(
         store.create({
           runId,
           programPath: "/tmp/program.ts",
@@ -58,7 +58,7 @@ describe("runDetachedWorker", () => {
         }),
       );
 
-      const firstRun = await runWithBunContext(
+      const firstRun = await runWithBunServices(
         runDetachedWorker({
           runId,
           programPath: submittedRun.programPath,
@@ -80,7 +80,7 @@ describe("runDetachedWorker", () => {
 
       expect(firstRun.run.status).toBe("complete");
 
-      const secondRun = await runWithBunContext(
+      const secondRun = await runWithBunServices(
         runDetachedWorker({
           runId,
           programPath: submittedRun.programPath,

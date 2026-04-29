@@ -35,9 +35,9 @@ A mill program is regular TS (sequential with `await`, parallel with `Promise.al
    - Internal interfaces are capability-only (method signatures), never domain shape definitions.
    - The boundary must be visible in filenames and enforced via ast-grep.
 7. **Promise bridge is explicit and singular**
-   - Only `Runtime.runPromise` is allowed as the Effect→Promise bridge.
+   - Only `Effect.runPromise` is allowed as the Effect→Promise bridge.
    - It is allowed only at public boundary adapters (`*.api.ts`, approved flat entry files, CLI entry adapters).
-   - `Effect.runPromise*` and `Runtime.runPromiseExit` are disallowed.
+   - `Effect.runPromiseExit` and other non-boundary Promise bridges are disallowed.
 8. **No shell-string command execution**
    - Drivers must construct commands as argument vectors (`Command.make(cmd, ...args)`).
    - Shell-eval patterns (`sh -lc`, `bash -lc`, interpolated command strings) are disallowed.

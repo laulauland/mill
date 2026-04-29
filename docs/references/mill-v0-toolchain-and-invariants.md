@@ -110,8 +110,8 @@ ruleDirs:
   - `no-interface-for-domain-models`: domain entities must come from `Schema`
   - `no-interface-outside-public`: interfaces are allowed only in `*.api.ts`, `*.d.ts`, and explicit flat public entry allowlists (`src/index.ts`, `src/types.ts`)
   - `no-promise-outside-public`: Promise-returning contracts are allowed only at user boundary files (`*.api.ts` plus approved flat public entry files)
-  - `no-effect-runpromise`: ban `Effect.runPromise*` usage entirely
-  - `no-runtime-runpromise-outside-boundary`: only `Runtime.runPromise` may bridge, and only in boundary adapters
+  - `no-effect-runpromise`: ban `Effect.runPromiseExit`; boundary adapters must use `Effect.runPromise`
+  - `no-runtime-runpromise-outside-boundary`: only `Effect.runPromise` may bridge, and only in boundary adapters
   - `no-public-import-internal`: public API modules cannot import private internals directly
 - enforce parsing/process/runtime safety:
   - `no-json-parse-outside-codec`: restrict `JSON.parse` to decode modules and require Schema decode
@@ -146,7 +146,7 @@ Practical exception policy:
 5. `--json` mode writes machine payloads to `stdout` only; human diagnostics go to `stderr`.
 6. Each run/spawn emits exactly one terminal event and never transitions afterward.
 7. All persisted tier-1 events include `schemaVersion` and decode via Schema unions.
-8. `Runtime.runPromise` is the only permitted Effect→Promise bridge.
+8. `Effect.runPromise` is the only permitted Effect→Promise bridge.
 9. Runtime/domain internals do not read `process.env`, `Date.now()`, or `Math.random()` directly.
 10. `mill run` returns immediately by default.
 

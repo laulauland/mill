@@ -16,7 +16,7 @@ Concretely:
   - can use `interface` for ergonomics
 - Internal/domain/runtime (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`):
   - no public Promise contracts
-  - domain shapes must be defined by `@effect/schema/Schema`
+  - domain shapes must be defined by `effect/Schema`
   - no interface-based domain modelling
 
 Effect contracts used internally:
@@ -25,12 +25,12 @@ Effect contracts used internally:
 - streams: `Stream.Stream<A, E, R>`
 - layers: `Layer.Layer<ROut, E, RIn>`
 - queue/pubsub for event fanout
-- schemas via `@effect/schema/Schema`
+- schemas via `effect/Schema`
 
 ### 8.1 Domain schemas (representative)
 
 ```ts
-import * as Schema from "@effect/schema/Schema";
+import * as Schema from "effect/Schema";
 
 export const RunId = Schema.String.pipe(Schema.brand("RunId"));
 export type RunId = Schema.Schema.Type<typeof RunId>;
@@ -156,14 +156,12 @@ interface MillEngine {
 - `Stream` for driver output decoding and watch subscriptions
 - `Ref` / `SynchronizedRef` for in-memory run registry snapshots
 - `Layer` + `Context.Tag` for all services (`RunStore`, `DriverRegistry`, `ExecutorRegistry`, `Clock`, etc.)
-- `Runtime` for bridging program-facing Promise API (`mill.spawn(): Promise<...>`) to internal Effects via **only** `Runtime.runPromise`
+- `Effect` for bridging program-facing Promise API (`mill.spawn(): Promise<...>`) to internal Effects via **only** `Effect.runPromise`
 
 Target platform services:
 
-- `@effect/platform/Command`
-- `@effect/platform/FileSystem`
-- `@effect/platform/Path`
-- `@effect/platform/Terminal`
+- `effect/unstable/process`
+- `effect/FileSystem`
 - `@effect/platform-bun` runtime layer for Bun-backed implementations
 
 ### 8.6 Package baseline (Effect v4 target)
@@ -173,10 +171,8 @@ Target platform services:
 ```json
 {
   "dependencies": {
-    "effect": "^4.x",
-    "@effect/platform": "^1.x",
-    "@effect/platform-bun": "^1.x",
-    "@effect/schema": "^1.x"
+    "effect": "4.0.0-beta.59",
+    "@effect/platform-bun": "4.0.0-beta.59"
   }
 }
 ```
@@ -254,11 +250,11 @@ export interface RunRecord {
 ### 8.9 Promise bridge and decode boundaries
 
 - Allowed bridge:
-  - `Runtime.runPromise` only
+  - `Effect.runPromise` only
 - Disallowed bridges:
   - `Effect.runPromise`
   - `Effect.runPromiseExit`
-  - `Runtime.runPromiseExit`
+  - `Effect.runPromiseExit`
 - Bridge location:
   - boundary adapters only (`*.api.ts`, approved flat entry files, CLI boundary entrypoints)
 
@@ -451,7 +447,7 @@ Rules:
 - `api` contributions are namespaced into injected `mill` object.
 - Extension hooks (`setup`, `onEvent`) stay Effect-native.
 - Extension `api` is user-facing, therefore Promise-based by contract.
-- Promise adapters for extension API must use `Runtime.runPromise` as the only bridge.
+- Promise adapters for extension API must use `Effect.runPromise` as the only bridge.
 
 ## 15) Observers
 

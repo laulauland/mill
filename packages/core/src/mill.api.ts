@@ -1,7 +1,5 @@
-import { Effect, Runtime } from "effect";
+import { Effect } from "effect";
 import type { Mill, SpawnInput, SpawnOutput } from "./types";
-
-const runtime = Runtime.defaultRuntime;
 
 const buildSpawnOutput = (input: SpawnInput): SpawnOutput => ({
   text: `noop response for ${input.agent}`,
@@ -13,9 +11,8 @@ const buildSpawnOutput = (input: SpawnInput): SpawnOutput => ({
 });
 
 export const createMill = (): Promise<Mill> =>
-  Runtime.runPromise(runtime)(
+  Effect.runPromise(
     Effect.succeed({
-      spawn: (input: SpawnInput) =>
-        Runtime.runPromise(runtime)(Effect.succeed(buildSpawnOutput(input))),
+      spawn: (input: SpawnInput) => Effect.runPromise(Effect.succeed(buildSpawnOutput(input))),
     }),
   );

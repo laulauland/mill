@@ -20,14 +20,8 @@
     "check": "bun run lint:ast-grep:test && bun run lint:exports && bun run lint:ast-grep && bun run lint && bun run format:check && bun run typecheck && bun test"
   },
   "dependencies": {
-    "@effect/cli": "^0.73.2",
-    "@effect/platform": "^0.94.5",
-    "@effect/platform-bun": "^0.87.1",
-    "@effect/printer": "^0.47.0",
-    "@effect/printer-ansi": "^0.47.0",
-    "@effect/schema": "^0.75.5",
-    "@effect/typeclass": "^0.38.0",
-    "effect": "^3.19.19"
+    "@effect/platform-bun": "4.0.0-beta.59",
+    "effect": "4.0.0-beta.59"
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.39.6",
