@@ -2,10 +2,13 @@ import { Effect } from "effect";
 import type { DriverProcessConfig, DriverRuntime, DriverSpawnInput } from "@mill/core";
 import { runAcpSession } from "./acp-client.effect";
 
-export const makeAcpDriver = (name: string, processConfig: DriverProcessConfig): DriverRuntime => ({
+export const makeAcpDriver = (
+  name: string,
+  processConfig?: DriverProcessConfig,
+): DriverRuntime => ({
   name,
   spawn: (input: DriverSpawnInput) =>
-    Effect.map(Effect.scoped(runAcpSession(processConfig, input)), (output) => ({
+    Effect.map(Effect.scoped(runAcpSession(name, processConfig, input)), (output) => ({
       ...output,
       result: {
         ...output.result,

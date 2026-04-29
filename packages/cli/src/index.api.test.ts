@@ -16,9 +16,10 @@ rl.on("line", (line) => {
 
   if (msg.method === "initialize") {
     write({ jsonrpc: "2.0", id: msg.id, result: {
-      protocolVersion: "0.1",
-      serverInfo: { name: "fake-agent", version: "0.0.1" },
-      capabilities: {}
+      protocolVersion: 1,
+      agentCapabilities: { promptCapabilities: {}, sessionCapabilities: { close: {} } },
+      agentInfo: { name: "fake-agent", version: "0.0.1" },
+      authMethods: []
     }});
     return;
   }
@@ -30,9 +31,14 @@ rl.on("line", (line) => {
 
   if (msg.method === "session/prompt") {
     const sessionId = msg.params?.sessionId || "test-session-123";
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "Hello from " }});
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "fake agent" }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello from " } } }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "fake agent" } } }});
     write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" }});
+    return;
+  }
+
+  if (msg.method === "session/close") {
+    write({ jsonrpc: "2.0", id: msg.id, result: {} });
   }
 });
 `;

@@ -7,36 +7,62 @@ const readline = require("readline");
 const rl = readline.createInterface({ input: process.stdin });
 const write = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 
+let selectedModel = "unset";
+const configOptions = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "test/default",
+    options: [
+      { value: "test/default", name: "Default" },
+      { value: "test/model", name: "Requested" }
+    ]
+  }
+];
+
 rl.on("line", (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch { return; }
 
   if (msg.method === "initialize") {
     write({ jsonrpc: "2.0", id: msg.id, result: {
-      protocolVersion: "0.1",
-      serverInfo: { name: "fake-agent", version: "0.0.1" },
-      capabilities: {}
+      protocolVersion: 1,
+      agentCapabilities: {
+        promptCapabilities: {},
+        sessionCapabilities: { close: {} }
+      },
+      agentInfo: { name: "fake-agent", version: "0.0.1" },
+      authMethods: []
     }});
     return;
   }
 
   if (msg.method === "session/new") {
-    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "test-session-123" }});
+    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "test-session-123", configOptions }});
+    return;
+  }
+
+  if (msg.method === "session/set_config_option") {
+    selectedModel = msg.params?.value || "missing";
+    write({ jsonrpc: "2.0", id: msg.id, result: { configOptions }});
     return;
   }
 
   if (msg.method === "session/prompt") {
     const sessionId = msg.params?.sessionId || "test-session-123";
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "Hello from " }});
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_message_chunk", text: "fake agent" }});
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "tool_call", name: "read_file", toolCallId: "tc-1", input: {} }});
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "agent_thought_chunk", text: "thinking..." }});
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, sessionUpdate: "plan", steps: ["step 1", "step 2"] }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello from " } } }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "fake agent using " + selectedModel } } }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "read_file", kind: "read", status: "pending" } }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking..." } } }});
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "plan", entries: [{ content: "step 1", priority: "medium", status: "pending" }, { content: "step 2", priority: "medium", status: "pending" }] } }});
     write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" }});
     return;
   }
 
-  if (msg.method === "session/cancel") {
+  if (msg.method === "session/close") {
+    write({ jsonrpc: "2.0", id: msg.id, result: {} });
     return;
   }
 });
@@ -53,9 +79,10 @@ rl.on("line", (line) => {
 
   if (msg.method === "initialize") {
     write({ jsonrpc: "2.0", id: msg.id, result: {
-      protocolVersion: "0.1",
-      serverInfo: { name: "fake-agent", version: "0.0.1" },
-      capabilities: {}
+      protocolVersion: 1,
+      agentCapabilities: { promptCapabilities: {}, sessionCapabilities: { close: {} } },
+      agentInfo: { name: "fake-agent", version: "0.0.1" },
+      authMethods: []
     }});
     return;
   }
@@ -69,11 +96,16 @@ rl.on("line", (line) => {
     write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "${stopReason}" }});
     return;
   }
+
+  if (msg.method === "session/close") {
+    write({ jsonrpc: "2.0", id: msg.id, result: {} });
+    return;
+  }
 });
 `;
 
 describe("makeAcpDriver", () => {
-  it("spawns and collects ACP session output", async () => {
+  it("spawns, selects ACP model config, and collects session output", async () => {
     const driver = makeAcpDriver("test-acp", {
       command: "bun",
       args: ["-e", FAKE_ACP_AGENT_SCRIPT],
@@ -91,7 +123,7 @@ describe("makeAcpDriver", () => {
       }),
     );
 
-    expect(output.result.text).toBe("Hello from fake agent");
+    expect(output.result.text).toBe("Hello from fake agent using test/model");
     expect(output.result.sessionRef).toBe("test-session-123");
     expect(output.result.driver).toBe("test-acp");
     expect(output.result.exitCode).toBe(0);
@@ -147,7 +179,7 @@ describe("makeAcpDriver", () => {
   }, 15000);
 
   it("resolveSession returns correct pointer", async () => {
-    const driver = makeAcpDriver("claude", { command: "echo", args: [] });
+    const driver = makeAcpDriver("claude");
 
     const pointer = await runEffect(driver.resolveSession!({ sessionRef: "session-abc" }));
 

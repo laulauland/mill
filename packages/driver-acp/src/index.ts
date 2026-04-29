@@ -27,7 +27,11 @@ const createAcpCodec = (models: ReadonlyArray<string>): DriverCodec => ({
   modelCatalog: Effect.succeed(normalizeModelCatalog(models)),
 });
 
-const createAcpDriverRegistration = (config: AcpDriverConfig, name: string): DriverRegistration => {
+const createAcpDriverRegistration = (
+  config: AcpDriverConfig,
+  name: string,
+  runtimeProcess?: DriverProcessConfig,
+): DriverRegistration => {
   const processConfig: DriverProcessConfig = {
     command: config.command,
     args: config.args,
@@ -39,7 +43,7 @@ const createAcpDriverRegistration = (config: AcpDriverConfig, name: string): Dri
     modelFormat: config.modelFormat,
     process: processConfig,
     codec: createAcpCodec(config.models),
-    runtime: makeAcpDriver(name, processConfig),
+    runtime: makeAcpDriver(name, runtimeProcess),
   };
 };
 
@@ -56,14 +60,15 @@ export const createClaudeAcpDriverRegistration = (
 ): DriverRegistration =>
   createAcpDriverRegistration(
     {
-      command: input?.process?.command ?? "claude-agent-acp",
+      command: input?.process?.command ?? "claude",
       args: input?.process?.args ?? [],
-      env: input?.process?.env ?? { CLAUDECODE: "" },
+      env: input?.process?.env,
       models: input?.models ?? DEFAULT_CLAUDE_MODELS,
       description: "Claude ACP driver",
       modelFormat: "provider/model-id",
     },
     "claude",
+    input?.process,
   );
 
 // --- Codex ACP ---
@@ -83,6 +88,7 @@ export const createCodexAcpDriverRegistration = (
       modelFormat: "provider/model-id",
     },
     "codex",
+    input?.process,
   );
 
 // --- Pi ACP ---
@@ -111,12 +117,13 @@ export const createPiAcpDriverRegistration = (
 ): DriverRegistration =>
   createAcpDriverRegistration(
     {
-      command: input?.process?.command ?? "pi-acp",
-      args: input?.process?.args ?? [],
+      command: input?.process?.command ?? "pi",
+      args: input?.process?.args ?? ["acp"],
       env: input?.process?.env,
       models: input?.models ?? readPiEnabledModels(input?.homeDirectory),
       description: "Pi ACP driver",
       modelFormat: "provider/model-id",
     },
     "pi",
+    input?.process,
   );
