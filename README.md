@@ -27,27 +27,23 @@ Then run mill programs directly with the CLI.
 ## Quick example
 
 ```ts
-import { claude, codex, mill } from "@mill/core/program";
+import { claude, codex, task } from "@mill/core/program";
 
-const analysis = mill
-  .task({
-    agent: codex("openai-codex/gpt-5.3-codex"),
-    role: "analyzer",
-    system: "Map key risks and unknowns.",
-    prompt: "Analyze the auth module and summarize weak points.",
-  })
-  .start();
+const analysis = task({
+  agent: codex("openai-codex/gpt-5.3-codex"),
+  role: "analyzer",
+  system: "Map key risks and unknowns.",
+  prompt: "Analyze the auth module and summarize weak points.",
+}).start();
 
 const analysisResult = await analysis.done;
 
-const plan = mill
-  .task({
-    agent: claude("anthropic/claude-opus-4-6"),
-    role: "planner",
-    system: "Turn findings into a concrete implementation plan.",
-    prompt: `Use this analysis to propose fixes:\n\n${analysisResult.text}`,
-  })
-  .start();
+const plan = task({
+  agent: claude("anthropic/claude-opus-4-6"),
+  role: "planner",
+  system: "Turn findings into a concrete implementation plan.",
+  prompt: `Use this analysis to propose fixes:\n\n${analysisResult.text}`,
+}).start();
 
 await plan.done;
 ```
@@ -61,25 +57,23 @@ mill run review.ts --sync          # or block until done
 
 ## Task actors
 
-`mill.task(...)` creates a task actor. It is synchronous and cheap. `.start()` begins execution and `.done` is the Promise boundary for the final `TaskResult`.
+`task(...)` creates a task actor. It is synchronous and cheap. `.start()` begins execution and `.done` is the Promise boundary for the final `TaskResult`. `mill.task(...)` is also exported from `@mill/core/program` for object-style code, but normal examples use the direct helper.
 
 ```ts
-import { codex, mill } from "@mill/core/program";
+import { codex, task } from "@mill/core/program";
 
-const task = mill
-  .task({
-    agent: codex("openai-codex/gpt-5.3-codex"),
-    system: "You inspect code.",
-    prompt: "Review src/auth.",
-    steering: "queue",
-  })
-  .start();
+const review = task({
+  agent: codex("openai-codex/gpt-5.3-codex"),
+  system: "You inspect code.",
+  prompt: "Review src/auth.",
+  steering: "queue",
+}).start();
 
-task.subscribe((snapshot) => {
-  console.log(snapshot.status, snapshot.text);
+review.subscribe((snapshot) => {
+  // render snapshot.status / snapshot.text in your UI
 });
 
-await task.done;
+await review.done;
 ```
 
 Snapshots are the actor's current reduced state: status, accumulated text, queue, session pointer, result, or error. Events are the append-only history; snapshots are what is true now.
@@ -94,7 +88,7 @@ task.send({
 });
 ```
 
-Current state: core task actors model `queue`, `interrupt`, and `reject` policies in snapshots. Program-host tasks mirror that actor-shaped behavior for authored programs. The ACP runtime has session-level multi-turn and cancel support through its internal `spawn-agent` integration, but fully durable end-to-end steering is still incremental.
+Current state: core task actors model `queue`, `interrupt`, and `reject` policies in snapshots. Built-in provider sessions support multi-turn and cancel behavior internally where the backend supports it, but fully durable end-to-end live steering remains incremental.
 
 ## Agents and provider factories
 
@@ -108,7 +102,7 @@ claude("anthropic/claude-opus-4-6");
 pi("your-pi-model-id");
 ```
 
-The provider selects the task agent backend and model. `role` is the human-readable task role, `system` describes how the agent should behave, and `prompt` describes the work.
+The provider selects the task agent backend and model. `role` is the human-readable task role, `system` describes how the agent should behave, and `prompt` describes the work. No config file is required for built-in providers.
 
 ## CLI
 
@@ -146,7 +140,7 @@ This teaches Claude Code how to write and run mill programs. When you ask it to 
 pi install npm:pi-mill
 ```
 
-This registers a `subagent` tool in pi. When the agent needs to delegate work, it writes a mill program and executes it. The extension also adds monitoring: `/mill` opens an in-session overlay, and `pi --mill` launches a standalone run monitor.
+This registers a `subagent` tool in pi. Pi-mill has an extension-specific serialized task shape (`agent` label + `model` string) and generates core-compatible mill programs internally. The extension also adds monitoring: `/mill` opens an in-session overlay, and `pi --mill` launches a standalone run monitor.
 
 ## FAQ
 

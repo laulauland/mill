@@ -1,96 +1,57 @@
 ---
 name: mill-worktree
-description: Worktree-based parallel development with pi-mill. Use when multiple agents need isolated working directories.
+description: Worktree-based parallel development. Use when multiple agents need isolated working directories.
 ---
 
-# Worktree-Based Parallel Development
+# Worktree-based parallel development
 
-Give each editing agent its own jj workspace or git worktree so concurrent changes do not collide. The orchestration program creates worktrees, starts task actors in those directories, collects results, then merges successful work.
+Give each editing agent its own jj workspace or worktree so concurrent changes do not collide. Create workspaces outside the mill program or in a preparatory step, then pass explicit paths in prompts and assign one task per workspace.
 
-## Jujutsu Workspace Pattern
+## Pattern
 
 ```ts
-import { spawnSync } from "node:child_process";
+import { claude, codex, task } from "@mill/core/program";
 
-const baseCwd = process.cwd();
 const workstreams = [
   {
     name: "auth",
-    prompt: "Implement auth module changes.",
+    path: "/tmp/mill-auth-workspace",
+    prompt: "Implement auth module changes in /tmp/mill-auth-workspace.",
     system: "You are a backend engineer. Make focused changes and verify them.",
   },
   {
     name: "api",
-    prompt: "Implement API endpoint changes.",
+    path: "/tmp/mill-api-workspace",
+    prompt: "Implement API endpoint changes in /tmp/mill-api-workspace.",
     system: "You are an API engineer. Make focused changes and verify them.",
   },
 ];
 
-const worktrees: string[] = [];
+const implementationTasks = workstreams.map((stream) =>
+  task({
+    agent: codex("openai-codex/gpt-5.3-codex"),
+    role: stream.name,
+    system: stream.system,
+    prompt: `${stream.prompt}\n\nOnly edit files under ${stream.path}.`,
+  }).start(),
+);
 
-try {
-  for (const stream of workstreams) {
-    const wt = `/tmp/pi-worktree-${stream.name}-${Date.now()}`;
-    const created = spawnSync("jj", ["workspace", "add", wt], {
-      cwd: baseCwd,
-      encoding: "utf-8",
-    });
-    if (created.status !== 0) throw new Error(created.stderr);
-    worktrees.push(wt);
-  }
+const results = await Promise.all(implementationTasks.map((taskActor) => taskActor.done));
 
-  const installTasks = worktrees.map((cwd, step) =>
-    mill
-      .task({
-        agent: `install-${step}`,
-        system: "Install project dependencies and verify the install succeeds.",
-        prompt: "Install dependencies in this workspace.",
-        model: "cerebras/zai-glm-4.7",
-        cwd,
-        step,
-      })
-      .start(),
-  );
-  await Promise.all(installTasks.map((task) => task.done));
+const mergeTask = task({
+  agent: claude("anthropic/claude-sonnet-4-6"),
+  role: "merger",
+  system: "You merge parallel workstream results using jj. Resolve conflicts carefully.",
+  prompt: `Merge successful workstreams. Workspaces: ${workstreams.map((w) => w.path).join(", ")}. Results:\n\n${results
+    .map((result) => result.text)
+    .join("\n\n---\n\n")}`,
+}).start();
 
-  const implementationTasks = workstreams.map((stream, step) =>
-    mill
-      .task({
-        agent: stream.name,
-        system: stream.system,
-        prompt: stream.prompt,
-        model: "anthropic/claude-opus-4-6",
-        cwd: worktrees[step],
-        step,
-      })
-      .start(),
-  );
-  const results = await Promise.all(implementationTasks.map((task) => task.done));
-
-  const failed = results.filter((result) => result.exitCode !== 0);
-  const mergeTask = mill
-    .task({
-      agent: "merger",
-      system: "You merge parallel workstream results using jj. Resolve conflicts carefully.",
-      prompt: `Merge successful worktrees into ${baseCwd}. Worktrees: ${worktrees.join(", ")}. Failed: ${failed.map((r) => r.agent).join(", ") || "none"}.`,
-      model: "anthropic/claude-sonnet-4-6",
-      cwd: baseCwd,
-      step: workstreams.length,
-    })
-    .start();
-  const mergeResult = await mergeTask.done;
-
-  mill.observe.artifact(
-    "worktree-report.md",
-    [...results, mergeResult].map((r) => `## ${r.agent}\n${r.text}`).join("\n\n---\n\n"),
-  );
-} finally {
-  for (const wt of worktrees) {
-    const name = wt.split("/").pop() ?? "";
-    spawnSync("jj", ["workspace", "forget", name], { cwd: baseCwd, encoding: "utf-8" });
-    spawnSync("rm", ["-rf", wt], { encoding: "utf-8" });
-  }
-}
+await mergeTask.done;
 ```
 
-Use the same actor shape for git worktrees: create isolated directories, pass each directory as `cwd`, start all independent tasks, and await `task.done` for each one.
+## Operational notes
+
+- Create and clean up jj workspaces outside the mill program unless your task agent is explicitly responsible for that filesystem work.
+- Keep each task's prompt scoped to one workspace path.
+- Merge with a dedicated task after independent work completes.

@@ -1,91 +1,82 @@
 # Mill Patterns
 
-Common orchestration patterns for pi-mill programs. `mill.task(input)` creates a task actor. Call `.start()` and await `.done` for the final result.
+Common orchestration patterns for core mill programs. Import from `@mill/core/program`, create task actors with `task(...)`, call `.start()`, and await `.done`.
 
 ## Parallel Review
 
 ```ts
+import { claude, task } from "@mill/core/program";
+
 const tasks = [
-  mill.task({
-    agent: "security",
+  task({
+    agent: claude("anthropic/claude-opus-4-6"),
+    role: "security",
     system: "You are a security reviewer. Report findings with severity ratings.",
     prompt: "Review src/auth/ for security vulnerabilities.",
-    model: "anthropic/claude-opus-4-6",
-    step: 0,
-  }),
-  mill.task({
-    agent: "perf",
+  }).start(),
+  task({
+    agent: claude("anthropic/claude-sonnet-4-6"),
+    role: "perf",
     system: "You are a performance analyst. Identify bottlenecks and O(n²) patterns.",
     prompt: "Profile src/api/ for performance issues.",
-    model: "anthropic/claude-sonnet-4-6",
-    step: 1,
-  }),
+  }).start(),
 ];
 
-tasks.forEach((task) => task.start());
-const results = await Promise.all(tasks.map((task) => task.done));
+const results = await Promise.all(tasks.map((taskActor) => taskActor.done));
 ```
 
 ## Sequential Pipeline
 
 ```ts
-const analysisTask = mill
-  .task({
-    agent: "analyzer",
-    system: "You map structure, dependencies, and public interfaces.",
-    prompt: "Map all API endpoints in the codebase.",
-    model: "anthropic/claude-opus-4-6",
-    step: 0,
-  })
-  .start();
+import { claude, task } from "@mill/core/program";
+
+const analysisTask = task({
+  agent: claude("anthropic/claude-opus-4-6"),
+  role: "analyzer",
+  system: "You map structure, dependencies, and public interfaces.",
+  prompt: "Map all API endpoints in the codebase.",
+}).start();
 const analysis = await analysisTask.done;
 
-const planTask = mill
-  .task({
-    agent: "planner",
-    system: "You design thorough test plans for critical paths and edge cases.",
-    prompt: `Design integration tests covering these endpoints:\n\n${analysis.text}`,
-    model: "anthropic/claude-sonnet-4-6",
-    step: 1,
-  })
-  .start();
+const planTask = task({
+  agent: claude("anthropic/claude-sonnet-4-6"),
+  role: "planner",
+  system: "You design thorough test plans for critical paths and edge cases.",
+  prompt: `Design integration tests covering these endpoints:\n\n${analysis.text}`,
+}).start();
 const plan = await planTask.done;
 ```
 
-## Fan-out then Synthesize
+## Fan-out then synthesize
 
 ```ts
-const reviewTasks = ["frontend", "backend", "infra"].map((area, step) =>
-  mill
-    .task({
-      agent: area,
-      system: `You are a ${area} specialist. Review for correctness and actionable risks.`,
-      prompt: `Review the ${area} code.`,
-      model: "anthropic/claude-sonnet-4-6",
-      step,
-    })
-    .start(),
+import { claude, task } from "@mill/core/program";
+
+const reviewTasks = ["frontend", "backend", "infra"].map((area) =>
+  task({
+    agent: claude("anthropic/claude-sonnet-4-6"),
+    role: area,
+    system: `You are a ${area} specialist. Review for correctness and actionable risks.`,
+    prompt: `Review the ${area} code.`,
+  }).start(),
 );
 
-const reviews = await Promise.all(reviewTasks.map((task) => task.done));
-const context = reviews.map((r) => `[${r.agent}]\n${r.text}`).join("\n\n");
+const reviews = await Promise.all(reviewTasks.map((taskActor) => taskActor.done));
+const context = reviews.map((r) => `[${r.role ?? r.agent}]\n${r.text}`).join("\n\n");
 
-const summaryTask = mill
-  .task({
-    agent: "synthesizer",
-    system: "You synthesize multiple perspectives into clear, prioritized summaries.",
-    prompt: `Synthesize these reviews into an actionable summary:\n${context}`,
-    model: "anthropic/claude-opus-4-6",
-    step: reviews.length,
-  })
-  .start();
+const summaryTask = task({
+  agent: claude("anthropic/claude-opus-4-6"),
+  role: "synthesizer",
+  system: "You synthesize multiple perspectives into clear, prioritized summaries.",
+  prompt: `Synthesize these reviews into an actionable summary:\n${context}`,
+}).start();
 const summary = await summaryTask.done;
 ```
 
-## Model Selection
+## Model selection
 
-Models use `provider/model-id` format. Match capability to task complexity and vary models across enabled options instead of defaulting to one model.
+Use provider factories instead of config: `codex(model)`, `claude(model)`, or `pi(model)`. Match capability to task complexity and vary models across enabled options instead of defaulting to one model.
 
-## Context Chaining
+## Context chaining
 
-Each result has `text` and `sessionPath`. Pass `result.text` into later prompts; point agents at `sessionPath` when they need deeper context.
+Each result has `text` and may include `sessionRef` / `sessionPath` depending on the provider. Pass `result.text` into later prompts; keep session references for later inspection when available.

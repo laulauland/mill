@@ -5,15 +5,31 @@ description: "Write mill orchestration programs for parallel/sequential agent wo
 
 # mill
 
-Use this skill whenever you are writing or reviewing a mill-based orchestration program (including pi-mill extension flows).
+Use this skill when writing or reviewing a mill orchestration program for the core CLI/runtime.
 
 ## Core rules
 
-1. Keep `system` (WHO/how) separate from `prompt` (WHAT/task).
-2. Use `await` for sequential steps and `Promise.all` for independent parallel work.
-3. Always pass an explicit `model` in `provider/model-id` format.
-4. Check `exitCode`, `stopReason`, and `errorMessage` before trusting results.
-5. Use `mill.observe.log(...)` for progress and diagnostics.
+1. Import program helpers from `@mill/core/program`.
+2. Create task actors with `task({ agent: codex(...), system, prompt }).start()`.
+3. Use top-level `await task.done`; no global `mill`, config file, or default export is required.
+4. Keep `system` (WHO/how) separate from `prompt` (WHAT/task).
+5. Use `await` for sequential work and `Promise.all` for independent parallel work.
+6. Select an explicit provider/model with `codex(model)`, `claude(model)`, or `pi(model)`.
+7. Inspect `result.text`, `result.stopReason`, and `result.errorMessage` before trusting outputs.
+
+## Minimal program
+
+```ts
+import { codex, task } from "@mill/core/program";
+
+const review = task({
+  agent: codex("openai-codex/gpt-5.3-codex"),
+  system: "You inspect code carefully.",
+  prompt: "Review src/auth.",
+}).start();
+
+await review.done;
+```
 
 ## Available patterns
 
@@ -21,4 +37,4 @@ Use this skill whenever you are writing or reviewing a mill-based orchestration 
 - Iterative Ralph Loop pattern: `./references/ralph-loop.md`
 - Worktree-isolated parallel development: `./references/worktree.md`
 
-Prefer these patterns before inventing new orchestration scaffolding.
+Note: pi-mill tool snippets are extension-specific and still use pi-mill's serialized `mill.task({ agent: roleLabel, model, system, prompt })` shape. Do not confuse that with normal core/CLI programs.

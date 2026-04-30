@@ -1,160 +1,81 @@
-# mill v0 Architecture and Boundaries
+# mill v0 architecture and boundaries
 
-_Source: `SPEC.md`, Sections 8–18._
+## Shape
 
-## Boundary model
-
-Mill is Effect v4 / effect-smol-first internally and Promise-friendly at public boundaries.
-
-- Public boundary files (`*.api.ts`, `src/index.ts`, `src/types.ts`, CLI entry adapters) may expose interfaces and Promise-returning APIs.
-- Internal runtime files (`*.effect.ts`) use `Effect`, `Stream`, `Layer`, `Ref`, and other Effect primitives.
-- Domain persistence files (`*.schema.ts`) define persisted data with `effect/Schema`.
-- Decode/encode files (`*.codec.ts`) own ad-hoc wire parsing.
-
-Only `Effect.runPromise` may bridge Effect to Promise, and only at public boundaries. Today the main Promise surfaces are task actor `.done` and runtime facade methods. Future Effect-native APIs should be additive.
-
-## Public task actor API
-
-Authored mill programs use task actors:
+Mill is a config-free task actor runtime. Normal programs import from `@mill/core/program`:
 
 ```ts
-import { codex, mill } from "@mill/core/program";
+import { codex, task } from "@mill/core/program";
 
-const task = mill
-  .task({
-    agent: codex("openai-codex/gpt-5.3-codex"),
-    system: "You inspect code.",
-    prompt: "Review src/auth.",
-  })
-  .start();
+const review = task({
+  agent: codex("openai-codex/gpt-5.3-codex"),
+  prompt: "Review src/auth.",
+}).start();
 
-await task.done;
+await review.done;
 ```
 
-Provider factories are pure data constructors exported by `@mill/core/program` for programs and by `@mill/core` for host/config code:
-
-```ts
-codex("openai-codex/gpt-5.3-codex");
-claude("anthropic/claude-opus-4-6");
-pi("your-pi-model-id");
-```
-
-`agent` chooses driver/model. `role` is optional human-facing task identity. `system` describes behavior. `prompt` describes the requested work.
-
-## Task actors, snapshots, and events
-
-A task actor exposes:
-
-- `start()` to begin work
-- `send(command)` for steering intent
-- `cancel(reason?)` / `stop()` for cancellation intent
-- `subscribe(listener)` for snapshot updates
-- `getSnapshot()` for current state
-- `done` for final result
-
-Events are append-only facts persisted in `events.ndjson`. Snapshots are current reduced state derived from actor state/events: status, accumulated text, queued commands, session pointer, terminal result, or error.
-
-Current task statuses are:
-
-```text
-idle -> starting -> running -> waiting -> complete
-                         |        |       -> failed
-                         |        |       -> cancelled
-                         |        -> queued
-                         -> interrupting
-```
-
-This diagram is descriptive; implementations may skip intermediate statuses when work completes quickly.
-
-## Steering status
-
-Core actor snapshots model three policies:
-
-- `queue`: record the command for the next turn when the task is busy
-- `interrupt`: move toward interrupting/cancelling the active turn before applying the command
-- `reject`: reject commands that cannot be applied immediately
-
-Current limitations are intentional and documented:
-
-- Program-host task actors expose the actor shape and snapshot transitions for authored programs.
-- `@mill/driver-acp` has session-level multi-turn/cancel support through internal `spawn-agent` integration.
-- Durable end-to-end steering from a running program through the run store into a live ACP session is still incremental.
+The imported helpers are bound to the current run through `ProgramContext`. Core/CLI program authoring does not use an ambient global.
 
 ## Runtime topology
 
 ```text
-mill program (TS)
-  -> executor (direct | vm)
-    -> engine (run lifecycle, task API injection, events, persistence)
-      -> driver (generic)
-        -> agent process / remote endpoint
-
-engine events -> watch/tui/automation
+CLI/API caller
+  -> run API
+    -> engine
+      -> program host
+        -> dynamic import under ProgramContext
+          -> task actor
+            -> agent runtime/session
 ```
 
-Executor, driver, extension, and observer layers remain orthogonal.
+The CLI is batteries-included for built-in `codex`, `claude`, and `pi` providers. Core keeps `spawn-agent` and ACP details out of the public API.
 
-## Driver boundary
+## Package boundaries
 
-Core does not encode vendor semantics. Drivers translate task execution into agent protocol work.
+- `packages/core/src/*.api.ts` exposes public Promise/actor surfaces.
+- `packages/core/src/*.effect.ts` contains Effect-native internals.
+- `packages/core/src/*.schema.ts` contains persisted/domain schemas.
+- `packages/cli/src/mill.ts` is the executable Effect platform entrypoint.
+- `packages/cli/src/index.ts` maps CLI commands to core runtime calls.
+- `packages/driver-acp` is an internal implementation package for built-in ACP-backed provider runtimes.
+- `packages/pi-mill` is an extension-specific wrapper and has its own serialized program shape.
 
-`@mill/driver-acp` is the built-in ACP driver package for Claude, Codex, and pi. It uses `spawn-agent` internally for ACP v1 process/session handling, model config options, cancellation, and multi-turn session support. `spawn-agent` is not part of the public mill API.
+## Program host
 
-Static model catalogs remain the source for normal CLI help. Live ACP config/model discovery should be explicit if added later, because it creates sessions.
+The program host dynamically imports a TypeScript program under a current `ProgramContext`. Top-level await controls completion. The host may read `result` / `default` exports or infer a single task result, but a program can simply await its tasks.
 
-## CLI and runtime facade
+The old generated global/protocol runtime is not part of the normal core/CLI path.
 
-CLI lifecycle commands remain:
+## Task actor boundary
 
-```bash
-mill run <program.ts> [--sync] [--json]
-mill status <runId> [--json]
-mill wait <runId> --timeout <seconds> [--json]
-mill watch [--run <runId>] [--channel events|io|all] [--json]
-mill cancel <runId> [--json]
-mill ls [--json]
-```
+A task actor owns lifecycle state, snapshots, queued steering commands, terminal result, and a session pointer when available. Snapshots are reduced current state; events are append-only history.
 
-Internally the CLI should stay a thin wrapper over the runtime facade / actor-compatible boundaries, while preserving terminal UX and JSON contracts.
+## Built-in provider boundary
 
-## Storage/event vocabulary
+Task input carries an `AgentProvider` descriptor:
 
-Public docs and new persisted orchestration records use task vocabulary: `task:*` events, `taskId` identifiers, and `tasks` run results. Some driver adapter internals still use older spawn-shaped names until the session-first cleanup, but the engine/store boundary is task-native.
-
-## Effect v4 package baseline
-
-Mill targets the Effect v4 package line:
-
-```json
+```ts
 {
-  "dependencies": {
-    "effect": "4.0.0-beta.59",
-    "@effect/platform-bun": "4.0.0-beta.59"
-  }
+  agent: codex("openai-codex/gpt-5.3-codex"),
+  prompt: "..."
 }
 ```
 
-Patch versions may move together. New internal code must follow Effect v4 module names and API shapes.
+The runtime resolves the provider id to a registered agent runtime. The CLI registers built-in providers. API callers can provide runtimes programmatically where needed.
 
-## File layout
+## Storage boundary
 
-```text
-src/
-  index.ts                   # public package barrel / package entrypoint
-  types.ts                   # user-facing interfaces allowed
-  *.api.ts                   # Promise-based public adapters
-  *.schema.ts                # Schema-based domain models
-  *.effect.ts                # internal Effect programs/services/runtime helpers
-  *.codec.ts                 # decode/encode modules
-  test-runtime.ts            # test-only boundary helper
-  mill.ts                    # CLI executable entrypoint (cli package)
-```
+New persisted orchestration records use task vocabulary: `task:*`, `taskId`, and `tasks`. Run records are durable and are the source for status, wait, watch, cancel, and ls.
+
+## Effect boundary
+
+Internals are Effect-first. Promise surfaces are restricted to public API wrappers and actor `.done`. IO belongs at explicit platform/runtime edges, using Effect platform services where available.
 
 ## Invariants
 
-1. Public examples use `mill.task({ agent: codex(...) })`.
-2. Internal runtime code remains Effect-first.
-3. Promise bridging happens only at approved boundaries.
-4. CLI lifecycle commands remain stable.
-5. Snapshots describe current state; events describe history.
-6. `spawn-agent` stays internal to `@mill/driver-acp`.
+1. Public examples import from `@mill/core/program`.
+2. No normal core/CLI program authoring path depends on a global `mill`.
+3. No config file is required for built-in providers.
+4. The CLI remains the lifecycle surface for durable runs.
+5. ACP and `spawn-agent` remain implementation details.

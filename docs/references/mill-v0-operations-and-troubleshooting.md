@@ -1,63 +1,66 @@
-# mill v0 Operations & Troubleshooting
+# mill v0 operations and troubleshooting
 
-Operational conventions for diagnosing stuck runs, cancellations, and stale UI state.
+## Run store
 
-## 1) Source of truth for run state
+By default, mill writes runs under:
 
-- **Canonical:** `mill status <runId> --json` and `run.json` under the run directory.
-- **Advisory only:** extension-local mirrors (widget/monitor caches, historical run snapshots in pi session folders).
+```text
+~/.mill/runs/<runId>/
+```
 
-When in doubt, always trust canonical mill state.
+Use `--runs-dir <path>` on lifecycle commands to point at a different store.
 
-## 2) Cancellation semantics
+## Common commands
 
-`mill cancel <runId>` performs two steps:
+```bash
+mill run program.ts
+mill run program.ts --sync --json
+mill status <runId> --json
+mill wait <runId> --timeout 60 --json
+mill watch --run <runId> --channel events
+mill watch --run <runId> --channel io --source agent
+mill cancel <runId>
+mill ls --json
+```
 
-1. **Logical cancel**
-   - Appends `run:cancelled` if needed
-   - Sets run status to `cancelled`
-2. **Physical cancel**
-   - Reads `worker.pid`
-   - Validates it belongs to `_worker --run-id <runId>`
-   - Sends `SIGTERM` to worker + descendants
-   - After a short grace period, sends `SIGKILL` to survivors
+There is no config bootstrap command. Programs choose agent providers directly by importing `codex`, `claude`, or `pi` from `@mill/core/program`.
 
-Cancel behavior is idempotent at run-state level. Task-level actor cancellation and ACP session cancellation exist in the core/driver layers, but full durable command propagation is still incremental.
+## Program authoring check
 
-## 3) On-disk artifacts to inspect
+A normal program should look like:
 
-For run `<runId>` in runs dir `<runsDir>`:
+```ts
+import { codex, task } from "@mill/core/program";
 
-- `<runsDir>/<runId>/run.json`
-- `<runsDir>/<runId>/events.ndjson`
-- `<runsDir>/<runId>/result.json`
-- `<runsDir>/<runId>/worker.pid` (best effort)
-- `<runsDir>/<runId>/logs/worker.log`
-- `<runsDir>/<runId>/logs/cancel.log`
+const review = task({
+  agent: codex("openai-codex/gpt-5.3-codex"),
+  prompt: "Review src/auth.",
+}).start();
 
-New engine/store artifacts use `taskId` naming. Some driver adapter internals may still use older spawn-shaped names until the session-first cleanup; public authored programs use task actors.
+await review.done;
+```
 
-## 4) Session behavior (ACP drivers)
+If `task(...)` is called outside a hosted mill program, it fails with a program-context error.
 
-The built-in ACP driver package uses `spawn-agent` internally for process/session handling. Task results include a `sessionRef` that points to the backing agent session when available.
+## Cancellation
 
-`spawn-agent` is an internal `@mill/driver-acp` implementation detail, not a public mill API.
+`mill cancel <runId>` marks the run cancelled and terminates the worker process tree if still running. Task-level cancellation is represented in task actors and in built-in provider sessions where supported.
 
-## 5) Fast triage checklist for "run stuck in running"
+## Watching output
 
-1. `mill watch --run <runId> --channel events --json`
-   - if you only see a task/driver start event and no terminal event, the child driver call is still in-flight.
-2. Check process liveness using `worker.pid` + OS process list.
-3. `mill cancel <runId> --json`
-4. Read `logs/cancel.log`
-   - verify TERM/KILL steps and survivor count.
-5. Re-check `mill status <runId> --json`
+Use structured events first:
 
-## 6) Stale historical entries in pi monitor
+```bash
+mill watch --run <runId> --channel events --json
+```
 
-Convention:
+Use IO for line-oriented program/agent output:
 
-- Historical `status: running` entries are reconciled against canonical `mill status` on scan.
-- If canonical status is terminal, scanner rewrites the historical record with reconciled terminal status.
+```bash
+mill watch --run <runId> --channel io --source program
+mill watch --run <runId> --channel io --source agent
+```
 
-This avoids long-lived "running" ghosts from previous failures.
+## Session pointers
+
+Task results may include a `sessionRef` for the backing agent session. The ACP/session implementation is internal; users should treat the pointer as an opaque reference for inspection or recovery workflows.

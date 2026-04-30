@@ -9,7 +9,7 @@ Implement the baseline monorepo scaffold and guardrail toolchain for `mill` per 
 - Bun workspace monorepo with:
   - `packages/core`
   - `packages/cli`
-  - `packages/driver-acp`
+  - built-in ACP provider runtime package
 - Baseline Effect v4 dependencies (`effect`, `@effect/platform-bun`)
 - Constraint toolchain files/scripts
 - Minimal compileable package wiring + baseline tests
@@ -23,4 +23,4 @@ Implement the baseline monorepo scaffold and guardrail toolchain for `mill` per 
 
 ## Notes
 
-This plan establishes foundations only; engine/driver execution semantics are follow-on implementation phases.
+This plan establishes foundations only; task actor execution semantics are follow-on implementation phases.

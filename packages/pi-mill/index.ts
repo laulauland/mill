@@ -400,9 +400,9 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description: [
       "Spawn subagents for delegated or orchestrated work.",
-      "Execution backend: mill async APIs (submit + watch + wait). Configure drivers/executors/models via mill.config.ts.",
+      "Execution backend: mill async APIs (submit + watch + wait) with built-in provider routing from each task's model string.",
       `Enabled models: ${modelsText}`,
-      "Write a TypeScript script. `mill` is a global (like `process` or `console`). Use mill.task() to create task actors, call .start(), then await task.done.",
+      "Write a TypeScript script for pi-mill. `mill` is an extension-specific global. Use mill.task({ agent: roleLabel, model, system, prompt }) to create task actors, call .start(), then await task.done.",
       "For sequential work, start one task and await task.done. For parallel work, create actors, call .start() on each, then await Promise.all(tasks.map((task) => task.done)).",
       "Each task needs: agent, system, prompt, model. cwd defaults to the current working directory.",
       "system defines WHO the agent is (behavior, principles, methodology). prompt defines WHAT it should do now (specific files, specific work). Don't put task details in system.",
