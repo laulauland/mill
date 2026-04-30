@@ -74,7 +74,7 @@ describe("TaskActor", () => {
     expect(latest(snapshots).result).toEqual(successResult);
   });
 
-  it("records unsupported steering commands without claiming steering semantics", () => {
+  it("queues steering commands by default at the actor layer", () => {
     const actor = createTaskActor(input, {
       execute: () => Promise.resolve(successResult),
     });
@@ -85,8 +85,108 @@ describe("TaskActor", () => {
     });
 
     expect(actor.getSnapshot()).toMatchObject({
-      status: "idle",
-      error: "Task steering commands are not implemented yet.",
+      status: "queued",
+      queue: [
+        {
+          type: "message",
+          content: "Also inspect tests.",
+          mode: "queue",
+        },
+      ],
+    });
+  });
+
+  it("keeps queued steering honest while one-shot execution completes", async () => {
+    let resolveExecution: (result: TaskResult) => void = () => {};
+    const actor = createTaskActor(
+      { ...input, steering: "queue" },
+      {
+        execute: () =>
+          new Promise<TaskResult>((resolve) => {
+            resolveExecution = resolve;
+          }),
+      },
+    );
+
+    actor.start();
+    actor.send({
+      type: "context",
+      from: "task:scout",
+      content: "Scout found token issues.",
+    });
+
+    expect(actor.getSnapshot()).toMatchObject({
+      status: "queued",
+      queue: [
+        {
+          type: "context",
+          from: "task:scout",
+          content: "Scout found token issues.",
+          mode: "queue",
+        },
+      ],
+    });
+
+    resolveExecution(successResult);
+    await actor.done;
+
+    expect(actor.getSnapshot()).toMatchObject({
+      status: "complete",
+      queue: [
+        {
+          type: "context",
+          content: "Scout found token issues.",
+          mode: "queue",
+        },
+      ],
+    });
+  });
+
+  it("marks interrupt steering without claiming driver-level interrupt", () => {
+    const actor = createTaskActor(
+      { ...input, steering: "interrupt" },
+      {
+        execute: () => new Promise<TaskResult>(() => {}),
+      },
+    );
+
+    actor.start();
+    actor.send({
+      type: "message",
+      content: "Stop and focus on token handling.",
+    });
+
+    expect(actor.getSnapshot()).toMatchObject({
+      status: "interrupting",
+      error: "Task interrupt requested; driver-level interrupt is not available yet.",
+      queue: [
+        {
+          type: "message",
+          content: "Stop and focus on token handling.",
+          mode: "interrupt",
+        },
+      ],
+    });
+  });
+
+  it("rejects steering commands when reject policy is active", () => {
+    const actor = createTaskActor(
+      { ...input, steering: "reject" },
+      {
+        execute: () => new Promise<TaskResult>(() => {}),
+      },
+    );
+
+    actor.start();
+    actor.send({
+      type: "message",
+      content: "Do something else.",
+    });
+
+    expect(actor.getSnapshot()).toMatchObject({
+      status: "running",
+      queue: [],
+      error: "Task is busy and rejected the steering command.",
     });
   });
 
@@ -108,6 +208,24 @@ describe("TaskActor", () => {
     expect(actor.getSnapshot()).toMatchObject({
       status: "cancelled",
       error: "not needed",
+    });
+  });
+
+  it("can be cancelled while running at the actor layer", async () => {
+    const actor = createTaskActor(input, {
+      execute: () => new Promise<TaskResult>(() => {}),
+    });
+
+    actor.start().cancel("user requested");
+    const result = await actor.done;
+
+    expect(result).toMatchObject({
+      stopReason: "cancelled",
+      errorMessage: "user requested",
+    });
+    expect(actor.getSnapshot()).toMatchObject({
+      status: "cancelled",
+      error: "user requested",
     });
   });
 

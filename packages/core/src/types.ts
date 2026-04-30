@@ -35,11 +35,6 @@ export type TaskCommand =
       readonly mode?: SteeringPolicy;
     }
   | {
-      readonly type: "interrupt";
-      readonly content: string;
-      readonly reason?: string;
-    }
-  | {
       readonly type: "cancel";
       readonly reason?: string;
     };

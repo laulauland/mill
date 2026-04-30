@@ -65,6 +65,39 @@ const makeCancelledResult = (input: TaskInput, ref: TaskRef, reason?: string): T
   errorMessage: reason ?? "Task cancelled",
 });
 
+const isTaskBusy = (status: TaskStatus): boolean =>
+  status === "starting" || status === "running" || status === "queued" || status === "interrupting";
+
+const commandMode = (input: TaskInput, command: TaskCommand): "queue" | "interrupt" | "reject" => {
+  if (command.type === "cancel") {
+    return "interrupt";
+  }
+
+  return command.mode ?? input.steering ?? "queue";
+};
+
+const queueableCommand = (
+  command: TaskCommand,
+):
+  | {
+      readonly type: "message" | "context";
+      readonly content: string;
+      readonly from?: TaskRef | string;
+      readonly mode: "queue" | "interrupt" | "reject";
+    }
+  | undefined => {
+  if (command.type !== "message" && command.type !== "context") {
+    return undefined;
+  }
+
+  return {
+    type: command.type,
+    content: command.content,
+    from: command.type === "context" ? command.from : undefined,
+    mode: command.mode ?? "queue",
+  };
+};
+
 const makeInitialTaskSnapshot = (input: TaskInput, ref: TaskRef): TaskSnapshot => ({
   id: ref.taskId,
   runId: ref.runId,
@@ -189,6 +222,51 @@ export const makeTaskActorRuntime = (
       }
     });
 
+    const sendSteeringCommand = (command: TaskCommand): Effect.Effect<void> =>
+      Effect.sync(() => {
+        if (terminal) {
+          return;
+        }
+
+        const queued = queueableCommand(command);
+
+        if (queued === undefined) {
+          return;
+        }
+
+        const mode = commandMode(input, command);
+        const item = { ...queued, mode };
+
+        if (mode === "queue") {
+          publish({
+            ...snapshot,
+            status:
+              isTaskBusy(snapshot.status) || snapshot.status === "idle"
+                ? "queued"
+                : snapshot.status,
+            queue: [...snapshot.queue, item],
+          });
+          return;
+        }
+
+        if (mode === "interrupt") {
+          publish({
+            ...snapshot,
+            status: isTaskBusy(snapshot.status) ? "interrupting" : snapshot.status,
+            error: "Task interrupt requested; driver-level interrupt is not available yet.",
+            queue: [...snapshot.queue, item],
+          });
+          return;
+        }
+
+        publish({
+          ...snapshot,
+          error: isTaskBusy(snapshot.status)
+            ? "Task is busy and rejected the steering command."
+            : "Task rejected the steering command.",
+        });
+      });
+
     return {
       id: ref.taskId,
       ref,
@@ -201,12 +279,7 @@ export const makeTaskActorRuntime = (
           return cancel(command.reason);
         }
 
-        return Effect.sync(() => {
-          publish({
-            ...snapshot,
-            error: "Task steering commands are not implemented yet.",
-          });
-        });
+        return sendSteeringCommand(command);
       },
       subscribe: (listener: (snapshot: TaskSnapshot) => void): Subscription => {
         listeners.add(listener);
