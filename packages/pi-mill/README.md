@@ -30,13 +30,11 @@ The extension registers a `subagent` tool that accepts two parameters: a `task` 
 The code runs with a `mill` global (similar to `process` or `console`). The primary method is `mill.task(...)`, which creates a task actor. Start the actor with `.start()` and await `.done` for the final result:
 
 ```ts
-import { claude, codex } from "@mill/core";
-
 // Sequential — one task after another
 const analysis = mill
   .task({
-    agent: claude("anthropic/claude-sonnet-4-6"),
-    role: "analyzer",
+    agent: "analyzer",
+    model: "anthropic/claude-sonnet-4-6",
     system: "You analyze codebases for architectural patterns.",
     prompt: "Analyze the auth module in src/auth/",
   })
@@ -46,8 +44,8 @@ const analysisResult = await analysis.done;
 
 const fix = mill
   .task({
-    agent: codex("openai-codex/gpt-5.3-codex"),
-    role: "fixer",
+    agent: "fixer",
+    model: "openai-codex/gpt-5.3-codex",
     system: "You fix code issues.",
     prompt: `Fix the issues found: ${analysisResult.text}`,
   })
@@ -59,12 +57,10 @@ return await fix.done;
 Parallel work is just multiple task actors:
 
 ```ts
-import { claude, pi } from "@mill/core";
-
 const tests = mill
   .task({
-    agent: claude("anthropic/claude-sonnet-4-6"),
-    role: "test-writer",
+    agent: "test-writer",
+    model: "anthropic/claude-sonnet-4-6",
     system: "You write tests.",
     prompt: "Write tests for src/auth/",
   })
@@ -72,8 +68,8 @@ const tests = mill
 
 const docs = mill
   .task({
-    agent: pi("cerebras/zai-glm-4.7"),
-    role: "documenter",
+    agent: "documenter",
+    model: "cerebras/zai-glm-4.7",
     system: "You write documentation.",
     prompt: "Document the auth module.",
   })

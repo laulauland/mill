@@ -9,7 +9,7 @@ Use this skill whenever you are writing or reviewing a mill-based orchestration 
 
 ## Core rules
 
-1. Keep `systemPrompt` (WHO/how) separate from `prompt` (WHAT/task).
+1. Keep `system` (WHO/how) separate from `prompt` (WHAT/task).
 2. Use `await` for sequential steps and `Promise.all` for independent parallel work.
 3. Always pass an explicit `model` in `provider/model-id` format.
 4. Check `exitCode`, `stopReason`, and `errorMessage` before trusting results.

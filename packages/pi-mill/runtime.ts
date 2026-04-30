@@ -8,14 +8,9 @@ import { MillError } from "./errors.js";
 import type { ObservabilityStore } from "./observability.js";
 import type { ExecutionResult } from "./types.js";
 
-// ── Branded spawn promise ──────────────────────────────────────────────
+// ── Branded task actors/promises ───────────────────────────────────────
 
-export const SPAWN_BRAND = Symbol.for("pi-mill:spawn");
-
-export interface SpawnPromise extends Promise<ExecutionResult> {
-  taskId: string;
-  [SPAWN_BRAND]: true;
-}
+export const TASK_BRAND = Symbol.for("pi-mill:task");
 
 // ── Console patching — route program logs to observability ──────────────
 
@@ -47,22 +42,22 @@ export function patchPromiseAll(obs: ObservabilityStore, runId: string): () => v
 
   Promise.all = function <T>(iterable: Iterable<T>): Promise<Awaited<T>[]> {
     const items = Array.from(iterable);
-    const spawns = items.filter(
+    const tasks = items.filter(
       (item): item is any =>
-        item != null && typeof item === "object" && (item as any)[SPAWN_BRAND] === true,
+        item != null && typeof item === "object" && (item as any)[TASK_BRAND] === true,
     );
-    if (spawns.length > 0) {
+    if (tasks.length > 0) {
       groupCounter++;
       const groupId = `group-${groupCounter}`;
       obs.push(runId, "info", "group:start", {
         groupId,
-        count: spawns.length,
-        tasks: spawns.map((s: any) => s.taskId),
+        count: tasks.length,
+        tasks: tasks.map((s: any) => s.taskId),
       });
       const result = originalAll(items);
       result.then(
-        () => obs.push(runId, "info", "group:done", { groupId, count: spawns.length }),
-        () => obs.push(runId, "info", "group:failed", { groupId, count: spawns.length }),
+        () => obs.push(runId, "info", "group:done", { groupId, count: tasks.length }),
+        () => obs.push(runId, "info", "group:failed", { groupId, count: tasks.length }),
       );
       return result;
     }
@@ -73,21 +68,21 @@ export function patchPromiseAll(obs: ObservabilityStore, runId: string): () => v
     iterable: Iterable<T>,
   ): Promise<PromiseSettledResult<Awaited<T>>[]> {
     const items = Array.from(iterable);
-    const spawns = items.filter(
+    const tasks = items.filter(
       (item): item is any =>
-        item != null && typeof item === "object" && (item as any)[SPAWN_BRAND] === true,
+        item != null && typeof item === "object" && (item as any)[TASK_BRAND] === true,
     );
-    if (spawns.length > 0) {
+    if (tasks.length > 0) {
       groupCounter++;
       const groupId = `group-settled-${groupCounter}`;
       obs.push(runId, "info", "group:start", {
         groupId,
-        count: spawns.length,
-        tasks: spawns.map((s: any) => s.taskId),
+        count: tasks.length,
+        tasks: tasks.map((s: any) => s.taskId),
         settled: true,
       });
       const result = originalAllSettled(items);
-      result.then(() => obs.push(runId, "info", "group:done", { groupId, count: spawns.length }));
+      result.then(() => obs.push(runId, "info", "group:done", { groupId, count: tasks.length }));
       return result;
     }
     return originalAllSettled(items);
@@ -99,13 +94,13 @@ export function patchPromiseAll(obs: ObservabilityStore, runId: string): () => v
   };
 }
 
-// ── Single subagent spawn (via mill) ───────────────────────────────────
+// ── Single subagent task (via mill) ────────────────────────────────────
 
 interface SubagentTaskInput {
   runId: string;
   taskId: string;
   agent: string;
-  systemPrompt: string;
+  system: string;
   prompt: string;
   cwd: string;
   modelId: string;
@@ -123,10 +118,10 @@ interface SubagentTaskInput {
   millRunsDir?: string;
 }
 
-interface MillSpawnResult {
+interface MillTaskResult {
   text?: string;
   sessionRef?: string;
-  agent?: string;
+  role?: string;
   model?: string;
   driver?: string;
   exitCode?: number;
@@ -331,31 +326,75 @@ const runCommandCapture = (input: {
     });
   });
 
+export const inferMillDriverFromModel = (modelId: string): string => {
+  const normalized = modelId.trim().toLowerCase();
+  const provider = normalized.includes("/")
+    ? normalized.slice(0, normalized.indexOf("/"))
+    : normalized;
+
+  if (provider.includes("codex") || normalized.includes("codex")) {
+    return "codex";
+  }
+
+  if (provider.includes("anthropic") || normalized.includes("claude")) {
+    return "claude";
+  }
+
+  return "pi";
+};
+
+export const buildMillTaskPayload = (input: {
+  system: string;
+  prompt: string;
+  role: string;
+  modelId: string;
+}): Record<string, unknown> => {
+  const driver = inferMillDriverFromModel(input.modelId);
+  return {
+    agent: {
+      driver,
+      model: input.modelId,
+    },
+    role: input.role,
+    system: input.system,
+    prompt: input.prompt,
+  };
+};
+
+export const buildMillProgramSource = (input: {
+  system: string;
+  prompt: string;
+  role: string;
+  modelId: string;
+}): string => {
+  const taskPayload = JSON.stringify(buildMillTaskPayload(input));
+  return `const task = mill.task(${taskPayload}).start();\nawait task.done;\n`;
+};
+
 function writeMillProgram(input: {
-  systemPrompt: string;
+  system: string;
   prompt: string;
   agent: string;
   modelId: string;
-}): { dir: string; filePath: string } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-mill-spawn-"));
+}): { dir: string; filePath: string; driver: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-mill-task-"));
   const filePath = path.join(dir, "program.ts");
-  const spawnPayload = JSON.stringify({
-    agent: input.agent,
-    systemPrompt: input.systemPrompt,
+  const source = buildMillProgramSource({
+    system: input.system,
     prompt: input.prompt,
-    model: input.modelId,
+    role: input.agent,
+    modelId: input.modelId,
   });
 
-  const source = `await mill.task(${spawnPayload});\n`;
   fs.writeFileSync(filePath, source, { encoding: "utf-8", mode: 0o600 });
-  return { dir, filePath };
+  return { dir, filePath, driver: inferMillDriverFromModel(input.modelId) };
 }
 
 const decodeMillResult = (
   payloads: ReadonlyArray<Record<string, unknown>>,
   fallback: { agent: string; modelId: string; prompt: string },
 ): ExecutionResult => {
-  const spawnResults: Array<MillSpawnResult> = [];
+  const taskResults: Array<MillTaskResult> = [];
   let runFailedMessage: string | undefined;
 
   for (const payload of payloads) {
@@ -372,12 +411,12 @@ const decodeMillResult = (
     const eventType = readStringField(event, "type");
     const eventPayload = event.payload;
 
-    if (eventType === "spawn:complete" && isRecord(eventPayload) && isRecord(eventPayload.result)) {
+    if (eventType === "task:complete" && isRecord(eventPayload) && isRecord(eventPayload.result)) {
       const result = eventPayload.result;
-      spawnResults.push({
+      taskResults.push({
         text: readStringField(result, "text"),
         sessionRef: readStringField(result, "sessionRef"),
-        agent: readStringField(result, "agent"),
+        role: readStringField(result, "role"),
         model: readStringField(result, "model"),
         driver: readStringField(result, "driver"),
         exitCode: typeof result.exitCode === "number" ? result.exitCode : undefined,
@@ -392,26 +431,26 @@ const decodeMillResult = (
     }
   }
 
-  if (spawnResults.length === 0) {
+  if (taskResults.length === 0) {
     throw new MillError({
       code: "RUNTIME",
       message:
         runFailedMessage && runFailedMessage.length > 0
           ? `mill run failed: ${runFailedMessage}`
-          : "mill run completed without spawn results.",
+          : "mill run completed without task results.",
       recoverable: false,
     });
   }
 
-  const selectedSpawn =
-    spawnResults.find((spawn) => spawn.agent === fallback.agent) ??
-    spawnResults[0] ??
-    ({} as MillSpawnResult);
+  const selectedTask =
+    taskResults.find((task) => task.role === fallback.agent) ??
+    taskResults[0] ??
+    ({} as MillTaskResult);
 
-  const derivedExitCode = typeof selectedSpawn.exitCode === "number" ? selectedSpawn.exitCode : 0;
+  const derivedExitCode = typeof selectedTask.exitCode === "number" ? selectedTask.exitCode : 0;
 
-  const errorMessage = selectedSpawn.errorMessage;
-  const stopReason = selectedSpawn.stopReason;
+  const errorMessage = selectedTask.errorMessage;
+  const stopReason = selectedTask.stopReason;
 
   if (derivedExitCode !== 0 || stopReason === "error" || (errorMessage?.length ?? 0) > 0) {
     const reason =
@@ -422,25 +461,25 @@ const decodeMillResult = (
 
     throw new MillError({
       code: "RUNTIME",
-      message: `Subagent '${selectedSpawn.agent ?? fallback.agent}' failed: ${reason}`,
+      message: `Subagent '${selectedTask.role ?? fallback.agent}' failed: ${reason}`,
       recoverable: false,
     });
   }
 
   return {
     taskId: "",
-    agent: selectedSpawn.agent ?? fallback.agent,
+    agent: selectedTask.role ?? fallback.agent,
     task: fallback.prompt,
     exitCode: derivedExitCode,
     messages: [],
     stderr: "",
     usage: newUsage(),
-    model: selectedSpawn.model ?? fallback.modelId,
+    model: selectedTask.model ?? fallback.modelId,
     stopReason,
     errorMessage,
     step: undefined,
-    text: selectedSpawn.text ?? "",
-    sessionPath: selectedSpawn.sessionRef,
+    text: selectedTask.text ?? "",
+    sessionPath: selectedTask.sessionRef,
   };
 };
 
@@ -478,12 +517,14 @@ const extractRunStatus = (payload: Record<string, unknown>): string | undefined 
   return undefined;
 };
 
-export function runSubagentTask(input: SubagentTaskInput): Promise<ExecutionResult> {
+type ExecutionResultPromise = Promise<Awaited<ExecutionResult>>;
+
+export function runSubagentTask(input: SubagentTaskInput): ExecutionResultPromise {
   return runSubagentProcess(input);
 }
 
-async function runSubagentProcess(input: SubagentTaskInput): Promise<ExecutionResult> {
-  input.obs.push(input.runId, "info", `spawn:${input.taskId}`, {
+async function runSubagentProcess(input: SubagentTaskInput): ExecutionResultPromise {
+  input.obs.push(input.runId, "info", `task:start:${input.taskId}`, {
     agent: input.agent,
     model: input.modelId,
     backend: "mill",
@@ -512,13 +553,13 @@ async function runSubagentProcess(input: SubagentTaskInput): Promise<ExecutionRe
 
   input.onProgress?.({ ...result, messages: [] });
 
-  let systemPrompt = input.systemPrompt.trim();
+  let system = input.system.trim();
   if (input.parentSessionPath && fs.existsSync(input.parentSessionPath)) {
-    systemPrompt += `\n\nParent conversation session: ${input.parentSessionPath}\nUse search_thread to explore parent context if you need background on what led to this task.`;
+    system += `\n\nParent conversation session: ${input.parentSessionPath}\nUse search_thread to explore parent context if you need background on what led to this task.`;
   }
 
   const tempProgram = writeMillProgram({
-    systemPrompt,
+    system,
     prompt: input.prompt,
     agent: input.agent,
     modelId: input.modelId,
@@ -568,6 +609,8 @@ async function runSubagentProcess(input: SubagentTaskInput): Promise<ExecutionRe
       "run",
       tempProgram.filePath,
       "--json",
+      "--driver",
+      tempProgram.driver,
       "--meta-json",
       metadata,
     ];
@@ -623,7 +666,7 @@ async function runSubagentProcess(input: SubagentTaskInput): Promise<ExecutionRe
       });
     }
 
-    input.obs.push(input.runId, "info", `spawn_submitted:${input.taskId}`, {
+    input.obs.push(input.runId, "info", `task:submitted:${input.taskId}`, {
       taskId: input.taskId,
       childRunId: submittedRunId,
     });
@@ -769,7 +812,7 @@ async function runSubagentProcess(input: SubagentTaskInput): Promise<ExecutionRe
 
 export interface RuntimeSubagentTaskInput {
   agent: string;
-  systemPrompt: string;
+  system?: string;
   prompt: string;
   cwd?: string;
   model: string;
@@ -778,9 +821,36 @@ export interface RuntimeSubagentTaskInput {
   signal?: AbortSignal;
 }
 
+export type RuntimeTaskStatus = "idle" | "running" | "complete" | "failed" | "cancelled";
+
+export interface RuntimeTaskSnapshot {
+  id: string;
+  status: RuntimeTaskStatus;
+  input: RuntimeSubagentTaskInput;
+  result?: ExecutionResult;
+  error?: string;
+}
+
+export interface RuntimeTaskActor {
+  id: string;
+  taskId: string;
+  done: ExecutionResultPromise;
+  start(): RuntimeTaskActor;
+  stop(): RuntimeTaskActor;
+  cancel(reason?: string): RuntimeTaskActor;
+  send(command: {
+    type: "message" | "context" | "cancel";
+    content?: string;
+    reason?: string;
+  }): RuntimeTaskActor;
+  subscribe(listener: (snapshot: RuntimeTaskSnapshot) => void): { unsubscribe(): void };
+  getSnapshot(): RuntimeTaskSnapshot;
+  [TASK_BRAND]: true;
+}
+
 export interface MillRuntime {
   runId: string;
-  task(input: RuntimeSubagentTaskInput): SpawnPromise;
+  task(input: RuntimeSubagentTaskInput): RuntimeTaskActor;
   shutdown(cancelRunning?: boolean): Promise<void>;
   observe: {
     log(type: "info" | "warning" | "error", message: string, data?: Record<string, unknown>): void;
@@ -857,11 +927,11 @@ export function createMillRuntime(
     millRunsDir?: string;
   },
 ): MillRuntime {
-  let spawnCounter = 0;
+  let taskCounter = 0;
   const runtimeAbort = new AbortController();
   const activeTasks = new Map<
     string,
-    { controller: AbortController; promise: Promise<ExecutionResult> }
+    { controller: AbortController; promise: ExecutionResultPromise }
   >();
 
   const { millCommand, millArgs } = resolveMillCommand(options);
@@ -873,11 +943,13 @@ export function createMillRuntime(
   const millRuntime: MillRuntime = {
     runId,
 
-    task({ agent, systemPrompt, prompt, cwd, model, tools, step, signal }) {
-      if (!systemPrompt?.trim()) {
+    task(input) {
+      const { agent, prompt, cwd, model, tools, step, signal } = input;
+      const system = input.system;
+      if (!system?.trim()) {
         throw new MillError({
           code: "INVALID_INPUT",
-          message: `Task for '${agent}' requires non-empty systemPrompt.`,
+          message: `Task for '${agent}' requires non-empty system.`,
           recoverable: true,
         });
       }
@@ -891,8 +963,8 @@ export function createMillRuntime(
 
       const modelId = validateModelSelector(model, agent);
 
-      spawnCounter += 1;
-      const taskId = `task-${spawnCounter}`;
+      taskCounter += 1;
+      const taskId = `task-${taskCounter}`;
       const taskAbort = new AbortController();
 
       const relayAbort = () => taskAbort.abort();
@@ -904,42 +976,98 @@ export function createMillRuntime(
         else bound.addEventListener("abort", relayAbort, { once: true });
       }
 
-      const taskPromise = runSubagentTask({
-        runId,
-        taskId,
-        agent,
-        systemPrompt,
-        prompt,
-        cwd: cwd ?? process.cwd(),
-        modelId,
-        tools: tools ?? [],
-        step,
-        signal: taskAbort.signal,
-        obs,
-        onProgress: (partial) => options?.onTaskUpdate?.(partial),
-        onSubmittedRunId: (submittedRunId, submittedTaskId) =>
-          options?.onChildRunSubmitted?.(submittedRunId, submittedTaskId),
-        parentSessionPath: options?.parentSessionPath,
-        piSessionKey: options?.piSessionKey,
-        sessionDir: options?.sessionDir,
-        millCommand,
-        millArgs,
-        millRunsDir,
-      })
-        .then((finalResult) => {
-          options?.onTaskUpdate?.(finalResult);
-          return finalResult;
-        })
-        .finally(() => {
-          for (const bound of boundSignals) bound.removeEventListener("abort", relayAbort);
-          activeTasks.delete(taskId);
-        });
-      activeTasks.set(taskId, { controller: taskAbort, promise: taskPromise });
+      let snapshot: RuntimeTaskSnapshot = { id: taskId, status: "idle", input };
+      const listeners = new Set<(next: RuntimeTaskSnapshot) => void>();
+      const publish = (next: RuntimeTaskSnapshot): void => {
+        snapshot = next;
+        for (const listener of listeners) listener(snapshot);
+      };
 
-      const branded = taskPromise as any;
-      branded[SPAWN_BRAND] = true;
-      branded.taskId = taskId;
-      return branded as SpawnPromise;
+      const runTask = (): ExecutionResultPromise =>
+        runSubagentTask({
+          runId,
+          taskId,
+          agent,
+          system,
+          prompt,
+          cwd: cwd ?? process.cwd(),
+          modelId,
+          tools: tools ?? [],
+          step,
+          signal: taskAbort.signal,
+          obs,
+          onProgress: (partial) => options?.onTaskUpdate?.(partial),
+          onSubmittedRunId: (submittedRunId, submittedTaskId) =>
+            options?.onChildRunSubmitted?.(submittedRunId, submittedTaskId),
+          parentSessionPath: options?.parentSessionPath,
+          piSessionKey: options?.piSessionKey,
+          sessionDir: options?.sessionDir,
+          millCommand,
+          millArgs,
+          millRunsDir,
+        });
+
+      let taskPromise: ExecutionResultPromise | undefined;
+      const actor: RuntimeTaskActor = {
+        id: taskId,
+        taskId,
+        get done() {
+          return taskPromise ?? actor.start().done;
+        },
+        start() {
+          if (taskPromise !== undefined) return actor;
+          publish({ ...snapshot, status: "running" });
+          taskPromise = runTask()
+            .then((finalResult) => {
+              options?.onTaskUpdate?.(finalResult);
+              publish({ ...snapshot, status: "complete", result: finalResult });
+              return finalResult;
+            })
+            .catch((error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error);
+              publish({
+                ...snapshot,
+                status: taskAbort.signal.aborted ? "cancelled" : "failed",
+                error: message,
+              });
+              throw error;
+            })
+            .finally(() => {
+              for (const bound of boundSignals) bound.removeEventListener("abort", relayAbort);
+              activeTasks.delete(taskId);
+            });
+          (taskPromise as ExecutionResultPromise & { [TASK_BRAND]: true; taskId: string })[
+            TASK_BRAND
+          ] = true;
+          (taskPromise as ExecutionResultPromise & { [TASK_BRAND]: true; taskId: string }).taskId =
+            taskId;
+          activeTasks.set(taskId, { controller: taskAbort, promise: taskPromise });
+          return actor;
+        },
+        stop() {
+          return actor.cancel("Task stopped");
+        },
+        cancel() {
+          taskAbort.abort();
+          if (taskPromise === undefined) publish({ ...snapshot, status: "cancelled" });
+          return actor;
+        },
+        send(command) {
+          if (command.type === "cancel") actor.cancel(command.reason);
+          return actor;
+        },
+        subscribe(listener) {
+          listeners.add(listener);
+          listener(snapshot);
+          return { unsubscribe: () => void listeners.delete(listener) };
+        },
+        getSnapshot() {
+          return snapshot;
+        },
+        [TASK_BRAND]: true,
+      };
+
+      return actor;
     },
 
     async shutdown(cancelRunning = true) {

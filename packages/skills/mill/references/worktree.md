@@ -1,524 +1,96 @@
 ---
 name: mill-worktree
-description: "Worktree-based parallel development with pi-mill. Use when multiple agents need to edit code simultaneously without conflicts—each agent gets its own working directory via jj workspace or git worktree."
+description: Worktree-based parallel development with pi-mill. Use when multiple agents need isolated working directories.
 ---
 
 # Worktree-Based Parallel Development
 
-When multiple agents need to edit files simultaneously, they'll conflict if they share a working directory. The solution: give each agent its own worktree. Each has a full working copy but shares the underlying repository. Agents work in complete isolation—own directory, own state, no file conflicts.
+Give each editing agent its own jj workspace or git worktree so concurrent changes do not collide. The orchestration program creates worktrees, starts task actors in those directories, collects results, then merges successful work.
 
-## Why Worktrees?
+## Jujutsu Workspace Pattern
 
-- **No merge conflicts during work** — Each agent has its own copy of every file
-- **Full toolchain access** — Each worktree can run its own dev server, tests, linter
-- **Atomic merges** — Combine results after all agents finish
-- **Clean rollback** — Discard a worktree if an agent fails
-
-## Jujutsu (jj) Variant
-
-### Core Commands
-
-```bash
-# Create a workspace (like git worktree add)
-jj workspace add /tmp/worktree-auth
-
-# List workspaces
-jj workspace list
-
-# Remove workspace tracking (doesn't delete files)
-jj workspace forget <workspace-name>
-
-# Delete the directory
-rm -rf /tmp/worktree-auth
-```
-
-### Basic Pattern
-
-```typescript
+```ts
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 
 const baseCwd = process.cwd();
-const tasks = [
+const workstreams = [
   {
     name: "auth",
-    prompt: "Implement auth module",
-    systemPrompt:
-      "You are a software engineer. Implement the requested changes. Run tests to verify your work.",
+    prompt: "Implement auth module changes.",
+    system: "You are a backend engineer. Make focused changes and verify them.",
   },
   {
     name: "api",
-    prompt: "Implement API endpoints",
-    systemPrompt:
-      "You are a software engineer. Implement the requested changes. Run tests to verify your work.",
+    prompt: "Implement API endpoint changes.",
+    system: "You are an API engineer. Make focused changes and verify them.",
   },
 ];
+
 const worktrees: string[] = [];
 
 try {
-  // 1. Create worktrees
-  for (const t of tasks) {
-    const wtPath = `/tmp/pi-worktree-${t.name}-${Date.now()}`;
-    worktrees.push(wtPath);
-
-    const result = spawnSync("jj", ["workspace", "add", wtPath], {
+  for (const stream of workstreams) {
+    const wt = `/tmp/pi-worktree-${stream.name}-${Date.now()}`;
+    const created = spawnSync("jj", ["workspace", "add", wt], {
       cwd: baseCwd,
       encoding: "utf-8",
     });
-
-    if (result.status !== 0) {
-      throw new Error(`Failed to create workspace ${t.name}: ${result.stderr}`);
-    }
-
-    mill.observe.log("info", `Created workspace: ${t.name}`, { path: wtPath });
+    if (created.status !== 0) throw new Error(created.stderr);
+    worktrees.push(wt);
   }
 
-  // 2. Install dependencies in each worktree
-  await Promise.all(
-    worktrees.map((wt, i) =>
-      mill.task({
-        agent: "installer",
-        systemPrompt:
-          "Install project dependencies. Run the appropriate install command (npm install, pnpm install, bun install, etc.) and verify it succeeds.",
+  const installTasks = worktrees.map((cwd, step) =>
+    mill
+      .task({
+        agent: `install-${step}`,
+        system: "Install project dependencies and verify the install succeeds.",
         prompt: "Install dependencies in this workspace.",
         model: "cerebras/zai-glm-4.7",
-        cwd: wt,
-        step: i,
-      }),
-    ),
+        cwd,
+        step,
+      })
+      .start(),
   );
+  await Promise.all(installTasks.map((task) => task.done));
 
-  // 3. Dispatch parallel agents
-  const results = await Promise.all(
-    tasks.map((t, i) =>
-      mill.task({
-        agent: t.name,
-        systemPrompt: t.systemPrompt,
-        prompt: t.prompt,
+  const implementationTasks = workstreams.map((stream, step) =>
+    mill
+      .task({
+        agent: stream.name,
+        system: stream.system,
+        prompt: stream.prompt,
         model: "anthropic/claude-opus-4-6",
-        cwd: worktrees[i],
-        step: i,
-      }),
-    ),
+        cwd: worktrees[step],
+        step,
+      })
+      .start(),
   );
+  const results = await Promise.all(implementationTasks.map((task) => task.done));
 
-  // 4. Check results
-  const failed = results.filter((r) => r.exitCode !== 0);
-  if (failed.length > 0) {
-    mill.observe.log("warning", "Some agents failed", {
-      failed: failed.map((r) => r.agent),
-    });
-  }
-
-  // 5. Merge results back
-  const mergeResult = await mill.task({
-    agent: "merger",
-    systemPrompt: `You merge parallel workstream results using jj.
-Use 'jj log' to see all changes across workspaces.
-Create a merge commit that combines all successful changes.
-Resolve any conflicts if they arise.
-The main workspace is at: ${baseCwd}`,
-    prompt: `Merge changes from ${worktrees.length} parallel workstreams.
-Workspaces: ${worktrees.join(", ")}
-Failed agents: ${failed.map((r) => r.agent).join(", ") || "none"}
-Use jj to combine the changes into the main workspace.`,
-    model: "anthropic/claude-sonnet-4-6",
-    cwd: baseCwd,
-    step: tasks.length,
-  });
-
-  // 6. Write summary
-  const summaryContent = results
-    .map((r) => `## ${r.agent}\n**Status:** ${r.exitCode === 0 ? "pass" : "fail"}\n\n${r.text}`)
-    .join("\n\n---\n\n");
-  mill.observe.artifact("worktree-report.md", summaryContent);
-} finally {
-  // 7. Cleanup — always runs
-  for (const wt of worktrees) {
-    const name = wt.split("/").pop() || "";
-    spawnSync("jj", ["workspace", "forget", name], {
+  const failed = results.filter((result) => result.exitCode !== 0);
+  const mergeTask = mill
+    .task({
+      agent: "merger",
+      system: "You merge parallel workstream results using jj. Resolve conflicts carefully.",
+      prompt: `Merge successful worktrees into ${baseCwd}. Worktrees: ${worktrees.join(", ")}. Failed: ${failed.map((r) => r.agent).join(", ") || "none"}.`,
+      model: "anthropic/claude-sonnet-4-6",
       cwd: baseCwd,
-      encoding: "utf-8",
-    });
-    if (fs.existsSync(wt)) {
-      fs.rmSync(wt, { recursive: true, force: true });
-    }
-    mill.observe.log("info", `Cleaned up workspace`, { path: wt });
-  }
-}
-```
+      step: workstreams.length,
+    })
+    .start();
+  const mergeResult = await mergeTask.done;
 
-### jj Merge Strategies
-
-After parallel work, you have multiple jj changes to combine. Common approaches:
-
-**Rebase onto each other (sequential):**
-
-```bash
-# In the main workspace, rebase changes into a sequence
-jj rebase -s <change-auth> -d <change-api>
-jj rebase -s <change-ui> -d <change-auth>
-```
-
-**Create a merge commit:**
-
-```bash
-# Create a new change with multiple parents
-jj new <change-auth> <change-api> <change-ui> -m "Merge parallel workstreams"
-```
-
-**Squash into one:**
-
-```bash
-# If you want a single combined change
-jj new <change-auth> <change-api> <change-ui>
-jj squash
-```
-
-## Git Worktree Variant
-
-For repositories using git instead of jj:
-
-### Core Commands
-
-```bash
-# Create a worktree on a new branch
-git worktree add /tmp/worktree-auth -b feature/auth
-
-# List worktrees
-git worktree list
-
-# Remove worktree (cleans up git metadata)
-git worktree remove /tmp/worktree-auth
-
-# Force remove if dirty
-git worktree remove --force /tmp/worktree-auth
-```
-
-### Basic Pattern
-
-```typescript
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-
-const baseCwd = process.cwd();
-const baseBranch = "main";
-const tasks = [
-  {
-    name: "auth",
-    prompt: "Implement auth module",
-    systemPrompt: "Implement the requested changes. Commit your work when done.",
-  },
-  {
-    name: "payments",
-    prompt: "Implement payments",
-    systemPrompt: "Implement the requested changes. Commit your work when done.",
-  },
-];
-const worktrees: Array<{ path: string; branch: string }> = [];
-
-try {
-  // 1. Create worktrees with dedicated branches
-  for (const t of tasks) {
-    const branch = `worktree/${t.name}-${Date.now()}`;
-    const wtPath = `/tmp/pi-worktree-${t.name}-${Date.now()}`;
-    worktrees.push({ path: wtPath, branch });
-
-    const result = spawnSync("git", ["worktree", "add", wtPath, "-b", branch, baseBranch], {
-      cwd: baseCwd,
-      encoding: "utf-8",
-    });
-
-    if (result.status !== 0) {
-      throw new Error(`Failed to create worktree ${t.name}: ${result.stderr}`);
-    }
-
-    mill.observe.log("info", `Created worktree: ${t.name}`, { path: wtPath, branch });
-  }
-
-  // 2. Install dependencies
-  await Promise.all(
-    worktrees.map((wt, i) =>
-      mill.task({
-        agent: "installer",
-        systemPrompt: "Install project dependencies.",
-        prompt: "Run the install command for this project (npm install, etc.)",
-        model: "cerebras/zai-glm-4.7",
-        cwd: wt.path,
-        step: i,
-      }),
-    ),
+  mill.observe.artifact(
+    "worktree-report.md",
+    [...results, mergeResult].map((r) => `## ${r.agent}\n${r.text}`).join("\n\n---\n\n"),
   );
-
-  // 3. Dispatch agents
-  const results = await Promise.all(
-    tasks.map((t, i) =>
-      mill.task({
-        agent: t.name,
-        systemPrompt: t.systemPrompt,
-        prompt: `${t.prompt}\n\nCommit your changes to the current branch when complete.`,
-        model: "openai-codex/gpt-5.3-codex",
-        cwd: worktrees[i].path,
-        step: i,
-      }),
-    ),
-  );
-
-  // 4. Merge branches back
-  const successful = results
-    .map((r, i) => ({ result: r, worktree: worktrees[i] }))
-    .filter(({ result }) => result.exitCode === 0);
-
-  await mill.task({
-    agent: "merger",
-    systemPrompt: `You merge git branches from parallel workstreams.
-Merge each feature branch into ${baseBranch}.
-Handle conflicts if they arise. Prefer keeping both changes when possible.`,
-    prompt: `Merge these branches into ${baseBranch}:
-${successful.map(({ worktree }) => `- ${worktree.branch}`).join("\n")}`,
-    model: "anthropic/claude-sonnet-4-6",
-    cwd: baseCwd,
-    step: tasks.length,
-  });
-} finally {
-  // 5. Cleanup
-  for (const wt of worktrees) {
-    spawnSync("git", ["worktree", "remove", "--force", wt.path], {
-      cwd: baseCwd,
-      encoding: "utf-8",
-    });
-    spawnSync("git", ["branch", "-D", wt.branch], {
-      cwd: baseCwd,
-      encoding: "utf-8",
-    });
-    if (fs.existsSync(wt.path)) {
-      fs.rmSync(wt.path, { recursive: true, force: true });
-    }
-  }
-}
-```
-
-## Dependency Installation
-
-Each worktree needs its own `node_modules` (or equivalent). Common patterns:
-
-```typescript
-// Detect package manager and install
-function installDeps(cwd: string): { status: number; stderr: string } {
-  if (fs.existsSync(`${cwd}/bun.lockb`)) {
-    return spawnSync("bun", ["install"], { cwd, encoding: "utf-8" });
-  } else if (fs.existsSync(`${cwd}/pnpm-lock.yaml`)) {
-    return spawnSync("pnpm", ["install", "--frozen-lockfile"], { cwd, encoding: "utf-8" });
-  } else if (fs.existsSync(`${cwd}/yarn.lock`)) {
-    return spawnSync("yarn", ["install", "--frozen-lockfile"], { cwd, encoding: "utf-8" });
-  } else {
-    return spawnSync("npm", ["ci"], { cwd, encoding: "utf-8" });
-  }
-}
-```
-
-Or let each agent handle it — the installer agent in the examples above will figure out the right command.
-
-## Advanced: Fan-Out with Worktrees + Synthesize
-
-Combine the worktree pattern with fan-out-then-synthesize:
-
-```typescript
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-
-const baseCwd = process.cwd();
-const worktrees: string[] = [];
-
-const tasks = [
-  {
-    name: "api",
-    prompt: "Add pagination to /api/users endpoint",
-    systemPrompt: "You are a backend engineer.",
-  },
-  {
-    name: "ui",
-    prompt: "Add pagination controls to the users table",
-    systemPrompt: "You are a frontend engineer.",
-  },
-  {
-    name: "tests",
-    prompt: "Write integration tests for paginated user listing",
-    systemPrompt: "You are a QA engineer.",
-  },
-];
-
-try {
-  // Setup worktrees
-  for (const t of tasks) {
-    const wt = `/tmp/pi-wt-${t.name}-${Date.now()}`;
-    worktrees.push(wt);
-    spawnSync("jj", ["workspace", "add", wt], { cwd: baseCwd, encoding: "utf-8" });
-  }
-
-  // Install deps in parallel
-  await Promise.all(
-    worktrees.map((wt, i) =>
-      mill.task({
-        agent: "installer",
-        systemPrompt: "Install deps.",
-        prompt: "npm install",
-        model: "cerebras/zai-glm-4.7",
-        cwd: wt,
-        step: i,
-      }),
-    ),
-  );
-
-  // Parallel implementation
-  const results = await Promise.all(
-    tasks.map((t, i) =>
-      mill.task({
-        agent: t.name,
-        systemPrompt: t.systemPrompt,
-        prompt: t.prompt,
-        model: "anthropic/claude-opus-4-6",
-        cwd: worktrees[i],
-        step: i,
-      }),
-    ),
-  );
-
-  // Synthesize — merge and verify
-  const context = results.map((r) => `[${r.agent}]\n${r.text}`).join("\n\n");
-  const synthesis = await mill.task({
-    agent: "integrator",
-    systemPrompt: `You integrate parallel workstreams.
-1. Use jj to merge all workspace changes into the main workspace.
-2. Resolve any conflicts.
-3. Run the full test suite to verify integration.
-4. Fix any integration issues.
-Main workspace: ${baseCwd}`,
-    prompt: `Integrate these parallel changes:\n\n${context}`,
-    model: "anthropic/claude-opus-4-6",
-    cwd: baseCwd,
-    step: tasks.length,
-  });
 } finally {
   for (const wt of worktrees) {
-    const name = wt.split("/").pop() || "";
+    const name = wt.split("/").pop() ?? "";
     spawnSync("jj", ["workspace", "forget", name], { cwd: baseCwd, encoding: "utf-8" });
-    if (fs.existsSync(wt)) fs.rmSync(wt, { recursive: true, force: true });
+    spawnSync("rm", ["-rf", wt], { encoding: "utf-8" });
   }
 }
 ```
 
-## Best Practices
-
-### 1. **Always clean up in `finally`**
-
-Worktrees leak disk space and repository state if not cleaned:
-
-```typescript
-try {
-  // ... create worktrees, run agents
-} finally {
-  // ... forget workspaces, delete directories
-}
-```
-
-### 2. **Use `/tmp` for worktree paths**
-
-Keeps worktrees out of your project directory and OS handles cleanup on reboot:
-
-```typescript
-const wtPath = `/tmp/pi-worktree-${name}-${Date.now()}`;
-```
-
-### 3. **Include timestamps in paths**
-
-Prevents collisions if you run the same program twice:
-
-```typescript
-const wtPath = `/tmp/pi-wt-${name}-${Date.now()}`;
-```
-
-### 4. **Install deps before dispatching agents**
-
-Agents shouldn't waste tokens figuring out dependency installation. Do it as a setup step:
-
-```typescript
-// Dedicated install step
-await Promise.all(
-  worktrees.map((wt) =>
-    mill.task({
-      agent: "installer",
-      systemPrompt: "Install dependencies.",
-      prompt: "npm install",
-      model: "cerebras/zai-glm-4.7",
-      cwd: wt,
-    }),
-  ),
-);
-
-// Then dispatch real work
-await Promise.all(
-  tasks.map((t, i) =>
-    mill.task({
-      agent: t.name,
-      systemPrompt: t.systemPrompt,
-      prompt: t.prompt,
-      model: "anthropic/claude-opus-4-6",
-      cwd: worktrees[i],
-    }),
-  ),
-);
-```
-
-### 5. **Scope agent work narrowly**
-
-Each agent should work on a well-defined, non-overlapping area. If two agents edit the same files, merging becomes painful:
-
-```
-Agent A: "Implement auth module in src/auth/"
-Agent B: "Implement payments in src/payments/"
-NOT: "Refactor the app" — too broad, will conflict
-```
-
-### 6. **Verify after merge**
-
-Always run tests/lint after merging parallel changes:
-
-```typescript
-const verify = spawnSync("npm", ["test"], { cwd: baseCwd, encoding: "utf-8" });
-if (verify.status !== 0) {
-  // Fix integration issues
-}
-```
-
-### 7. **Track worktree count**
-
-Each worktree is a full working copy. On large repos, 5+ simultaneous worktrees can use significant disk space. Start with 2-3 parallel agents and scale up.
-
-## When to Use Worktrees
-
-Good for:
-
-- Implementing multiple independent features in parallel
-- Parallel refactoring of separate modules
-- Running different test suites simultaneously
-- Any task where agents would otherwise conflict on files
-
-Not ideal for:
-
-- Tasks that heavily overlap in the same files
-- Read-only analysis (just use `Promise.all` with `mill.task` and same `cwd`)
-- Very small changes (worktree overhead isn't worth it)
-- Repos with huge `node_modules` or build artifacts (disk cost)
-
-## Summary
-
-The worktree pattern gives each agent full isolation:
-
-1. **Create** — `jj workspace add` or `git worktree add`
-2. **Install** — Dependencies in each worktree
-3. **Dispatch** — Parallel agents via `Promise.all`, each with own `cwd`
-4. **Merge** — Combine changes with jj/git
-5. **Cleanup** — Forget workspaces, delete directories
-
-Agents never step on each other's toes. The merge step is where conflicts surface — and by scoping work to non-overlapping areas, you minimize that pain.
+Use the same actor shape for git worktrees: create isolated directories, pass each directory as `cwd`, start all independent tasks, and await `task.done` for each one.
