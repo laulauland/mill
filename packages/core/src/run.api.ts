@@ -415,19 +415,20 @@ const writeSubmissionArtifacts = (
     yield* fileSystem.writeFileString(workerLogPath, "");
   });
 
-const makeEngineForConfig = async (input: BaseRunInput): Promise<EngineContext> => {
-  const resolvedConfig = await resolveConfig(input);
-  const driverRegistry = makeDriverRegistry({
-    defaultDriver: resolvedConfig.config.defaultDriver,
-    drivers: resolvedConfig.config.drivers,
-  });
-  const executorRegistry = makeExecutorRegistry({
-    defaultExecutor: resolvedConfig.config.defaultExecutor,
-    executors: resolvedConfig.config.executors,
-  });
-  const selectedDriver = await Effect.runPromise(driverRegistry.resolve(input.driverName));
-  const selectedExecutor = await Effect.runPromise(executorRegistry.resolve(input.executorName));
-  const runsDirectory = resolveRunsDirectory(input.homeDirectory, input.runsDirectory);
+const makeEngineForConfigEffect = (input: BaseRunInput): Effect.Effect<EngineContext, unknown> =>
+  Effect.gen(function* () {
+    const resolvedConfig = yield* resolveConfigEffect(input);
+    const driverRegistry = makeDriverRegistry({
+      defaultDriver: resolvedConfig.config.defaultDriver,
+      drivers: resolvedConfig.config.drivers,
+    });
+    const executorRegistry = makeExecutorRegistry({
+      defaultExecutor: resolvedConfig.config.defaultExecutor,
+      executors: resolvedConfig.config.executors,
+    });
+    const selectedDriver = yield* driverRegistry.resolve(input.driverName);
+    const selectedExecutor = yield* executorRegistry.resolve(input.executorName);
+    const runsDirectory = resolveRunsDirectory(input.homeDirectory, input.runsDirectory);
 
     return {
       selectedDriverName: selectedDriver.name,
@@ -499,12 +500,15 @@ const filterIoEvent = (
   return true;
 };
 
-export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
-  const cwd = input.cwd ?? process.cwd();
-  const programPath = resolveProgramPath(cwd, input.programPath);
-  const programSource = await runWithBunServices(readProgramSource(programPath));
-  const engineContext = await makeEngineForConfig(input);
-  const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+const submitRunEffect = (
+  input: SubmitRunInput,
+): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const cwd = input.cwd ?? process.cwd();
+    const programPath = resolveProgramPath(cwd, input.programPath);
+    const programSource = yield* readProgramSource(programPath);
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
     const currentRunDepth = resolveCurrentRunDepth();
     const nextRunDepth = currentRunDepth + 1;
@@ -517,26 +521,29 @@ export const submitRun = async (input: SubmitRunInput): Promise<RunRecord> => {
       );
     }
 
-  const submittedRun = await runWithBunServices(
-    engineContext.engine.submit({
+    const submittedRun = yield* engineContext.engine.submit({
       runId,
       programPath,
       metadata: input.metadata,
-    }),
-  );
+    });
 
-  await runWithBunServices(writeSubmissionArtifacts(submittedRun, programSource));
+    yield* writeSubmissionArtifacts(submittedRun, programSource);
 
-  const copiedProgramPath = joinPath(submittedRun.paths.runDir, "program.ts");
+    const copiedProgramPath = joinPath(submittedRun.paths.runDir, "program.ts");
 
-  await input.launchWorker({
-    runId: submittedRun.id,
-    programPath: copiedProgramPath,
-    runsDirectory: engineContext.runsDirectory,
-    driverName: engineContext.selectedDriverName,
-    executorName: engineContext.selectedExecutorName,
-    cwd,
-    runDepth: nextRunDepth,
+    yield* Effect.promise(() =>
+      input.launchWorker({
+        runId: submittedRun.id,
+        programPath: copiedProgramPath,
+        runsDirectory: engineContext.runsDirectory,
+        driverName: engineContext.selectedDriverName,
+        executorName: engineContext.selectedExecutorName,
+        cwd,
+        runDepth: nextRunDepth,
+      }),
+    );
+
+    return submittedRun;
   });
 
 export const submitRun = (input: SubmitRunInput): Promise<RunRecord> =>
@@ -577,41 +584,33 @@ const runProgramSyncEffect = (
     };
   });
 
-  const engineContext = await makeEngineForConfig(input);
-  const result = await runWithBunServices(
-    engineContext.engine.result(decodeRunIdSync(submittedRun.id)),
-  );
+export const runProgramSync = (input: RunProgramSyncInput): Promise<RunSyncOutput> =>
+  runWithBunServices(runProgramSyncEffect(input));
 
-  if (result === undefined) {
-    return Promise.reject(new Error(`Run ${submittedRun.id} completed without persisted result.`));
-  }
+const runWorkerEffect = (
+  input: RunWorkerInput,
+): Effect.Effect<RunSyncOutput, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const cwd = input.cwd ?? process.cwd();
+    const programPath = resolveProgramPath(cwd, input.programPath);
+    const programSource = yield* readProgramSource(programPath);
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
+    const workerPidPath = workerPidPathFor(runDirectory);
+    const runDepth = input.runDepth ?? resolveCurrentRunDepth();
 
-  return {
-    run: terminalRun,
-    result,
-  };
-};
+    yield* Effect.sync(() => {
+      fs.mkdirSync(runDirectory, { recursive: true });
+      fs.writeFileSync(workerPidPath, `${process.pid}\n`, "utf-8");
+    });
 
-export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> => {
-  const cwd = input.cwd ?? process.cwd();
-  const programPath = resolveProgramPath(cwd, input.programPath);
-  const programSource = await runWithBunServices(readProgramSource(programPath));
-  const engineContext = await makeEngineForConfig(input);
-  const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
-  const workerPidPath = workerPidPathFor(runDirectory);
-  const runDepth = input.runDepth ?? resolveCurrentRunDepth();
-
-  fs.mkdirSync(runDirectory, { recursive: true });
-  fs.writeFileSync(workerPidPath, `${process.pid}\n`, "utf-8");
-
-  try {
-    return await runWithBunServices(
+    return yield* Effect.ensuring(
       runDetachedWorker({
         engine: engineContext.engine,
         runId: decodeRunIdSync(input.runId),
         programPath,
         runsDirectory: engineContext.runsDirectory,
-        executeProgram: (_spawn, task) =>
+        executeProgram: (task) =>
           Effect.mapError(
             engineContext.selectedExecutorRuntime.runProgram({
               runId: input.runId,
@@ -653,16 +652,21 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
         removeWorkerPidFile(runDirectory);
       }),
     );
-  } finally {
-    removeWorkerPidFile(runDirectory);
-  }
-};
+  });
 
-export const getRunStatus = async (input: GetRunStatusInput): Promise<RunRecord> => {
-  const engineContext = await makeEngineForConfig(input);
+export const runWorker = (input: RunWorkerInput): Promise<RunSyncOutput> =>
+  runWithBunServices(runWorkerEffect(input));
 
-  return runWithBunServices(engineContext.engine.status(decodeRunIdSync(input.runId)));
-};
+const getRunStatusEffect = (
+  input: GetRunStatusInput,
+): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    return yield* engineContext.engine.status(decodeRunIdSync(input.runId));
+  });
+
+export const getRunStatus = (input: GetRunStatusInput): Promise<RunRecord> =>
+  runWithBunServices(getRunStatusEffect(input));
 
 const isWaitTimeoutError = (error: unknown): error is WaitTimeoutError =>
   typeof error === "object" &&
@@ -680,104 +684,112 @@ const findWaitTimeoutError = (cause: Cause.Cause<unknown>): WaitTimeoutError | u
   return undefined;
 };
 
-export const waitForRun = async (input: WaitForRunInput): Promise<RunRecord> => {
-  const engineContext = await makeEngineForConfig(input);
-  const waitOutcome = await runWithBunServices(
-    Effect.exit(
+const waitForRunEffect = (
+  input: WaitForRunInput,
+): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    const waitOutcome = yield* Effect.exit(
       engineContext.engine.wait(
         decodeRunIdSync(input.runId),
         Math.round(input.timeoutSeconds * 1000),
       ),
-    ),
-  );
-
-  if (Exit.isSuccess(waitOutcome)) {
-    return waitOutcome.value;
-  }
-
-  const timeoutError = findWaitTimeoutError(waitOutcome.cause);
-
-  if (timeoutError !== undefined) {
-    return Promise.reject(timeoutError);
-  }
-
-  return Promise.reject(new Error(Cause.pretty(waitOutcome.cause)));
-};
-
-export const watchRun = async (input: WatchRunInput): Promise<void> => {
-  if (input.sinceTimeIso !== undefined && !isSinceTimeIso(input.sinceTimeIso)) {
-    return Promise.reject(
-      new Error(`Invalid --since-time value '${input.sinceTimeIso}'. Expected ISO timestamp.`),
     );
-  }
 
-  const channel = input.channel ?? "events";
+    if (Exit.isSuccess(waitOutcome)) {
+      return waitOutcome.value;
+    }
 
-  if (input.runId === undefined && channel !== "events") {
-    return Promise.reject(new Error("watch --channel io|all requires --run <runId>."));
-  }
+    const timeoutError = findWaitTimeoutError(waitOutcome.cause);
 
-  if (input.runId === undefined && (input.source !== undefined || input.taskId !== undefined)) {
-    return Promise.reject(new Error("watch --source/--task requires --run <runId>."));
-  }
+    if (timeoutError !== undefined) {
+      return yield* Effect.fail(timeoutError);
+    }
 
-  if (channel === "io" && input.sinceTimeIso !== undefined) {
-    return Promise.reject(new Error("watch --channel io does not support --since-time."));
-  }
+    return yield* Effect.fail(new RunApiError({ message: Cause.pretty(waitOutcome.cause) }));
+  });
 
-  if (channel === "events" && (input.source !== undefined || input.taskId !== undefined)) {
-    return Promise.reject(
-      new Error("watch --source/--task require --channel io or --channel all."),
-    );
-  }
+export const waitForRun = (input: WaitForRunInput): Promise<RunRecord> =>
+  runWithBunServices(waitForRunEffect(input));
 
-  const engineContext = await makeEngineForConfig(input);
+const watchRunEffect = (
+  input: WatchRunInput,
+): Effect.Effect<void, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    if (input.sinceTimeIso !== undefined && !isSinceTimeIso(input.sinceTimeIso)) {
+      return yield* Effect.fail(
+        new RunApiError({
+          message: `Invalid --since-time value '${input.sinceTimeIso}'. Expected ISO timestamp.`,
+        }),
+      );
+    }
 
-  if (input.runId === undefined) {
-    await runWithBunServices(
-      Effect.scoped(
+    const channel = input.channel ?? "events";
+
+    if (input.runId === undefined && channel !== "events") {
+      return yield* Effect.fail(
+        new RunApiError({ message: "watch --channel io|all requires --run <runId>." }),
+      );
+    }
+
+    if (input.runId === undefined && (input.source !== undefined || input.taskId !== undefined)) {
+      return yield* Effect.fail(
+        new RunApiError({ message: "watch --source/--task requires --run <runId>." }),
+      );
+    }
+
+    if (channel === "io" && input.sinceTimeIso !== undefined) {
+      return yield* Effect.fail(
+        new RunApiError({ message: "watch --channel io does not support --since-time." }),
+      );
+    }
+
+    if (channel === "events" && (input.source !== undefined || input.taskId !== undefined)) {
+      return yield* Effect.fail(
+        new RunApiError({
+          message: "watch --source/--task require --channel io or --channel all.",
+        }),
+      );
+    }
+
+    const engineContext = yield* makeEngineForConfigEffect(input);
+
+    if (input.runId === undefined) {
+      return yield* Effect.scoped(
         Stream.runForEach(engineContext.engine.watchAll(input.sinceTimeIso), (event) =>
           emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
         ),
-      ),
+      );
+    }
+
+    const runId = decodeRunIdSync(input.runId);
+
+    const eventStream = Stream.filter(engineContext.engine.watch(runId), (event) =>
+      input.sinceTimeIso === undefined ? true : event.timestamp >= input.sinceTimeIso,
     );
 
-    return;
-  }
+    const ioStream = Stream.filter(engineContext.engine.watchIo(runId), (event) =>
+      filterIoEvent(event, input.source, input.taskId),
+    );
 
-  const runId = decodeRunIdSync(input.runId);
-
-  const eventStream = Stream.filter(engineContext.engine.watch(runId), (event) =>
-    input.sinceTimeIso === undefined ? true : event.timestamp >= input.sinceTimeIso,
-  );
-
-  const ioStream = Stream.filter(engineContext.engine.watchIo(runId), (event) =>
-    filterIoEvent(event, input.source, input.taskId),
-  );
-
-  if (channel === "events") {
-    await runWithBunServices(
-      Effect.scoped(
+    if (channel === "events") {
+      return yield* Effect.scoped(
         Stream.runForEach(
           Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
           (event) => emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
         ),
-      ),
-    );
+      );
+    }
 
-    return;
-  }
+    const currentRun = yield* engineContext.engine.status(runId);
 
-  const currentRun = await runWithBunServices(engineContext.engine.status(runId));
-
-  if (
-    currentRun.status === "complete" ||
-    currentRun.status === "failed" ||
-    currentRun.status === "cancelled"
-  ) {
-    if (channel === "all") {
-      await runWithBunServices(
-        Effect.scoped(
+    if (
+      currentRun.status === "complete" ||
+      currentRun.status === "failed" ||
+      currentRun.status === "cancelled"
+    ) {
+      if (channel === "all") {
+        return yield* Effect.scoped(
           Stream.runForEach(
             Stream.takeUntil(eventStream, (event) => isRunTerminalEvent(event.type)),
             (event) => emitWatchOutput(input.onEvent, toWatchEventOutput(event)),
@@ -788,26 +800,18 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
       return;
     }
 
-    return;
-  }
-
-  if (channel === "io") {
-    await runWithBunServices(
-      Effect.raceFirst(
+    if (channel === "io") {
+      return yield* Effect.raceFirst(
         Effect.scoped(
           Stream.runForEach(ioStream, (event) =>
             emitWatchOutput(input.onEvent, toWatchIoOutput(event)),
           ),
         ),
         engineContext.engine.wait(runId, DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS * 1000),
-      ),
-    );
+      );
+    }
 
-    return;
-  }
-
-  await runWithBunServices(
-    Effect.scoped(
+    return yield* Effect.scoped(
       Effect.gen(function* () {
         const ioFiber = yield* Effect.forkScoped(
           Stream.runForEach(ioStream, (event) =>
@@ -863,23 +867,15 @@ export const cancelRun = (
   runId: string;
   status: RunRecord["status"];
   alreadyTerminal: boolean;
-}> => {
-  const engineContext = await makeEngineForConfig(input);
-  const cancelled = await runWithBunServices(
-    engineContext.engine.cancel(decodeRunIdSync(input.runId), input.reason),
-  );
+}> => runWithBunServices(cancelRunEffect(input));
 
-  await terminateWorkerProcessTree(engineContext.runsDirectory, input.runId);
+const listRunsEffect = (
+  input: ListRunsInput,
+): Effect.Effect<ReadonlyArray<RunRecord>, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const engineContext = yield* makeEngineForConfigEffect(input);
+    return yield* engineContext.engine.list(input.status);
+  });
 
-  return {
-    runId: cancelled.run.id,
-    status: cancelled.run.status,
-    alreadyTerminal: cancelled.alreadyTerminal,
-  };
-};
-
-export const listRuns = async (input: ListRunsInput): Promise<ReadonlyArray<RunRecord>> => {
-  const engineContext = await makeEngineForConfig(input);
-
-  return runWithBunServices(engineContext.engine.list(input.status));
-};
+export const listRuns = (input: ListRunsInput): Promise<ReadonlyArray<RunRecord>> =>
+  runWithBunServices(listRunsEffect(input));

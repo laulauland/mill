@@ -17,12 +17,7 @@ import {
   type RunSyncOutput,
   type TaskId,
 } from "./run.schema";
-import {
-  decodeTaskResult,
-  type TaskOptions,
-  type TaskResult as TaskStorageResult,
-} from "./task.schema";
-import type { SpawnOptions, SpawnResult } from "./spawn.schema";
+import { type TaskOptions, type TaskResult as TaskStorageResult } from "./task.schema";
 import type {
   AgentRuntimeEvent,
   AgentTurnOutput,
@@ -75,12 +70,6 @@ export interface RunSubmitInput {
 
 export interface RunSyncInput extends RunSubmitInput {
   readonly executeProgram: (
-    spawn: (
-      input: SpawnOptions,
-    ) => Effect.Effect<
-      SpawnResult,
-      ProgramExecutionError | PersistenceError | LifecycleInvariantError
-    >,
     task: (
       input: TaskInput,
     ) => Effect.Effect<
@@ -582,34 +571,12 @@ const taskResultFromEvents = (
 
 const DefaultTaskSystemPrompt = "You are a helpful coding agent.";
 
-const spawnOptionsToStorageTaskOptions = (
-  spawnInput: SpawnOptions,
-  driver: string,
-): TaskOptions => ({
-  role: spawnInput.agent,
-  system: spawnInput.systemPrompt,
-  prompt: spawnInput.prompt,
-  model: spawnInput.model,
-  driver,
-});
-
 const taskInputToStorageTaskOptions = (taskInput: TaskInput): TaskOptions => ({
   role: taskInput.role ?? taskInput.agent.driver,
   system: taskInput.system ?? DefaultTaskSystemPrompt,
   prompt: taskInput.prompt,
   model: taskInput.agent.model,
   driver: taskInput.agent.driver,
-});
-
-const storageTaskResultFromSpawnResult = (result: SpawnResult): TaskStorageResult => ({
-  text: result.text,
-  sessionRef: result.sessionRef,
-  role: result.agent,
-  model: result.model,
-  driver: result.driver,
-  exitCode: result.exitCode,
-  stopReason: result.stopReason,
-  errorMessage: result.errorMessage,
 });
 
 const storageTaskResultFromTaskResult = (result: TaskResult): TaskStorageResult => ({
@@ -947,208 +914,6 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           );
         }
 
-        const spawn = (
-          spawnInput: SpawnOptions,
-        ): Effect.Effect<
-          SpawnResult,
-          ProgramExecutionError | PersistenceError | LifecycleInvariantError
-        > =>
-          Effect.gen(function* () {
-            const nextTaskCounter = yield* Ref.updateAndGet(
-              taskCounterRef,
-              (counter) => counter + 1,
-            );
-            const taskId = decodeTaskIdSync(`task_${nextTaskCounter}`);
-            const storageInput = spawnOptionsToStorageTaskOptions(spawnInput, input.driver.name);
-
-            const taskStartEvent: Omit<
-              TaskStartEvent,
-              "schemaVersion" | "runId" | "sequence" | "timestamp"
-            > = {
-              type: "task:start",
-              payload: {
-                taskId,
-                input: storageInput,
-              },
-            };
-
-            yield* appendTier1EventWithHooks(
-              input.extensions,
-              extensionContext,
-              lifecycleStateRef,
-              sequenceRef,
-              runStore,
-              runInput.runId,
-              (sequence, timestamp) => ({
-                ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                ...taskStartEvent,
-              }),
-            );
-
-            yield* Effect.logDebug("mill.engine:spawn-driver-start", {
-              runId: runInput.runId,
-              taskId,
-              driver: input.driver.name,
-              agent: spawnInput.agent,
-              model: spawnInput.model,
-            });
-
-            const driverOutputExit = yield* Effect.exit(
-              Effect.gen(function* () {
-                const session = yield* input.driver.createSession({
-                  runId: runInput.runId,
-                  runDirectory: joinPath(input.runsDirectory, runInput.runId),
-                  taskId,
-                  role: spawnInput.agent,
-                  system: spawnInput.systemPrompt,
-                  model: spawnInput.model,
-                });
-
-                const turnOutput = yield* session
-                  .startTurn({ prompt: spawnInput.prompt })
-                  .pipe(Effect.ensuring(session.close()));
-
-                return {
-                  events: turnOutput.events,
-                  raw: turnOutput.raw,
-                  result: {
-                    text: turnOutput.result.text,
-                    sessionRef: turnOutput.result.sessionRef,
-                    agent: turnOutput.result.role,
-                    model: turnOutput.result.model,
-                    driver: turnOutput.result.driver,
-                    exitCode: turnOutput.result.exitCode,
-                    stopReason: turnOutput.result.stopReason,
-                    errorMessage: turnOutput.result.errorMessage,
-                  },
-                } satisfies {
-                  readonly events: ReadonlyArray<AgentRuntimeEvent>;
-                  readonly raw?: ReadonlyArray<string>;
-                  readonly result: SpawnResult;
-                };
-              }).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new ProgramExecutionError({
-                      runId: runInput.runId,
-                      message: `Driver ${input.driver.name} failed: ${toMessage(error)}`,
-                    }),
-                ),
-              ),
-            );
-
-            if (Exit.isFailure(driverOutputExit)) {
-              const failureMessage = Cause.pretty(driverOutputExit.cause);
-
-              yield* Effect.logDebug("mill.engine:spawn-driver-failed", {
-                runId: runInput.runId,
-                taskId,
-                driver: input.driver.name,
-                message: failureMessage,
-              });
-
-              yield* appendTaskErrorEvent(
-                input.extensions,
-                extensionContext,
-                lifecycleStateRef,
-                sequenceRef,
-                runStore,
-                runInput.runId,
-                taskId,
-                failureMessage,
-              );
-
-              return yield* Effect.fail(
-                new ProgramExecutionError({
-                  runId: runInput.runId,
-                  message: failureMessage,
-                }),
-              );
-            }
-
-            yield* Effect.logDebug("mill.engine:spawn-driver-complete", {
-              runId: runInput.runId,
-              taskId,
-              driver: input.driver.name,
-              rawLines: driverOutputExit.value.raw?.length ?? 0,
-              events: driverOutputExit.value.events.length,
-            });
-
-            yield* publishDriverRawLines(taskId, driverOutputExit.value.raw);
-            yield* appendDriverEvents(taskId, driverOutputExit.value.events);
-
-            const taskStorageResultExit = yield* Effect.exit(
-              Effect.mapError(
-                decodeTaskResult(storageTaskResultFromSpawnResult(driverOutputExit.value.result)),
-                (error) =>
-                  new ProgramExecutionError({
-                    runId: runInput.runId,
-                    message: `Task result decode failed: ${toMessage(error)}`,
-                  }),
-              ),
-            );
-
-            if (Exit.isFailure(taskStorageResultExit)) {
-              const failureMessage = Cause.pretty(taskStorageResultExit.cause);
-
-              yield* appendTaskErrorEvent(
-                input.extensions,
-                extensionContext,
-                lifecycleStateRef,
-                sequenceRef,
-                runStore,
-                runInput.runId,
-                taskId,
-                failureMessage,
-              );
-
-              return yield* Effect.fail(
-                new ProgramExecutionError({
-                  runId: runInput.runId,
-                  message: failureMessage,
-                }),
-              );
-            }
-
-            const taskStorageResult = taskStorageResultExit.value;
-            const taskCompleteEvent: Omit<
-              TaskCompleteEvent,
-              "schemaVersion" | "runId" | "sequence" | "timestamp"
-            > = {
-              type: "task:complete",
-              payload: {
-                taskId,
-                result: taskStorageResult,
-              },
-            };
-
-            yield* appendTier1EventWithHooks(
-              input.extensions,
-              extensionContext,
-              lifecycleStateRef,
-              sequenceRef,
-              runStore,
-              runInput.runId,
-              (sequence, timestamp) => ({
-                ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                ...taskCompleteEvent,
-              }),
-            );
-
-            yield* Ref.update(taskResultsRef, (items) => [...items, taskStorageResult]);
-
-            yield* Effect.logDebug("mill.engine:spawn-complete", {
-              runId: runInput.runId,
-              taskId,
-              agent: taskStorageResult.role,
-              model: taskStorageResult.model,
-              sessionRef: taskStorageResult.sessionRef,
-              exitCode: taskStorageResult.exitCode,
-            });
-
-            return driverOutputExit.value.result;
-          });
-
         const task = (
           taskInput: TaskInput,
         ): Effect.Effect<
@@ -1293,7 +1058,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             return taskResult;
           });
 
-        const executionExit = yield* Effect.exit(runInput.executeProgram(spawn, task));
+        const executionExit = yield* Effect.exit(runInput.executeProgram(task));
         const completedAt = yield* toIsoTimestamp;
         const taskResults = yield* Ref.get(taskResultsRef);
         const startedAt = activeRun.createdAt;

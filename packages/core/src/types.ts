@@ -118,24 +118,6 @@ export interface TaskResult {
   readonly errorMessage?: string;
 }
 
-export interface SpawnInput {
-  readonly agent: string;
-  readonly systemPrompt: string;
-  readonly prompt: string;
-  readonly model: string;
-}
-
-export interface SpawnOutput {
-  readonly text: string;
-  readonly sessionRef: string;
-  readonly agent: string;
-  readonly model: string;
-  readonly driver: string;
-  readonly exitCode: number;
-  readonly stopReason?: string;
-  readonly errorMessage?: string;
-}
-
 export type AgentRuntimeEvent =
   | {
       readonly type: "milestone";
@@ -230,7 +212,6 @@ export interface ExtensionRegistration {
 }
 
 export interface Mill {
-  spawn(input: SpawnInput): Promise<SpawnOutput>;
   task(input: TaskInput): Promise<TaskResult>;
   taskActor(input: TaskInput): TaskActor;
   runActor(): RunActor;
@@ -242,15 +223,11 @@ export interface DriverProcessConfig {
   readonly env?: Readonly<Record<string, string>>;
 }
 
-export interface DriverCodec {
-  readonly modelCatalog: Effect.Effect<ReadonlyArray<string>, never>;
-}
-
 export interface DriverRegistration {
   readonly description: string;
   readonly modelFormat: string;
   readonly process: DriverProcessConfig;
-  readonly codec: DriverCodec;
+  readonly models: Effect.Effect<ReadonlyArray<string>, never>;
   readonly runtime?: DriverRuntime;
 }
 
@@ -274,8 +251,8 @@ export interface MillConfig {
 export interface DiscoveryPayload {
   readonly discoveryVersion: number;
   readonly programApi: {
-    readonly spawnRequired: ReadonlyArray<string>;
-    readonly spawnOptional: ReadonlyArray<string>;
+    readonly taskRequired: ReadonlyArray<string>;
+    readonly taskOptional: ReadonlyArray<string>;
     readonly resultFields: ReadonlyArray<string>;
   };
   readonly drivers: Readonly<

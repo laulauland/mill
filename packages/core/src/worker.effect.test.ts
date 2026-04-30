@@ -10,6 +10,7 @@ import type { DriverRuntime } from "./types";
 import { makeMillEngine } from "./engine.effect";
 import { makeRunStore } from "./run-store.effect";
 import { runDetachedWorker } from "./worker.effect";
+import { codex } from "./task.api";
 
 const testDriver: DriverRuntime = {
   name: "test-driver",
@@ -70,13 +71,13 @@ describe("runDetachedWorker", () => {
           programPath: submittedRun.programPath,
           runsDirectory,
           engine,
-          executeProgram: (spawn) =>
+          executeProgram: (task) =>
             Effect.gen(function* () {
-              const result = yield* spawn({
-                agent: "scout",
-                systemPrompt: "You are concise.",
+              const result = yield* task({
+                agent: codex("openai/gpt-5.3-codex"),
+                system: "You are concise.",
                 prompt: "Say hello",
-                model: "openai/gpt-5.3-codex",
+                role: "scout",
               });
 
               expect(result.sessionRef.length).toBeGreaterThan(0);

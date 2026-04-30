@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { Effect } from "effect";
-import type { DriverCodec, DriverProcessConfig, DriverRegistration } from "@mill/core";
+import type { DriverProcessConfig, DriverRegistration } from "@mill/core";
 import { makeAcpDriver } from "./acp-driver.effect";
 import { parsePiSettingsModels } from "./pi-settings.codec";
 
@@ -23,10 +23,6 @@ export type CreateAcpDriverRegistrationInput = {
 const normalizeModelCatalog = (models: ReadonlyArray<string>): ReadonlyArray<string> =>
   Array.from(new Set(models.map((model) => model.trim()).filter((model) => model.length > 0)));
 
-const createAcpCodec = (models: ReadonlyArray<string>): DriverCodec => ({
-  modelCatalog: Effect.succeed(normalizeModelCatalog(models)),
-});
-
 const createAcpDriverRegistration = (
   config: AcpDriverConfig,
   name: string,
@@ -42,7 +38,7 @@ const createAcpDriverRegistration = (
     description: config.description,
     modelFormat: config.modelFormat,
     process: processConfig,
-    codec: createAcpCodec(config.models),
+    models: Effect.succeed(normalizeModelCatalog(config.models)),
     runtime: makeAcpDriver(name, runtimeProcess),
   };
 };

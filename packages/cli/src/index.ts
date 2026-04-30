@@ -1221,7 +1221,7 @@ const resolveHelpContextForHelp = async (
     }
 
     const models = await Effect.runPromise(
-      Effect.map(registration.codec.modelCatalog, (catalog) => Array.from(new Set(catalog))),
+      Effect.map(registration.models, (catalog) => Array.from(new Set(catalog))),
     );
 
     return {

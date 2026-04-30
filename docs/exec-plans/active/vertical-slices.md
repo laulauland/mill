@@ -29,7 +29,7 @@ Ship a reliable authoring/discovery entrypoint so humans/agents can self-serve u
 2. `mill --help --json` returns `discoveryVersion: 1` and required fields from SPEC §7 (`programApi`, `drivers`, `authoring`, `async`).
 3. Config resolution order follows SPEC §6.1 (cwd, upward, `~/.mill/config.ts`, defaults) and is covered by tests.
 4. `--json` mode writes machine payload to stdout only; human diagnostics stay on stderr.
-5. Driver model list in discovery is sourced via driver codec catalog path, not hardcoded in CLI.
+5. Driver model list in discovery is sourced via registration model metadata, not hardcoded in CLI.
 
 **Deliverables**
 
@@ -51,7 +51,7 @@ Ship a reliable authoring/discovery entrypoint so humans/agents can self-serve u
 - ✅ Hardened config resolution to skip upward lookup when no repo root is detected (prevents unrelated parent config capture outside repos).
 - ✅ Implemented discovery payload builder with required SPEC §7 fields and `discoveryVersion: 1`.
 - ✅ CLI routing now supports `mill`, `--help`, `--help --json` with JSON on stdout and human help on stdout in non-JSON mode (stderr reserved for diagnostics).
-- ✅ Driver discovery models flow through driver codec catalog (`driver.codec.modelCatalog`) via `@mill/driver-acp` registration.
+- ✅ Driver discovery models flow through `models` registration metadata via `@mill/driver-acp` registration.
 - ✅ Added unit/integration/e2e coverage for config resolution, discovery payload, CLI wiring, and `mill --help --json` command path.
 - ✅ Extended config-loader tests + implementation to support computed `authoring.instructions` const-expression forms in `mill.config.ts` (not just inline string literals), while preserving SPEC §6.1 resolution order.
 - ✅ Re-ran full workspace `bun test` after S1 hardening; suite remains green.
@@ -67,7 +67,7 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 
 - core: run/store/event schemas + engine `runSync/submit/status`
 - cli: `run --sync`, `status`
-- driver-acp: process driver + codec -> tier-1 event mapping
+- driver-acp: spawn-agent-backed ACP runtime -> tier-1 event mapping
 
 **Acceptance criteria**
 
@@ -82,7 +82,7 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 - `packages/core/src/*.schema.ts` for run/task/event unions.
 - `packages/core/src/run-store.effect.ts`, `engine.effect.ts` sync lifecycle.
 - `packages/cli` command handlers for `run --sync` and `status` JSON/human output.
-- `packages/driver-acp` codec + process-driver implementation using `Command.make(cmd, ...args)`.
+- `packages/driver-acp` ACP registration and spawn-agent-backed runtime.
 
 **Test commands**
 
@@ -98,7 +98,7 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 - ✅ Implemented `packages/core/src/run-store.effect.ts` for run directory creation and append-only `events.ndjson` persistence.
 - ✅ Implemented sync lifecycle orchestration in `packages/core/src/engine.effect.ts` (run start/status, task mapping, run terminal persistence).
 - ✅ Implemented `run --sync` and `status` CLI command handlers in `packages/cli/src/index.ts`, with JSON mode contract preserved on stdout.
-- ✅ Implemented process-backed ACP driver runtime in `packages/driver-acp` with codec decoding and command invocation via `Command.make(cmd, ...args)`.
+- ✅ Implemented spawn-agent-backed ACP driver runtime in `packages/driver-acp` with task session support.
 - ✅ Added unit/integration/e2e coverage for schemas, run store, engine↔driver flow, CLI `run --sync`, CLI `status`, and persisted artifact verification.
 - ✅ Re-ran targeted slice suites (`core/src`, `cli/src`, `driver-acp/src`) with green results.
 
@@ -144,7 +144,7 @@ Enforce lifecycle correctness guarantees before detached execution complexity is
 - ✅ Implemented deterministic terminal policy: duplicate terminal emissions are rejected via `LifecycleInvariantError` (not ignored).
 - ✅ Added CLI `wait` command (`mill wait <runId> --timeout <seconds> [--json]`) with JSON/human output parity.
 - ✅ Added typed JSON timeout contract for CLI (`{ ok: false, error: { _tag: "WaitTimeoutError", runId, timeoutSeconds, message } }`) and non-zero timeout exit code.
-- ✅ Added driver-acp malformed fixture coverage for duplicate/invalid terminal output ordering in codec + runtime integration tests.
+- ✅ Added driver-acp fixture coverage for terminal output ordering in runtime integration tests.
 - ✅ Added integration/e2e coverage for persisted/live wait behavior and timeout behavior.
 - ✅ Re-ran full workspace `bun test`; suite is green.
 

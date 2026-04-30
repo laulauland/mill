@@ -12,9 +12,7 @@ const makeDriver = (name: string): DriverRegistration => ({
     args: [],
     env: {},
   },
-  codec: {
-    modelCatalog: Effect.succeed([`${name}/model`]),
-  },
+  models: Effect.succeed([`${name}/model`]),
   runtime: {
     name,
     createSession: (input) =>

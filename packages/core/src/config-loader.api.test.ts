@@ -18,9 +18,7 @@ const makeDefaults = (): MillConfig => ({
         args: ["-p"],
         env: {},
       },
-      codec: {
-        modelCatalog: Effect.succeed(["provider/model-a"]),
-      },
+      models: Effect.succeed(["provider/model-a"]),
     },
   },
   executors: {
@@ -216,12 +214,10 @@ describe("resolveConfig", () => {
         "        args: [],",
         "        env: {},",
         "      },",
-        "      codec: {",
-        '        modelCatalog: { _tag: "loaded-from-module" },',
-        "      },",
+        '      models: { _tag: "loaded-from-module" },',
         "      runtime: {",
         '        name: "module-driver",',
-        "        spawn: () => ({ kind: " + '"driver-runtime"' + " }),",
+        "        createSession: () => ({ kind: " + '"driver-runtime"' + " }),",
         "      },",
         "    }),",
         "  },",
@@ -268,7 +264,9 @@ describe("resolveConfig", () => {
       expect(Object.keys(resolved.config.executors)).toContain("direct");
       expect(Object.keys(resolved.config.executors)).toContain("module-executor");
       expect(resolved.config.extensions[0]?.name).toBe("moduleTools");
-      expect(typeof resolved.config.drivers["module-driver"]?.runtime?.spawn).toBe("function");
+      expect(typeof resolved.config.drivers["module-driver"]?.runtime?.createSession).toBe(
+        "function",
+      );
       expect(typeof resolved.config.executors["module-executor"]?.runtime.runProgram).toBe(
         "function",
       );

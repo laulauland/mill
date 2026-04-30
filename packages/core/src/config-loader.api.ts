@@ -16,13 +16,13 @@ const runWithBunServices = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices>,
 ): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
 
-const defaultPathExists = async (path: string): Promise<boolean> =>
-  runWithBunServices(
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      return yield* fileSystem.exists(path);
-    }),
-  );
+const defaultPathExistsEffect = (
+  path: string,
+): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return yield* fileSystem.exists(path);
+  });
 
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {

@@ -10,6 +10,7 @@ import { runWithBunServices } from "./test-runtime";
 import type { DriverRuntime } from "./types";
 import { makeMillEngine } from "./engine.effect";
 import { makeRunStore } from "./run-store.effect";
+import { codex } from "./task.api";
 
 const testDriver: DriverRuntime = {
   name: "test-driver",
@@ -93,13 +94,13 @@ describe("MillEngine sync lifecycle", () => {
         engine.runSync({
           runId,
           programPath: "/tmp/program.ts",
-          executeProgram: (spawn) =>
+          executeProgram: (task) =>
             Effect.gen(function* () {
-              const result = yield* spawn({
-                agent: "scout",
-                systemPrompt: "You are concise.",
+              const result = yield* task({
+                agent: codex("openai/gpt-5.3-codex"),
+                system: "You are concise.",
                 prompt: "Summarize this file.",
-                model: "openai/gpt-5.3-codex",
+                role: "scout",
               });
 
               expect(result.sessionRef.length).toBeGreaterThan(0);
@@ -330,13 +331,13 @@ describe("MillEngine sync lifecycle", () => {
         engine.runSync({
           runId,
           programPath: "/tmp/program.ts",
-          executeProgram: (spawn) =>
+          executeProgram: (task) =>
             Effect.flatMap(
-              spawn({
-                agent: "scout",
-                systemPrompt: "You are concise.",
+              task({
+                agent: codex("openai/gpt-5.3-codex"),
+                system: "You are concise.",
                 prompt: "Inspect this run",
-                model: "openai/gpt-5.3-codex",
+                role: "scout",
               }),
               () => Effect.void,
             ),
@@ -441,13 +442,13 @@ describe("MillEngine sync lifecycle", () => {
       const executionEffect = engine.runSync({
         runId,
         programPath: "/tmp/program.ts",
-        executeProgram: (spawn) =>
+        executeProgram: (task) =>
           Effect.flatMap(
-            spawn({
-              agent: "scout",
-              systemPrompt: "You are concise.",
+            task({
+              agent: codex("openai/gpt-5.3-codex"),
+              system: "You are concise.",
               prompt: "watch this run",
-              model: "openai/gpt-5.3-codex",
+              role: "scout",
             }),
             () => Effect.void,
           ),

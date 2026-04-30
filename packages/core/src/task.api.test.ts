@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { claude, codex, pi, spawnOutputToTaskResult, taskInputToSpawnInput } from "./task.api";
+import { claude, codex, pi } from "./task.api";
 
 const agentModel = "openai-codex/gpt-5.3-codex";
 
@@ -18,57 +18,6 @@ describe("agent provider factories", () => {
     expect(pi("pi/default")).toEqual({
       driver: "pi",
       model: "pi/default",
-    });
-  });
-});
-
-describe("task compatibility mapping", () => {
-  it("maps public task input to the legacy spawn input shape", () => {
-    expect(
-      taskInputToSpawnInput({
-        agent: codex(agentModel),
-        system: "You inspect code.",
-        prompt: "Review src/auth.",
-        role: "scout",
-        steering: "queue",
-      }),
-    ).toEqual({
-      agent: "scout",
-      systemPrompt: "You inspect code.",
-      prompt: "Review src/auth.",
-      model: agentModel,
-    });
-  });
-
-  it("falls back to the provider driver as the legacy agent label and default system", () => {
-    expect(
-      taskInputToSpawnInput({
-        agent: claude("anthropic/claude-sonnet-4-5"),
-        prompt: "Plan the change.",
-      }),
-    ).toMatchObject({
-      agent: "claude",
-      systemPrompt: "You are a helpful coding agent.",
-    });
-  });
-
-  it("maps legacy spawn output to task result vocabulary", () => {
-    expect(
-      spawnOutputToTaskResult({
-        text: "done",
-        sessionRef: "session/1",
-        agent: "planner",
-        model: "anthropic/claude-sonnet-4-5",
-        driver: "claude",
-        exitCode: 0,
-      }),
-    ).toEqual({
-      text: "done",
-      sessionRef: "session/1",
-      role: "planner",
-      model: "anthropic/claude-sonnet-4-5",
-      driver: "claude",
-      exitCode: 0,
     });
   });
 });

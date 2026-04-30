@@ -8,7 +8,7 @@ const buildDiscoveryDrivers = (
   Effect.map(
     Effect.forEach(Object.entries(drivers), ([driverName, registration]) =>
       Effect.map(
-        registration.codec.modelCatalog,
+        registration.models,
         (models) =>
           [
             driverName,
@@ -43,26 +43,26 @@ export const createDiscoveryPayloadEffect = (
     const drivers = yield* buildDiscoveryDrivers(resolvedConfig.config.drivers);
     const executors = buildDiscoveryExecutors(resolvedConfig.config.executors);
 
-  const drivers = await Effect.runPromise(buildDiscoveryDrivers(resolvedConfig.config.drivers));
-  const executors = buildDiscoveryExecutors(resolvedConfig.config.executors);
+    return {
+      discoveryVersion: 1,
+      programApi: {
+        taskRequired: ["agent", "prompt"],
+        taskOptional: ["system", "role", "steering", "metadata"],
+        resultFields: ["text", "sessionRef", "role", "model", "driver", "exitCode", "stopReason"],
+      },
+      drivers,
+      executors,
+      authoring: {
+        instructions: resolvedConfig.config.authoring.instructions,
+      },
+      async: {
+        submit: "mill run <program.ts> --json",
+        status: "mill status <runId> --json",
+        wait: "mill wait <runId> --timeout 30 --json",
+        watch: "mill watch [--run <runId>] [--since-time <ISO-8601>] --json",
+      },
+    };
+  });
 
-  return {
-    discoveryVersion: 1,
-    programApi: {
-      spawnRequired: ["agent", "systemPrompt", "prompt", "model"],
-      spawnOptional: [],
-      resultFields: ["text", "sessionRef", "agent", "model", "driver", "exitCode", "stopReason"],
-    },
-    drivers,
-    executors,
-    authoring: {
-      instructions: resolvedConfig.config.authoring.instructions,
-    },
-    async: {
-      submit: "mill run <program.ts> --json",
-      status: "mill status <runId> --json",
-      wait: "mill wait <runId> --timeout 30 --json",
-      watch: "mill watch [--run <runId>] [--since-time <ISO-8601>] --json",
-    },
-  };
-};
+export const createDiscoveryPayload = (options: ResolveConfigOptions): Promise<DiscoveryPayload> =>
+  Effect.runPromise(createDiscoveryPayloadEffect(options));

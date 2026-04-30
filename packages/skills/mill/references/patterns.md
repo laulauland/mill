@@ -8,7 +8,7 @@ Fan out independent tasks, collect results:
 
 ```ts
 const results = await Promise.all([
-  mill.spawn({
+  mill.task({
     agent: "security",
     systemPrompt:
       "You are a security reviewer. You look for injection flaws, auth bypasses, and data exposure. Report findings with severity ratings.",
@@ -16,7 +16,7 @@ const results = await Promise.all([
     model: "anthropic/claude-opus-4-6",
     step: 0,
   }),
-  mill.spawn({
+  mill.task({
     agent: "perf",
     systemPrompt:
       "You are a performance analyst. You identify bottlenecks, unnecessary allocations, and O(n²) patterns.",
@@ -32,7 +32,7 @@ const results = await Promise.all([
 Each step feeds into the next via `result.text`:
 
 ```ts
-const analysis = await mill.spawn({
+const analysis = await mill.task({
   agent: "analyzer",
   systemPrompt:
     "You analyze codebases systematically. You map structure, dependencies, and public interfaces.",
@@ -41,7 +41,7 @@ const analysis = await mill.spawn({
   step: 0,
 });
 
-const plan = await mill.spawn({
+const plan = await mill.task({
   agent: "planner",
   systemPrompt: "You design thorough test plans. You prioritize critical paths and edge cases.",
   prompt: `Design integration tests covering the API endpoints found:\n\n${analysis.text}`,
@@ -56,7 +56,7 @@ Parallel investigation followed by a single summarizer:
 
 ```ts
 const reviews = await Promise.all([
-  mill.spawn({
+  mill.task({
     agent: "frontend",
     systemPrompt:
       "You are a frontend specialist. You review UI code for accessibility, performance, and UX issues.",
@@ -64,7 +64,7 @@ const reviews = await Promise.all([
     model: "anthropic/claude-sonnet-4-6",
     step: 0,
   }),
-  mill.spawn({
+  mill.task({
     agent: "backend",
     systemPrompt:
       "You are a backend specialist. You review server code for correctness, scalability, and error handling.",
@@ -72,7 +72,7 @@ const reviews = await Promise.all([
     model: "mistral/devstral-2512",
     step: 1,
   }),
-  mill.spawn({
+  mill.task({
     agent: "infra",
     systemPrompt:
       "You are an infrastructure specialist. You review configs, deployments, and operational concerns.",
@@ -83,7 +83,7 @@ const reviews = await Promise.all([
 ]);
 
 const context = reviews.map((r) => `[${r.agent}]\n${r.text}`).join("\n\n");
-const summary = await mill.spawn({
+const summary = await mill.task({
   agent: "synthesizer",
   systemPrompt:
     "You synthesize multiple perspectives into clear, actionable summaries. You deduplicate, prioritize, and highlight conflicts.",

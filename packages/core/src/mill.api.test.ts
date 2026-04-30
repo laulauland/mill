@@ -3,21 +3,6 @@ import { createMill } from "./mill.api";
 import { codex } from "./task.api";
 
 describe("createMill", () => {
-  it("returns a Promise-based mill API backed by Effect core", async () => {
-    const mill = await createMill();
-
-    const result = await mill.spawn({
-      agent: "scout",
-      systemPrompt: "You are concise.",
-      prompt: "Say hello",
-      model: "openai/gpt-5.3-codex",
-    });
-
-    expect(result.driver).toBe("default");
-    expect(result.sessionRef).toBe("session/noop");
-    expect(result.exitCode).toBe(0);
-  });
-
   it("supports task vocabulary through the Promise API", async () => {
     const mill = await createMill();
 

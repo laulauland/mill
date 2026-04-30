@@ -9,7 +9,7 @@ import {
 describe("createClaudeAcpDriverRegistration", () => {
   it("provides default models", async () => {
     const reg = createClaudeAcpDriverRegistration();
-    const models = await runWithRuntime(reg.codec.modelCatalog);
+    const models = await runWithRuntime(reg.models);
 
     expect(models).toContain("anthropic/claude-sonnet-4-6");
     expect(models).toContain("anthropic/claude-opus-4-6");
@@ -22,7 +22,7 @@ describe("createClaudeAcpDriverRegistration", () => {
     const reg = createClaudeAcpDriverRegistration({
       models: ["custom/model-a", "custom/model-b"],
     });
-    const models = await runWithRuntime(reg.codec.modelCatalog);
+    const models = await runWithRuntime(reg.models);
 
     expect(models).toEqual(["custom/model-a", "custom/model-b"]);
   });
@@ -31,7 +31,7 @@ describe("createClaudeAcpDriverRegistration", () => {
 describe("createCodexAcpDriverRegistration", () => {
   it("provides default models", async () => {
     const reg = createCodexAcpDriverRegistration();
-    const models = await runWithRuntime(reg.codec.modelCatalog);
+    const models = await runWithRuntime(reg.models);
 
     expect(models).toContain("openai-codex/gpt-5.3-codex");
     expect(reg.runtime).toBeDefined();
@@ -42,7 +42,7 @@ describe("createCodexAcpDriverRegistration", () => {
     const reg = createCodexAcpDriverRegistration({
       models: ["custom/codex-model"],
     });
-    const models = await runWithRuntime(reg.codec.modelCatalog);
+    const models = await runWithRuntime(reg.models);
 
     expect(models).toEqual(["custom/codex-model"]);
   });
@@ -51,7 +51,7 @@ describe("createCodexAcpDriverRegistration", () => {
 describe("createPiAcpDriverRegistration", () => {
   it("returns empty models when no home directory is provided", async () => {
     const reg = createPiAcpDriverRegistration();
-    const models = await runWithRuntime(reg.codec.modelCatalog);
+    const models = await runWithRuntime(reg.models);
 
     expect(models).toEqual([]);
     expect(reg.runtime).toBeDefined();
@@ -62,7 +62,7 @@ describe("createPiAcpDriverRegistration", () => {
     const reg = createPiAcpDriverRegistration({
       models: ["pi/custom-model"],
     });
-    const models = await runWithRuntime(reg.codec.modelCatalog);
+    const models = await runWithRuntime(reg.models);
 
     expect(models).toEqual(["pi/custom-model"]);
   });

@@ -15,9 +15,7 @@ const makeDefaults = (): MillConfig => ({
         args: ["-p"],
         env: {},
       },
-      codec: {
-        modelCatalog: Effect.succeed(["provider/model-a", "provider/model-b"]),
-      },
+      models: Effect.succeed(["provider/model-a", "provider/model-b"]),
     },
     codex: {
       description: "Codex adapter",
@@ -27,9 +25,7 @@ const makeDefaults = (): MillConfig => ({
         args: [],
         env: {},
       },
-      codec: {
-        modelCatalog: Effect.succeed(["openai/gpt-5.3-codex"]),
-      },
+      models: Effect.succeed(["openai/gpt-5.3-codex"]),
     },
   },
   executors: {
@@ -64,12 +60,12 @@ describe("createDiscoveryPayload", () => {
     });
 
     expect(payload.discoveryVersion).toBe(1);
-    expect(payload.programApi.spawnRequired).toEqual(["agent", "systemPrompt", "prompt", "model"]);
-    expect(payload.programApi.spawnOptional).toEqual([]);
+    expect(payload.programApi.taskRequired).toEqual(["agent", "prompt"]);
+    expect(payload.programApi.taskOptional).toEqual(["system", "role", "steering", "metadata"]);
     expect(payload.programApi.resultFields).toEqual([
       "text",
       "sessionRef",
-      "agent",
+      "role",
       "model",
       "driver",
       "exitCode",
@@ -86,7 +82,7 @@ describe("createDiscoveryPayload", () => {
     });
   });
 
-  it("sources driver models from the driver codec catalog", async () => {
+  it("sources driver models from registration metadata", async () => {
     const payload = await createDiscoveryPayload({
       defaults: makeDefaults(),
       cwd: "/repo",

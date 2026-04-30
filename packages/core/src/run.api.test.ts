@@ -55,9 +55,7 @@ const makeConfig = (): MillConfig => ({
         args: [],
         env: {},
       },
-      codec: {
-        modelCatalog: Effect.succeed(["default/model"]),
-      },
+      models: Effect.succeed(["default/model"]),
       runtime: {
         name: "default",
         createSession: (input) =>
@@ -93,9 +91,7 @@ const makeConfig = (): MillConfig => ({
         args: [],
         env: {},
       },
-      codec: {
-        modelCatalog: Effect.succeed(["openai/gpt-5.3-codex"]),
-      },
+      models: Effect.succeed(["openai/gpt-5.3-codex"]),
       runtime: {
         name: "codex",
         createSession: (input) =>

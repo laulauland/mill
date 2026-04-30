@@ -26,7 +26,7 @@ while (!done && iteration < maxIterations) {
   iteration++;
   mill.observe.log("info", `Iteration ${iteration}`, { maxIterations });
 
-  const result = await mill.spawn({
+  const result = await mill.task({
     agent: "worker",
     systemPrompt: "You are fixing issues iteratively",
     prompt: "Fix the next issue",
@@ -72,7 +72,7 @@ while (iteration < maxIterations) {
     errorCount: (lintResult.stdout.match(/error/gi) || []).length,
   });
 
-  const result = await mill.spawn({
+  const result = await mill.task({
     agent: "linter",
     systemPrompt: `You fix lint errors iteratively.
 Run 'npm run lint' to see current errors.
@@ -151,7 +151,7 @@ while (iteration < maxIterations) {
 
   progress.lastErrorCount = errorCount;
 
-  const result = await mill.spawn({
+  const result = await mill.task({
     agent: "fixer",
     systemPrompt: `You fix lint errors iteratively.
 Track your progress and avoid repeating unsuccessful approaches.
@@ -207,7 +207,7 @@ while (iteration < maxIterations) {
     .join("\n")
     .slice(-5000); // Last 5KB to avoid huge prompt payloads
 
-  const result = await mill.spawn({
+  const result = await mill.task({
     agent: "test-fixer",
     systemPrompt: `You fix failing tests iteratively.
 Analyze test output, identify the root cause, and make minimal fixes.
@@ -266,7 +266,7 @@ while (iteration < maxIterations) {
     remaining: tasks.filter((t) => !t.completed).length,
   });
 
-  const result = await mill.spawn({
+  const result = await mill.task({
     agent: "implementer",
     systemPrompt: `You implement PRD tasks iteratively.
 Read the PRD at ${prdPath}.
@@ -361,7 +361,7 @@ while (iteration < maxIterations) {
     max: maxIterations,
   });
 
-  const result = await mill.spawn({
+  const result = await mill.task({
     agent: "worker",
     systemPrompt: "You are fixing issues iteratively",
     prompt: "Continue fixing issues",
@@ -468,7 +468,7 @@ Not ideal for:
 - Tasks requiring deep context across iterations
 - Complex multi-step reasoning within a single problem
 - When the agent needs to remember detailed discussions
-- Parallel work (use `Promise.all` with `mill.spawn` instead)
+- Parallel work (use `Promise.all` with `mill.task` instead)
 
 ## Advanced: Nested Loops
 
@@ -484,7 +484,7 @@ for (const module of modules) {
   while (iteration < 10) {
     iteration++;
 
-    const result = await mill.spawn({
+    const result = await mill.task({
       agent: "module-fixer",
       systemPrompt: `Fix issues in ${module}`,
       prompt: "Run checks and fix issues",
@@ -506,7 +506,7 @@ for (const module of modules) {
 
 The Ralph Loop is a simple but powerful pattern:
 
-- **While loop** around `await mill.spawn()`
+- **While loop** around `await mill.task()`
 - **Filesystem persistence** between iterations
 - **Bash exit conditions** for authoritative checks
 - **Progress tracking** to detect stagnation

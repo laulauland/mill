@@ -32,7 +32,7 @@ interface ExecutionResult {
   sessionPath?: string;
 }
 
-interface SpawnInput {
+interface SubagentTaskInput {
   agent: string;
   /** WHO the subagent is and how it should work (behavior, principles, methodology). */
   systemPrompt: string;
@@ -48,7 +48,7 @@ interface SpawnInput {
 
 interface Mill {
   runId: string;
-  spawn(input: SpawnInput): Promise<ExecutionResult>;
+  task(input: SubagentTaskInput): Promise<ExecutionResult>;
   shutdown(cancelRunning?: boolean): Promise<void>;
   observe: {
     log(type: "info" | "warning" | "error", message: string, data?: Record<string, unknown>): void;

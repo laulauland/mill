@@ -101,7 +101,7 @@ export function patchPromiseAll(obs: ObservabilityStore, runId: string): () => v
 
 // ── Single subagent spawn (via mill) ───────────────────────────────────
 
-interface SpawnInput {
+interface SubagentTaskInput {
   runId: string;
   taskId: string;
   agent: string;
@@ -346,7 +346,7 @@ function writeMillProgram(input: {
     model: input.modelId,
   });
 
-  const source = `await mill.spawn(${spawnPayload});\n`;
+  const source = `await mill.task(${spawnPayload});\n`;
   fs.writeFileSync(filePath, source, { encoding: "utf-8", mode: 0o600 });
   return { dir, filePath };
 }
@@ -478,11 +478,11 @@ const extractRunStatus = (payload: Record<string, unknown>): string | undefined 
   return undefined;
 };
 
-export function spawnSubagent(input: SpawnInput): Promise<ExecutionResult> {
+export function runSubagentTask(input: SubagentTaskInput): Promise<ExecutionResult> {
   return runSubagentProcess(input);
 }
 
-async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
+async function runSubagentProcess(input: SubagentTaskInput): Promise<ExecutionResult> {
   input.obs.push(input.runId, "info", `spawn:${input.taskId}`, {
     agent: input.agent,
     model: input.modelId,
@@ -767,7 +767,7 @@ async function runSubagentProcess(input: SpawnInput): Promise<ExecutionResult> {
 
 // ── Mill runtime (program host API) ─────────────────────────────────────
 
-export interface RuntimeSpawnInput {
+export interface RuntimeSubagentTaskInput {
   agent: string;
   systemPrompt: string;
   prompt: string;
@@ -780,7 +780,7 @@ export interface RuntimeSpawnInput {
 
 export interface MillRuntime {
   runId: string;
-  spawn(input: RuntimeSpawnInput): SpawnPromise;
+  task(input: RuntimeSubagentTaskInput): SpawnPromise;
   shutdown(cancelRunning?: boolean): Promise<void>;
   observe: {
     log(type: "info" | "warning" | "error", message: string, data?: Record<string, unknown>): void;
@@ -792,7 +792,7 @@ function validateModelSelector(model: string, agent: string): string {
   if (!model?.trim()) {
     throw new MillError({
       code: "INVALID_INPUT",
-      message: `Spawn for '${agent}' requires a non-empty 'model'.`,
+      message: `Task for '${agent}' requires a non-empty 'model'.`,
       recoverable: true,
     });
   }
@@ -873,18 +873,18 @@ export function createMillRuntime(
   const millRuntime: MillRuntime = {
     runId,
 
-    spawn({ agent, systemPrompt, prompt, cwd, model, tools, step, signal }) {
+    task({ agent, systemPrompt, prompt, cwd, model, tools, step, signal }) {
       if (!systemPrompt?.trim()) {
         throw new MillError({
           code: "INVALID_INPUT",
-          message: `Spawn for '${agent}' requires non-empty systemPrompt.`,
+          message: `Task for '${agent}' requires non-empty systemPrompt.`,
           recoverable: true,
         });
       }
       if (!prompt?.trim()) {
         throw new MillError({
           code: "INVALID_INPUT",
-          message: `Spawn for '${agent}' requires non-empty prompt.`,
+          message: `Task for '${agent}' requires non-empty prompt.`,
           recoverable: true,
         });
       }
@@ -904,7 +904,7 @@ export function createMillRuntime(
         else bound.addEventListener("abort", relayAbort, { once: true });
       }
 
-      const taskPromise = spawnSubagent({
+      const taskPromise = runSubagentTask({
         runId,
         taskId,
         agent,
