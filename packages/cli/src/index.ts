@@ -12,17 +12,10 @@ import { Effect, Option, Scope } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 import { readFileSync } from "node:fs";
 import {
-  cancelRun,
+  createMillRuntime,
   defineConfig,
-  getRunStatus,
-  listRuns,
   processDriver,
   resolveConfig,
-  runProgramSync,
-  runWorker,
-  submitRun,
-  waitForRun,
-  watchRun,
   type DriverProcessConfig,
   type LaunchWorkerInput,
 } from "@mill/core";
@@ -520,6 +513,27 @@ const resolveActiveDriver = async (
   };
 };
 
+const createCliRuntime = (
+  options: RunCliOptions,
+  activeDriver: ActiveDriverResolution,
+  input: {
+    readonly runsDirectory?: string;
+    readonly executorName?: string;
+    readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
+  } = {},
+) =>
+  createMillRuntime({
+    defaults: activeDriver.resolvedConfig.config,
+    cwd: options.cwd,
+    homeDirectory: options.homeDirectory,
+    runsDirectory: input.runsDirectory ?? options.runsDirectory,
+    driverName: activeDriver.name,
+    executorName: input.executorName,
+    pathExists: options.pathExists,
+    loadConfigModule: options.loadConfigModule,
+    launchWorker: input.launchWorker,
+  });
+
 interface RunCommandInput {
   readonly program: string;
   readonly json: boolean;
@@ -549,34 +563,44 @@ const runCommand = async (
 
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
 
-  const runInput = {
-    defaults: resolveDefaults(options),
-    programPath: command.program,
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: activeDriver.name,
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
     executorName: fromOption(command.executor),
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
     launchWorker:
       options.launchWorker ?? ((input) => launchDetachedWorker(input, options.env ?? process.env)),
-    metadata,
-  } as const;
+  });
+  const run = runtime
+    .run({
+      programPath: command.program,
+      sync: command.sync,
+      metadata,
+    })
+    .start();
+  const output = await run.done;
 
   if (command.sync) {
-    const output = await runProgramSync(runInput);
+    const syncOutput = output;
+
+    if (!("run" in syncOutput)) {
+      io.stderr("Synchronous run completed without a result envelope.");
+      return 1;
+    }
 
     if (command.json) {
-      io.stdout(JSON.stringify(output));
+      io.stdout(JSON.stringify(syncOutput));
       return 0;
     }
 
-    io.stdout(`run ${output.run.id} -> ${output.run.status}`);
+    io.stdout(`run ${syncOutput.run.id} -> ${syncOutput.run.status}`);
     return 0;
   }
 
-  const submittedRun = await submitRun(runInput);
+  const submittedRun = output;
+
+  if ("run" in submittedRun) {
+    io.stderr("Asynchronous run unexpectedly returned a sync result envelope.");
+    return 1;
+  }
 
   if (command.json) {
     io.stdout(
@@ -608,18 +632,14 @@ const workerCommand = async (
   io: CliIo,
 ): Promise<number> => {
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
+    executorName: fromOption(command.executor),
+  });
 
-  const output = await runWorker({
-    defaults: resolveDefaults(options),
+  const output = await runtime.worker({
     runId: command.runId,
     programPath: command.program,
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: activeDriver.name,
-    executorName: fromOption(command.executor),
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
   });
 
   if (command.json) {
@@ -685,17 +705,11 @@ const statusCommand = async (
   io: CliIo,
 ): Promise<number> => {
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-
-  const output = await getRunStatus({
-    defaults: resolveDefaults(options),
-    runId: command.runId,
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: activeDriver.name,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
   });
+
+  const output = await runtime.runRef(command.runId).getSnapshot();
 
   if (command.json) {
     io.stdout(JSON.stringify(output));
@@ -726,19 +740,12 @@ const waitCommand = async (
 
   const timeoutSeconds = command.timeout;
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
+  });
 
   const [waitResult] = await Promise.allSettled([
-    waitForRun({
-      defaults: resolveDefaults(options),
-      runId: command.runId,
-      timeoutSeconds,
-      cwd: options.cwd,
-      homeDirectory: options.homeDirectory,
-      runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-      driverName: activeDriver.name,
-      pathExists: options.pathExists,
-      loadConfigModule: options.loadConfigModule,
-    }),
+    runtime.runRef(command.runId).wait({ timeoutSeconds }),
   ]);
 
   if (waitResult.status === "fulfilled") {
@@ -822,24 +829,26 @@ const watchCommand = async (
   io: CliIo,
 ): Promise<number> => {
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-
-  await watchRun({
-    defaults: resolveDefaults(options),
-    runId: fromOption(command.run),
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
+  });
+  const watchInput = {
     channel: fromOption(command.channel),
     source: fromOption(command.source),
     spawnId: fromOption(command.spawn),
     sinceTimeIso: fromOption(command.sinceTime),
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: activeDriver.name,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
-    onEvent: (line) => {
+    onEvent: (line: string) => {
       io.stdout(line);
     },
-  });
+  } as const;
+
+  const runId = fromOption(command.run);
+
+  if (runId === undefined) {
+    await runtime.watch(watchInput);
+  } else {
+    await runtime.runRef(runId).watch(watchInput);
+  }
 
   return 0;
 };
@@ -857,17 +866,11 @@ const cancelCommand = async (
   io: CliIo,
 ): Promise<number> => {
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-
-  const cancelled = await cancelRun({
-    defaults: resolveDefaults(options),
-    runId: command.runId,
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: activeDriver.name,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
   });
+
+  const cancelled = await runtime.runRef(command.runId).cancel();
 
   if (command.json) {
     io.stdout(JSON.stringify(cancelled));
@@ -894,16 +897,12 @@ const lsCommand = async (
   io: CliIo,
 ): Promise<number> => {
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
+  const runtime = createCliRuntime(options, activeDriver, {
+    runsDirectory: fromOption(command.runsDir),
+  });
 
-  const runs = await listRuns({
-    defaults: resolveDefaults(options),
+  const runs = await runtime.list({
     status: fromOption(command.status),
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    runsDirectory: fromOption(command.runsDir) ?? options.runsDirectory,
-    driverName: activeDriver.name,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
   });
 
   if (command.json) {

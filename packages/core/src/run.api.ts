@@ -15,6 +15,8 @@ import { publishIoEvent, type IoStreamEvent } from "./observer-hub.effect";
 import { resolveConfigEffect } from "./config-loader.api";
 import type { ExecutorRuntime, ExtensionRegistration, ResolveConfigOptions } from "./types";
 
+export type { RunRecord, RunSyncOutput } from "./run.schema";
+
 interface BaseRunInput extends ResolveConfigOptions {
   readonly driverName?: string;
   readonly executorName?: string;

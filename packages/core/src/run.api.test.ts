@@ -10,6 +10,7 @@ import { decodeRunIdSync } from "./run.schema";
 import { makeRunStore } from "./run-store.effect";
 import { runWithBunServices } from "./test-runtime";
 import { cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
+import { createMillRuntime } from "./runtime.api";
 import type { MillConfig } from "./types";
 
 const ProgramResultEnvelope = Schema.fromJsonString(
@@ -156,6 +157,63 @@ const makeConfig = (): MillConfig => ({
 });
 
 describe("run.api integration", () => {
+  it("runs sync programs through the mill runtime actor facade", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-runtime-api-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+    const defaults = makeConfig();
+
+    await writeFile(
+      programPath,
+      [
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai/gpt-5.3-codex" },',
+        '  prompt: "from runtime",',
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const runtime = createMillRuntime({
+        defaults,
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        driverName: "codex",
+        executorName: "direct",
+        launchWorker: async (launchInput) => {
+          await runWorker({
+            defaults,
+            runId: launchInput.runId,
+            programPath: launchInput.programPath,
+            cwd: launchInput.cwd,
+            homeDirectory,
+            runsDirectory: launchInput.runsDirectory,
+            driverName: launchInput.driverName,
+            executorName: launchInput.executorName,
+            pathExists: async () => false,
+          });
+        },
+      });
+      const run = runtime.run({ programPath, sync: true }).start();
+      const output = await run.done;
+
+      expect("run" in output).toBe(true);
+      expect(run.getSnapshot()?.status).toBe("complete");
+
+      if ("run" in output) {
+        expect(output.run.driver).toBe("codex");
+        expect(output.result.programResult).toBe("codex:from runtime");
+      }
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("selects driver/executor overrides, injects extension API, and emits extension:error events", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-api-"));
     const homeDirectory = join(tempDirectory, "home");
