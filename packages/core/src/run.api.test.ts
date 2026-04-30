@@ -9,7 +9,7 @@ import { decodeMillEventJsonSync } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
 import { makeRunStore } from "./run-store.effect";
 import { runWithBunServices } from "./test-runtime";
-import { cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
+import { ProcessControlError, cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
 import { createMillRuntime } from "./runtime.api";
 import type { MillConfig } from "./types";
 
@@ -382,23 +382,21 @@ describe("run.api integration", () => {
     }
   });
 
-  it("defaults runs directory to $HOME/.mill/runs when homeDirectory is omitted", async () => {
+  it("defaults runs directory to explicit env HOME/.mill/runs when homeDirectory is omitted", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-home-default-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
-    const previousHome = process.env.HOME;
 
     await writeFile(programPath, "return 'home-default-ok';\n", "utf-8");
 
     let capturedRunsDirectory: string | undefined;
 
     try {
-      process.env.HOME = homeDirectory;
-
       const output = await runProgramSync({
         defaults: makeConfig(),
         programPath,
         cwd: tempDirectory,
+        env: { HOME: homeDirectory },
         pathExists: async () => false,
         launchWorker: async (launchInput) => {
           capturedRunsDirectory = launchInput.runsDirectory;
@@ -421,12 +419,6 @@ describe("run.api integration", () => {
       expect(output.run.paths.runDir.startsWith(expectedRunsDirectory)).toBe(true);
       expect(output.run.status).toBe("complete");
     } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-
       await rm(tempDirectory, { recursive: true, force: true });
     }
   });
@@ -435,19 +427,17 @@ describe("run.api integration", () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-depth-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
-    const previousDepth = process.env.MILL_RUN_DEPTH;
 
     await writeFile(programPath, "return 'ok';\n", "utf-8");
 
     try {
-      process.env.MILL_RUN_DEPTH = "1";
-
       await expect(
         submitRun({
           defaults: makeConfig(),
           programPath,
           cwd: tempDirectory,
           homeDirectory,
+          env: { MILL_RUN_DEPTH: "1" },
           pathExists: async () => false,
           launchWorker: async () => {
             throw new Error("launchWorker should not be called when depth guard blocks run");
@@ -465,6 +455,7 @@ describe("run.api integration", () => {
         programPath,
         cwd: tempDirectory,
         homeDirectory,
+        env: { MILL_RUN_DEPTH: "1" },
         pathExists: async () => false,
         launchWorker: async () => {
           launchCalled = true;
@@ -474,12 +465,6 @@ describe("run.api integration", () => {
       expect(submitted.status).toBe("pending");
       expect(launchCalled).toBe(true);
     } finally {
-      if (previousDepth === undefined) {
-        delete process.env.MILL_RUN_DEPTH;
-      } else {
-        process.env.MILL_RUN_DEPTH = previousDepth;
-      }
-
       await rm(tempDirectory, { recursive: true, force: true });
     }
   });
@@ -525,6 +510,19 @@ describe("run.api integration", () => {
         runsDirectory,
         cwd: tempDirectory,
         pathExists: async () => false,
+        processControl: {
+          isAlive: (pid) =>
+            Effect.try({
+              try: () => process.kill(pid, 0),
+              catch: (cause) => new ProcessControlError({ operation: "isAlive", pid, cause }),
+            }).pipe(Effect.as(true)),
+          sendSignal: (pid, signal) =>
+            Effect.try({
+              try: () => process.kill(pid, signal),
+              catch: (cause) =>
+                new ProcessControlError({ operation: "sendSignal", pid, signal, cause }),
+            }).pipe(Effect.as(true)),
+        },
       });
 
       expect(cancelled.status).toBe("cancelled");

@@ -1,8 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
+import { Effect, Exit } from "effect";
+import { path, provideFileSystem, writeTextFile } from "./platform.adapter.js";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Text } from "@mariozechner/pi-tui";
 import type { RunSummary } from "./types.js";
+import { now } from "./clock.js";
 import type { RunRegistry } from "./registry.js";
 import { formatElapsed, statusIcon, agentLabel } from "./format.js";
 
@@ -12,7 +13,7 @@ const TEXT_TRUNCATE = 500;
 function elapsedMs(summary: RunSummary): number {
   const obs = summary.observability;
   if (obs?.startedAt) {
-    const end = obs.endedAt ?? Date.now();
+    const end = obs.endedAt ?? now();
     return end - obs.startedAt;
   }
   return 0;
@@ -27,22 +28,24 @@ const SUMMARY_TRUNCATE = 200;
 function writeResultsFile(summary: RunSummary): string | null {
   const artifactsDir = summary.observability?.artifactsDir;
   if (!artifactsDir) return null;
-  try {
-    const resultsPath = path.join(artifactsDir, "results.md");
-    const lines: string[] = [`# ${agentLabel(summary)} — ${summary.status}\n`];
-    for (const r of summary.results) {
-      const model = r.model ? ` (${r.model})` : "";
-      lines.push(`## ${r.agent}${model}\n`);
-      if (r.task) lines.push(`**Task:** ${r.task}\n`);
-      lines.push(r.text || "(no output)");
-      if (r.sessionPath) lines.push(`\n**Session:** ${r.sessionPath}`);
-      lines.push("");
-    }
-    fs.writeFileSync(resultsPath, lines.join("\n"));
-    return resultsPath;
-  } catch {
+  const resultsPath = path.join(artifactsDir, "results.md");
+  const lines: string[] = [`# ${agentLabel(summary)} — ${summary.status}\n`];
+  for (const r of summary.results) {
+    const model = r.model ? ` (${r.model})` : "";
+    lines.push(`## ${r.agent}${model}\n`);
+    if (r.task) lines.push(`**Task:** ${r.task}\n`);
+    lines.push(r.text || "(no output)");
+    if (r.sessionPath) lines.push(`\n**Session:** ${r.sessionPath}`);
+    lines.push("");
+  }
+  const written = Effect.runSyncExit(
+    provideFileSystem(writeTextFile(resultsPath, lines.join("\n"))),
+  );
+  if (Exit.isFailure(written)) {
+    console.warn(`Unable to write pi-mill results file in ${artifactsDir}.`);
     return null;
   }
+  return resultsPath;
 }
 
 function buildContentLine(summary: RunSummary): string {

@@ -308,6 +308,7 @@ export interface ResolveConfigOptions {
   readonly defaults: MillConfig;
   readonly cwd?: string;
   readonly homeDirectory?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly pathExists?: (path: string) => Promise<boolean>;
   readonly loadConfigModule?: (path: string) => Promise<unknown>;
 }

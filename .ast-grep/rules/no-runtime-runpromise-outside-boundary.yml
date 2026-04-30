@@ -1,13 +1,20 @@
 id: no-runtime-runpromise-outside-boundary
 language: TypeScript
 severity: error
-message: Effect.runPromise bridge is allowed only in public boundary and CLI entry adapters.
+message: Effect.runPromise bridge is allowed only in explicit public/runtime boundary adapters.
 ignores:
-  - "**/*.api.ts"
   - "**/*.test.ts"
-  - "packages/*/src/index.ts"
-  - "packages/*/src/test-runtime.ts"
-  - "packages/*/src/mill.ts"
+  - "packages/cli/src/index.ts"
+  - "packages/cli/src/mill.ts"
+  - "packages/core/src/config-loader.api.ts"
+  - "packages/core/src/discovery.api.ts"
+  - "packages/core/src/mill.api.ts"
+  - "packages/core/src/run.api.ts"
+  - "packages/core/src/runtime.api.ts"
+  - "packages/core/src/task-actor.api.ts"
+  - "packages/core/src/index.ts"
+  - "packages/core/src/test-runtime.ts"
+  - "packages/driver-acp/src/test-runtime.ts"
 rule:
   any:
     - pattern: "Effect.runPromise($A)"

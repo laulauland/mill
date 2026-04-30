@@ -1,15 +1,14 @@
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
 import { Effect } from "effect";
 import type { DriverProcessConfig, DriverRegistration } from "@mill/core";
 import { makeAcpDriver } from "./acp-driver.effect";
+import { readPiSettingsFile } from "./pi-settings.adapter";
 import { parsePiSettingsModels } from "./pi-settings.codec";
 
 export type AcpDriverConfig = {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env?: Readonly<Record<string, string>>;
-  readonly models: ReadonlyArray<string>;
+  readonly models: Effect.Effect<ReadonlyArray<string>, never>;
   readonly description: string;
   readonly modelFormat: string;
 };
@@ -38,7 +37,7 @@ const createAcpDriverRegistration = (
     description: config.description,
     modelFormat: config.modelFormat,
     process: processConfig,
-    models: Effect.succeed(normalizeModelCatalog(config.models)),
+    models: Effect.map(config.models, normalizeModelCatalog),
     runtime: makeAcpDriver(name, runtimeProcess),
   };
 };
@@ -59,7 +58,7 @@ export const createClaudeAcpDriverRegistration = (
       command: input?.process?.command ?? "claude",
       args: input?.process?.args ?? [],
       env: input?.process?.env,
-      models: input?.models ?? DEFAULT_CLAUDE_MODELS,
+      models: Effect.succeed(input?.models ?? DEFAULT_CLAUDE_MODELS),
       description: "Claude ACP driver",
       modelFormat: "provider/model-id",
     },
@@ -79,7 +78,7 @@ export const createCodexAcpDriverRegistration = (
       command: input?.process?.command ?? "codex-acp",
       args: input?.process?.args ?? [],
       env: input?.process?.env,
-      models: input?.models ?? DEFAULT_CODEX_MODELS,
+      models: Effect.succeed(input?.models ?? DEFAULT_CODEX_MODELS),
       description: "Codex ACP driver",
       modelFormat: "provider/model-id",
     },
@@ -89,23 +88,16 @@ export const createCodexAcpDriverRegistration = (
 
 // --- Pi ACP ---
 
-const readPiEnabledModels = (homeDirectory?: string): ReadonlyArray<string> => {
+const readPiEnabledModels = (
+  homeDirectory?: string,
+): Effect.Effect<ReadonlyArray<string>, never> => {
   if (homeDirectory === undefined || homeDirectory.length === 0) {
-    return [];
+    return Effect.succeed([]);
   }
 
-  const settingsPath = join(homeDirectory, ".pi", "agent", "settings.json");
-
-  if (!existsSync(settingsPath)) {
-    return [];
-  }
-
-  try {
-    const raw = readFileSync(settingsPath, "utf8");
-    return parsePiSettingsModels(raw);
-  } catch {
-    return [];
-  }
+  return Effect.map(readPiSettingsFile(homeDirectory), (raw) =>
+    raw === undefined ? [] : parsePiSettingsModels(raw),
+  );
 };
 
 export const createPiAcpDriverRegistration = (
@@ -116,7 +108,10 @@ export const createPiAcpDriverRegistration = (
       command: input?.process?.command ?? "pi",
       args: input?.process?.args ?? ["acp"],
       env: input?.process?.env,
-      models: input?.models ?? readPiEnabledModels(input?.homeDirectory),
+      models:
+        input?.models === undefined
+          ? readPiEnabledModels(input?.homeDirectory)
+          : Effect.succeed(input.models),
       description: "Pi ACP driver",
       modelFormat: "provider/model-id",
     },

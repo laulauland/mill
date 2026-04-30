@@ -1,6 +1,7 @@
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
+import { now } from "./clock.js";
 import type { RunRegistry, RunRecord } from "./registry.js";
 import { formatElapsed, statusIcon, agentLabel } from "./format.js";
 import { scanRuns, cwdToSessionDir, getSessionsBase, cancelRunByPidFiles } from "./scanner.js";
@@ -219,7 +220,7 @@ export class FactoryMonitor implements Component {
 
   private formatRunLine(r: RunRecord, maxWidth: number): string {
     const t = this.theme;
-    const elapsed = formatElapsed((r.completedAt ?? Date.now()) - r.startedAt);
+    const elapsed = formatElapsed((r.completedAt ?? now()) - r.startedAt);
     const icon = this.coloredStatusIcon(r.status);
     const task = agentLabel(r);
     const agentCount = r.summary.results.length;
@@ -256,7 +257,7 @@ export class FactoryMonitor implements Component {
     lines.push(emptyRow());
     lines.push(row(t.fg("muted", "Task: ") + flat(agentLabel(run))));
 
-    const elapsed = formatElapsed((run.completedAt ?? Date.now()) - run.startedAt);
+    const elapsed = formatElapsed((run.completedAt ?? now()) - run.startedAt);
     lines.push(
       row(
         t.fg("muted", "Status: ") +

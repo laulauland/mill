@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { now as currentTimeMillis } from "./clock.js";
 import type { RunRecord } from "./registry.js";
 import { formatElapsed, statusIcon, agentLabel } from "./format.js";
 
@@ -62,7 +63,7 @@ export class FactoryWidget {
       return;
     }
 
-    const now = Date.now();
+    const now = currentTimeMillis();
 
     // Sort: running first, then most recent first
     const sorted = [...runs].sort((a, b) => {

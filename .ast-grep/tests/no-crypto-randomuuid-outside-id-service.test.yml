@@ -1,0 +1,9 @@
+id: no-crypto-randomuuid-outside-id-service
+valid:
+  - |
+    const id = yield* Ids.next;
+invalid:
+  - |
+    const id = crypto.randomUUID();
+  - |
+    const id = randomUUID();

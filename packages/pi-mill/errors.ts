@@ -32,7 +32,7 @@ export function toErrorDetails(error: unknown, fallback?: Partial<ErrorDetails>)
   if (error instanceof MillError) return error.details;
   return {
     code: fallback?.code ?? "RUNTIME",
-    message: error instanceof Error ? error.message : String(error),
+    message: String(error),
     recoverable: fallback?.recoverable ?? false,
     thread: fallback?.thread,
     meta: fallback?.meta,

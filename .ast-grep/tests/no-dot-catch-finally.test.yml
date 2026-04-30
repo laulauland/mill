@@ -1,0 +1,11 @@
+id: no-dot-catch-finally
+valid:
+  - |
+    const handled = Effect.catchAll(program, handle);
+  - |
+    const handled = Effect.catch(program, handle);
+invalid:
+  - |
+    promise.catch(handle);
+  - |
+    promise.finally(cleanup);

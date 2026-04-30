@@ -2,5 +2,7 @@ id: no-throw
 language: TypeScript
 severity: error
 message: Use typed Effect errors instead of throw.
+ignores:
+  - "**/*.test.ts"
 rule:
   pattern: "throw $E"

@@ -8,22 +8,24 @@ import {
 import * as FileSystem from "effect/FileSystem";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Schema from "effect/Schema";
-import { Effect, Option, Scope } from "effect";
+import { Cause, Data, Effect, Exit, Option, Scope } from "effect";
 import { ChildProcess } from "effect/unstable/process";
-import { readFileSync } from "node:fs";
 import {
   createMillRuntime,
   defineConfig,
   processDriver,
-  resolveConfig,
+  resolveConfigEffect,
   type DriverProcessConfig,
   type LaunchWorkerInput,
+  type ProcessControl,
+  type ResolvedConfig,
 } from "@mill/core";
 import {
   createClaudeAcpDriverRegistration,
   createCodexAcpDriverRegistration,
   createPiAcpDriverRegistration,
 } from "@mill/driver-acp";
+import { parseJson } from "./json.codec";
 
 interface CliIo {
   readonly stdout: (line: string) => void;
@@ -39,6 +41,10 @@ interface RunCliOptions {
   readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
   readonly io?: CliIo;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly argv?: ReadonlyArray<string>;
+  readonly executablePath?: string;
+  readonly pid?: number;
+  readonly processControl?: ProcessControl;
 }
 
 interface CliExit {
@@ -46,29 +52,20 @@ interface CliExit {
   readonly code: number;
 }
 
+class CliResolutionError extends Data.TaggedError("CliResolutionError")<{
+  readonly message: string;
+}> {}
+
 declare const __MILL_VERSION__: string | undefined;
 
-const readVersionFromPackageJson = (): string | undefined => {
-  try {
-    const packageJsonPath = new URL("../package.json", import.meta.url);
-    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as {
-      readonly version?: unknown;
-    };
+const readVersionFromPackageJson = (): string | undefined => undefined;
 
-    return typeof parsed.version === "string" && parsed.version.length > 0
-      ? parsed.version
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const resolveCliVersion = (): string => {
+const resolveCliVersion = (env: Readonly<Record<string, string | undefined>>): string => {
   if (typeof __MILL_VERSION__ === "string" && __MILL_VERSION__.length > 0) {
     return __MILL_VERSION__;
   }
 
-  const envVersion = process.env.MILL_VERSION ?? process.env.npm_package_version;
+  const envVersion = env.MILL_VERSION ?? env.npm_package_version;
 
   if (typeof envVersion === "string" && envVersion.length > 0) {
     return envVersion;
@@ -82,8 +79,6 @@ const resolveCliVersion = (): string => {
 
   return "0.0.0";
 };
-
-const CLI_VERSION = resolveCliVersion();
 
 const defaultIo: CliIo = {
   stdout: (line) => {
@@ -116,15 +111,19 @@ const parseStringArrayJson = (raw: string | undefined): ReadonlyArray<string> | 
     return undefined;
   }
 
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-
-    return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-  } catch {
+  const parsed = Effect.runSyncExit(
+    Effect.try({
+      try: () => parseJson(raw),
+      catch: (error) => new CliResolutionError({ message: formatUnknownError(error) }),
+    }),
+  );
+  if (Exit.isFailure(parsed)) {
     return undefined;
   }
+
+  return Array.isArray(parsed.value)
+    ? parsed.value.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
 };
 
 const parseStringRecordJson = (
@@ -134,29 +133,34 @@ const parseStringRecordJson = (
     return undefined;
   }
 
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return undefined;
-    }
-
-    const entries = Object.entries(parsed).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    );
-
-    return Object.fromEntries(entries);
-  } catch {
+  const parsed = Effect.runSyncExit(
+    Effect.try({
+      try: () => parseJson(raw),
+      catch: (error) => new CliResolutionError({ message: formatUnknownError(error) }),
+    }),
+  );
+  if (Exit.isFailure(parsed)) {
     return undefined;
   }
+
+  if (typeof parsed.value !== "object" || parsed.value === null || Array.isArray(parsed.value)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(parsed.value).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+
+  return Object.fromEntries(entries);
 };
 
-const normalizeAcpCommand = (command: string): string =>
-  command === "bun" ? process.execPath : command;
+const normalizeAcpCommand = (command: string, executablePath: string): string =>
+  command === "bun" ? executablePath : command;
 
 const readAcpProcessOverride = (
   env: Readonly<Record<string, string | undefined>>,
   prefix: "MILL_PI_ACP" | "MILL_CLAUDE_ACP" | "MILL_CODEX_ACP",
+  executablePath: string,
 ): DriverProcessConfig | undefined => {
   const command = normalizeOptionalText(env[`${prefix}_COMMAND`] ?? env.MILL_ACP_COMMAND);
 
@@ -166,17 +170,20 @@ const readAcpProcessOverride = (
 
   const args = parseStringArrayJson(env[`${prefix}_ARGS_JSON`] ?? env.MILL_ACP_ARGS_JSON) ?? [];
   const configuredEnv = parseStringRecordJson(env[`${prefix}_ENV_JSON`] ?? env.MILL_ACP_ENV_JSON);
-  const pathEnv = normalizeOptionalText(env.PATH ?? process.env.PATH);
+  const pathEnv = normalizeOptionalText(env.PATH);
   const processEnv = pathEnv === undefined ? configuredEnv : { ...configuredEnv, PATH: pathEnv };
 
   return {
-    command: normalizeAcpCommand(command),
+    command: normalizeAcpCommand(command, executablePath),
     args,
     env: processEnv,
   } satisfies DriverProcessConfig;
 };
 
-const createDefaultConfig = (env: Readonly<Record<string, string | undefined>>) =>
+const createDefaultConfig = (
+  env: Readonly<Record<string, string | undefined>>,
+  executablePath: string,
+) =>
   defineConfig({
     defaultDriver: "",
     defaultExecutor: "direct",
@@ -184,18 +191,18 @@ const createDefaultConfig = (env: Readonly<Record<string, string | undefined>>) 
     drivers: {
       pi: processDriver(
         createPiAcpDriverRegistration({
-          process: readAcpProcessOverride(env, "MILL_PI_ACP"),
+          process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
           homeDirectory: normalizeOptionalText(env.HOME),
         }),
       ),
       claude: processDriver(
         createClaudeAcpDriverRegistration({
-          process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP"),
+          process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
         }),
       ),
       codex: processDriver(
         createCodexAcpDriverRegistration({
-          process: readAcpProcessOverride(env, "MILL_CODEX_ACP"),
+          process: readAcpProcessOverride(env, "MILL_CODEX_ACP", executablePath),
         }),
       ),
     },
@@ -209,11 +216,29 @@ const createDefaultConfig = (env: Readonly<Record<string, string | undefined>>) 
     },
   });
 
-const resolveDefaults = (options: RunCliOptions) => createDefaultConfig(options.env ?? process.env);
+const resolveDefaults = (options: RunCliOptions) => {
+  if (options.executablePath === undefined) {
+    return undefined;
+  }
+
+  return createDefaultConfig(options.env ?? {}, options.executablePath);
+};
+
+const requireDefaults = (options: RunCliOptions): ReturnType<typeof createDefaultConfig> =>
+  resolveDefaults(options) ?? createDefaultConfig(options.env ?? {}, "bun");
 
 const runWithBunServices = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices>,
 ): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
+
+const pathIsAccessible = (
+  fileSystem: FileSystem.FileSystem,
+  path: string,
+): Effect.Effect<boolean> =>
+  fileSystem.access(path).pipe(
+    Effect.as(true),
+    Effect.catch(() => Effect.succeed(false)),
+  );
 
 const millBinPath = decodeURIComponent(new URL("./mill.ts", import.meta.url).pathname);
 
@@ -277,7 +302,7 @@ const resolveScriptEntrypointFromArgv = (argv: ReadonlyArray<string>): string | 
 
 const isBunExecutablePath = (executablePath: string): boolean => {
   const normalized = executablePath.replaceAll("\\", "/").toLowerCase();
-  return normalized.endsWith("/bun") || normalized.endsWith("/bun.exe");
+  return normalized === "bun" || normalized.endsWith("/bun") || normalized.endsWith("/bun.exe");
 };
 
 const buildWorkerCommandArguments = (
@@ -313,36 +338,41 @@ const buildWorkerCommandArguments = (
 
 const launchDetachedWorker = async (
   input: LaunchWorkerInput,
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  bootstrap: {
+    readonly env: Readonly<Record<string, string | undefined>>;
+    readonly argv: ReadonlyArray<string>;
+    readonly executablePath: string;
+    readonly extendEnv: boolean;
+  },
 ): Promise<void> => {
   await runWithBunServices(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const scriptEntrypointCandidate = resolveScriptEntrypointFromArgv(process.argv);
+      const scriptEntrypointCandidate = resolveScriptEntrypointFromArgv(bootstrap.argv);
       const scriptEntrypoint =
         scriptEntrypointCandidate !== undefined &&
-        (yield* fileSystem.exists(scriptEntrypointCandidate))
+        (yield* pathIsAccessible(fileSystem, scriptEntrypointCandidate))
           ? scriptEntrypointCandidate
           : undefined;
-      const hasSourceEntrypoint = yield* fileSystem.exists(millBinPath);
+      const hasSourceEntrypoint = yield* pathIsAccessible(fileSystem, millBinPath);
       const workerEnv = Object.fromEntries(
         Object.entries({
-          ...env,
+          ...bootstrap.env,
           [RUN_DEPTH_ENV]: String(input.runDepth),
         }).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
       );
 
       const workerCommand = ChildProcess.make(
-        process.execPath,
+        bootstrap.executablePath,
         buildWorkerCommandArguments(input, {
-          isBunRuntime: isBunExecutablePath(process.execPath),
+          isBunRuntime: isBunExecutablePath(bootstrap.executablePath),
           hasSourceEntrypoint,
           scriptEntrypoint,
         }),
         {
           cwd: input.cwd,
           env: workerEnv,
-          extendEnv: false,
+          extendEnv: bootstrap.extendEnv,
           stdin: "ignore",
           stdout: "ignore",
           stderr: "ignore",
@@ -393,8 +423,11 @@ const toCliEffect = (program: Promise<number>) =>
   );
 
 const formatUnknownError = (error: unknown): string => {
-  if (error instanceof Error) {
-    return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") {
+      return message;
+    }
   }
 
   return String(error);
@@ -405,7 +438,7 @@ type ActiveDriverSource = "flag" | "config" | "harness";
 interface ActiveDriverResolution {
   readonly name: string;
   readonly source: ActiveDriverSource;
-  readonly resolvedConfig: Awaited<ReturnType<typeof resolveConfig>>;
+  readonly resolvedConfig: ResolvedConfig;
 }
 
 const normalizeNonEmptyText = (value: string | undefined): string | undefined => {
@@ -449,69 +482,85 @@ const sourceLabel = (source: ActiveDriverSource): string => {
 
 const resolveActiveDriverSelection = (
   requestedDriverName: string | undefined,
-  resolvedConfig: Awaited<ReturnType<typeof resolveConfig>>,
+  resolvedConfig: ResolvedConfig,
   env: Readonly<Record<string, string | undefined>>,
-): Omit<ActiveDriverResolution, "resolvedConfig"> => {
-  const requested = normalizeNonEmptyText(requestedDriverName);
-  const configured = normalizeNonEmptyText(resolvedConfig.config.defaultDriver);
-  const inferred = inferHarnessDriver(env);
+): Effect.Effect<Omit<ActiveDriverResolution, "resolvedConfig">, CliResolutionError> =>
+  Effect.gen(function* () {
+    const requested = normalizeNonEmptyText(requestedDriverName);
+    const configured = normalizeNonEmptyText(resolvedConfig.config.defaultDriver);
+    const inferred = inferHarnessDriver(env);
 
-  const source: ActiveDriverSource | undefined =
-    requested !== undefined
-      ? "flag"
-      : configured !== undefined
-        ? "config"
-        : inferred !== undefined
-          ? "harness"
-          : undefined;
-  const selected = requested ?? configured ?? inferred;
-  const available = Object.keys(resolvedConfig.config.drivers).sort((left, right) =>
-    left.localeCompare(right),
-  );
-
-  if (selected === undefined || source === undefined) {
-    throw new Error(
-      "Unable to resolve active driver. Provide --driver <name>, set defaultDriver in mill.config.ts, or run from a supported harness (CLAUDECODE=1 => claude, CODEX_THREAD_ID/CODEX_SANDBOX/CODEX_SANDBOX_NETWORK_DISABLED => codex).",
+    const source: ActiveDriverSource | undefined =
+      requested !== undefined
+        ? "flag"
+        : configured !== undefined
+          ? "config"
+          : inferred !== undefined
+            ? "harness"
+            : undefined;
+    const selected = requested ?? configured ?? inferred;
+    const available = Object.keys(resolvedConfig.config.drivers).sort((left, right) =>
+      left.localeCompare(right),
     );
-  }
 
-  if (!available.includes(selected)) {
-    const renderedAvailable = available.length > 0 ? available.join(", ") : "(none)";
+    if (selected === undefined || source === undefined) {
+      return yield* Effect.fail(
+        new CliResolutionError({
+          message:
+            "Unable to resolve active driver. Provide --driver <name>, set defaultDriver in mill.config.ts, or run from a supported harness (CLAUDECODE=1 => claude, CODEX_THREAD_ID/CODEX_SANDBOX/CODEX_SANDBOX_NETWORK_DISABLED => codex).",
+        }),
+      );
+    }
 
-    throw new Error(
-      `Resolved active driver '${selected}' from ${sourceLabel(source)} is unavailable. Available drivers: ${renderedAvailable}.`,
-    );
-  }
+    if (!available.includes(selected)) {
+      const renderedAvailable = available.length > 0 ? available.join(", ") : "(none)";
 
-  return {
-    name: selected,
-    source,
-  };
-};
+      return yield* Effect.fail(
+        new CliResolutionError({
+          message: `Resolved active driver '${selected}' from ${sourceLabel(source)} is unavailable. Available drivers: ${renderedAvailable}.`,
+        }),
+      );
+    }
 
-const resolveActiveDriver = async (
-  options: RunCliOptions,
-  requestedDriverName: string | undefined,
-): Promise<ActiveDriverResolution> => {
-  const resolvedConfig = await resolveConfig({
-    defaults: resolveDefaults(options),
+    return {
+      name: selected,
+      source,
+    };
+  });
+
+const resolveConfigForCli = (options: RunCliOptions) =>
+  resolveConfigEffect({
+    defaults: requireDefaults(options),
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
+    env: options.env,
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
   });
 
-  const selection = resolveActiveDriverSelection(
-    requestedDriverName,
-    resolvedConfig,
-    options.env ?? process.env,
-  );
+const resolveActiveDriverEffect = (
+  options: RunCliOptions,
+  requestedDriverName: string | undefined,
+): Effect.Effect<ActiveDriverResolution, unknown, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const resolvedConfig = yield* resolveConfigForCli(options);
+    const selection = yield* resolveActiveDriverSelection(
+      requestedDriverName,
+      resolvedConfig,
+      options.env ?? {},
+    );
 
-  return {
-    ...selection,
-    resolvedConfig,
-  };
-};
+    return {
+      ...selection,
+      resolvedConfig,
+    };
+  });
+
+const resolveActiveDriver = (
+  options: RunCliOptions,
+  requestedDriverName: string | undefined,
+): Promise<ActiveDriverResolution> =>
+  runWithBunServices(resolveActiveDriverEffect(options, requestedDriverName));
 
 const createCliRuntime = (
   options: RunCliOptions,
@@ -526,12 +575,15 @@ const createCliRuntime = (
     defaults: activeDriver.resolvedConfig.config,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
+    env: options.env,
+    executablePath: options.executablePath,
     runsDirectory: input.runsDirectory ?? options.runsDirectory,
     driverName: activeDriver.name,
     executorName: input.executorName,
     pathExists: options.pathExists,
     loadConfigModule: options.loadConfigModule,
     launchWorker: input.launchWorker,
+    processControl: options.processControl,
   });
 
 interface RunCommandInput {
@@ -553,12 +605,19 @@ const runCommand = async (
   let metadata: Readonly<Record<string, string>> | undefined;
 
   if (metadataText !== undefined) {
-    try {
-      metadata = parseMetadataJson(metadataText);
-    } catch (error) {
-      io.stderr(`Invalid --meta-json payload: ${formatUnknownError(error)}`);
+    const decodedMetadata = Effect.runSyncExit(
+      Effect.try({
+        try: () => parseMetadataJson(metadataText),
+        catch: (error) => error,
+      }),
+    );
+
+    if (Exit.isFailure(decodedMetadata)) {
+      io.stderr(`Invalid --meta-json payload: ${Cause.pretty(decodedMetadata.cause)}`);
       return 1;
     }
+
+    metadata = decodedMetadata.value;
   }
 
   const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
@@ -567,7 +626,14 @@ const runCommand = async (
     runsDirectory: fromOption(command.runsDir),
     executorName: fromOption(command.executor),
     launchWorker:
-      options.launchWorker ?? ((input) => launchDetachedWorker(input, options.env ?? process.env)),
+      options.launchWorker ??
+      ((input) =>
+        launchDetachedWorker(input, {
+          env: options.env ?? {},
+          argv: options.argv ?? [],
+          executablePath: options.executablePath ?? "bun",
+          extendEnv: options.executablePath === undefined,
+        })),
   });
   const run = runtime
     .run({
@@ -640,6 +706,7 @@ const workerCommand = async (
   const output = await runtime.worker({
     runId: command.runId,
     programPath: command.program,
+    workerPid: options.pid,
   });
 
   if (command.json) {
@@ -668,8 +735,8 @@ const initCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const cwd = options.cwd ?? process.cwd();
-  const homeDirectory = options.homeDirectory ?? process.env.HOME;
+  const cwd = options.cwd ?? ".";
+  const homeDirectory = options.homeDirectory ?? normalizeOptionalText(options.env?.HOME);
 
   if (command.global && (homeDirectory === undefined || homeDirectory.length === 0)) {
     io.stderr("Unable to resolve home directory for --global init.");
@@ -1080,8 +1147,8 @@ const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string 
   ].join("\n");
 };
 
-const buildHelpText = (helpContext: ResolvedHelpContext): string =>
-  `mill ${CLI_VERSION} - orchestration runtime for AI agents
+const buildHelpText = (helpContext: ResolvedHelpContext, version: string): string =>
+  `mill ${version} - orchestration runtime for AI agents
 
 Usage: mill <command> [options]
 
@@ -1176,77 +1243,73 @@ const extractDriverOverride = (argv: ReadonlyArray<string>): string | undefined 
   return undefined;
 };
 
-const resolveHelpContextForHelp = async (
+const resolveHelpContextForHelp = (
   options: RunCliOptions,
   selectedDriverName?: string,
-): Promise<ResolvedHelpContext> => {
-  let authoring: ResolvedAuthoringHelp = {
-    source: "static",
-  };
+): Promise<ResolvedHelpContext> =>
+  runWithBunServices(
+    Effect.gen(function* () {
+      const resolvedConfig = yield* resolveConfigForCli(options);
 
-  try {
-    const resolvedConfig = await resolveConfig({
-      defaults: resolveDefaults(options),
-      cwd: options.cwd,
-      homeDirectory: options.homeDirectory,
-      pathExists: options.pathExists,
-      loadConfigModule: options.loadConfigModule,
-    });
+      const instructions = resolvedConfig.config.authoring.instructions;
+      const hasAuthoringOverride =
+        resolvedConfig.source !== "defaults" &&
+        instructions !== requireDefaults(options).authoring.instructions;
+      const authoring: ResolvedAuthoringHelp = hasAuthoringOverride
+        ? {
+            source: "config",
+            instructions,
+          }
+        : {
+            source: "static",
+          };
 
-    const instructions = resolvedConfig.config.authoring.instructions;
-    const hasAuthoringOverride =
-      resolvedConfig.source !== "defaults" &&
-      instructions !== resolveDefaults(options).authoring.instructions;
-
-    authoring = hasAuthoringOverride
-      ? {
-          source: "config",
-          instructions,
-        }
-      : {
-          source: "static",
-        };
-
-    const activeDriver = resolveActiveDriverSelection(
-      selectedDriverName,
-      resolvedConfig,
-      options.env ?? process.env,
-    );
-    const registration = resolvedConfig.config.drivers[activeDriver.name];
-
-    if (registration === undefined) {
-      throw new Error(
-        `Resolved active driver '${activeDriver.name}' from ${sourceLabel(activeDriver.source)} is unavailable.`,
+      const activeDriver = yield* resolveActiveDriverSelection(
+        selectedDriverName,
+        resolvedConfig,
+        options.env ?? {},
       );
-    }
+      const registration = resolvedConfig.config.drivers[activeDriver.name];
 
-    const models = await Effect.runPromise(
-      Effect.map(registration.models, (catalog) => Array.from(new Set(catalog))),
-    );
+      if (registration === undefined) {
+        return yield* Effect.fail(
+          new CliResolutionError({
+            message: `Resolved active driver '${activeDriver.name}' from ${sourceLabel(activeDriver.source)} is unavailable.`,
+          }),
+        );
+      }
 
-    return {
-      authoring,
-      modelCatalog: {
-        source: "resolved",
-        entries: [
-          {
-            driverName: activeDriver.name,
-            modelFormat: registration.modelFormat,
-            models,
+      const models = yield* Effect.map(registration.models, (catalog) =>
+        Array.from(new Set(catalog)),
+      );
+
+      return {
+        authoring,
+        modelCatalog: {
+          source: "resolved",
+          entries: [
+            {
+              driverName: activeDriver.name,
+              modelFormat: registration.modelFormat,
+              models,
+            },
+          ],
+        },
+      } satisfies ResolvedHelpContext;
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed({
+          authoring: {
+            source: "static",
           },
-        ],
-      },
-    };
-  } catch (error) {
-    return {
-      authoring,
-      modelCatalog: {
-        source: "unavailable",
-        message: formatUnknownError(error),
-      },
-    };
-  }
-};
+          modelCatalog: {
+            source: "unavailable",
+            message: formatUnknownError(error),
+          },
+        } satisfies ResolvedHelpContext),
+      ),
+    ),
+  );
 
 const createCliHelpFormatter = (): CliOutput.Formatter => {
   const defaultFormatter = CliOutput.defaultFormatter({ colors: false });
@@ -1271,13 +1334,14 @@ export const runCli = async (
 ): Promise<number> => {
   const resolvedOptions = options ?? {};
   const io = resolvedOptions.io ?? defaultIo;
+  const cliVersion = resolveCliVersion(resolvedOptions.env ?? {});
 
   if (isHelpRequest(argv)) {
     const helpContext = await resolveHelpContextForHelp(
       resolvedOptions,
       extractDriverOverride(argv),
     );
-    io.stdout(buildHelpText(helpContext));
+    io.stdout(buildHelpText(helpContext, cliVersion));
     return 0;
   }
 
@@ -1288,7 +1352,7 @@ export const runCli = async (
 
   const command = createCli(resolvedOptions, io);
   const run = CliCommand.runWith(command, {
-    version: CLI_VERSION,
+    version: cliVersion,
   });
 
   const codeEffect = run(argv).pipe(

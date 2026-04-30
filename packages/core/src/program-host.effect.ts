@@ -24,6 +24,7 @@ export interface ExecuteProgramInProcessHostInput {
   readonly programPath: string;
   readonly programSource: string;
   readonly executorName: string;
+  readonly executablePath?: string;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly env?: Readonly<Record<string, string>>;
   readonly task: (input: TaskInput) => Effect.Effect<TaskResult, unknown>;
@@ -66,16 +67,10 @@ const isBunExecutable = (path: string): boolean => {
   return name === "bun" || name.startsWith("bun-") || name.startsWith("bun.");
 };
 
-const resolveProgramHostExecutable = (): string =>
-  isBunExecutable(process.execPath) ? process.execPath : "bun";
+const resolveProgramHostExecutable = (executablePath: string | undefined): string =>
+  executablePath !== undefined && isBunExecutable(executablePath) ? executablePath : "bun";
 
-const toMessage = (error: unknown): string => {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-};
+const toMessage = (error: unknown): string => String(error);
 
 const buildExtensionApiLookup = (
   extensions: ReadonlyArray<ExtensionRegistration>,
@@ -117,6 +112,10 @@ const splitProgramImports = (
   };
 };
 
+// Guardrail exception: this function emits the isolated child runtime protocol edge.
+// The generated JavaScript intentionally uses Promise and try/catch because it runs
+// outside Effect in the spawned Bun process and must translate all failures into
+// explicit parent/child protocol messages before exiting.
 const createProgramHostSource = (
   input: Pick<ExecuteProgramInProcessHostInput, "executorName" | "programSource" | "extensions">,
 ): string => {
@@ -159,7 +158,7 @@ const createProgramHostSource = (
     "  }",
     '  if (snapshot.status === "failed") {',
     "    controller.terminal = true;",
-    '    controller.rejectDone(new Error(String(snapshot.error ?? "task failed")));',
+    '    controller.rejectDone(String(snapshot.error ?? "task failed"));',
     "  }",
     "};",
     "",
@@ -172,7 +171,7 @@ const createProgramHostSource = (
     "      pending.resolve(message.value);",
     "      return;",
     "    }",
-    '    pending.reject(new Error(String(message.message ?? "program host request failed")));',
+    '    pending.reject(String(message.message ?? "program host request failed"));',
     "    return;",
     "  }",
     "",
@@ -193,7 +192,7 @@ const createProgramHostSource = (
     "    const controller = __millTaskControllers.get(message.taskId);",
     "    if (controller === undefined || controller.terminal) return;",
     "    controller.terminal = true;",
-    '    controller.rejectDone(new Error(String(message.message ?? "task failed")));',
+    '    controller.rejectDone(String(message.message ?? "task failed"));',
     "  }",
     "};",
     "",
@@ -216,9 +215,16 @@ const createProgramHostSource = (
     "    }",
     "",
     "    try {",
-    "      __millResolveParentMessage(JSON.parse(line));",
-    "    } catch (_error) {",
-    "      // Ignore malformed parent messages.",
+    "      const parsed = JSON.parse(line);",
+    '      if (parsed === null || typeof parsed !== "object" || typeof parsed.kind !== "string") {',
+    '        __millSend({ kind: "result", ok: false, message: "Malformed parent protocol message." });',
+    "        process.exitCode = 1;",
+    "        continue;",
+    "      }",
+    "      __millResolveParentMessage(parsed);",
+    "    } catch (error) {",
+    '      __millSend({ kind: "result", ok: false, message: `Malformed parent protocol JSON: ${String(error)}` });',
+    "      process.exitCode = 1;",
     "    }",
     "  }",
     "});",
@@ -264,11 +270,15 @@ const createProgramHostSource = (
     "  const controller = { listeners, snapshot, terminal, resolveDone, rejectDone };",
     "  __millTaskControllers.set(taskId, controller);",
     "  const publishLocal = (next) => __millPublishTaskSnapshot(taskId, next);",
-    '  __millCallHost({ requestType: "task:create", taskId, input }).catch((error) => {',
-    "    terminal = true;",
-    '    publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
-    "    rejectDone(error);",
-    "  });",
+    "  void (async () => {",
+    "    try {",
+    '      await __millCallHost({ requestType: "task:create", taskId, input });',
+    "    } catch (error) {",
+    "      terminal = true;",
+    '      publishLocal({ ...snapshot, status: "failed", error: String(error) });',
+    "      rejectDone(error);",
+    "    }",
+    "  })();",
     "  const actor = {",
     "    id: taskId,",
     '    ref: { runId: "program-host", taskId },',
@@ -276,30 +286,42 @@ const createProgramHostSource = (
     "    start: () => {",
     "      if (started || terminal) return actor;",
     "      started = true;",
-    '      __millCallHost({ requestType: "task:start", taskId }).catch((error) => {',
-    "        terminal = true;",
-    '        publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
-    "        rejectDone(error);",
-    "      });",
+    "      void (async () => {",
+    "        try {",
+    '          await __millCallHost({ requestType: "task:start", taskId });',
+    "        } catch (error) {",
+    "          terminal = true;",
+    '          publishLocal({ ...snapshot, status: "failed", error: String(error) });',
+    "          rejectDone(error);",
+    "        }",
+    "      })();",
     "      return actor;",
     "    },",
     '    stop: () => actor.cancel("Task stopped"),',
     "    cancel: (reason) => {",
     "      if (terminal) return actor;",
-    '      __millCallHost({ requestType: "task:cancel", taskId, reason }).catch((error) => {',
-    "        terminal = true;",
-    '        publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
-    "        rejectDone(error);",
-    "      });",
+    "      void (async () => {",
+    "        try {",
+    '          await __millCallHost({ requestType: "task:cancel", taskId, reason });',
+    "        } catch (error) {",
+    "          terminal = true;",
+    '          publishLocal({ ...snapshot, status: "failed", error: String(error) });',
+    "          rejectDone(error);",
+    "        }",
+    "      })();",
     "      return actor;",
     "    },",
     "    send: (command) => {",
     "      if (terminal) return actor;",
-    '      __millCallHost({ requestType: "task:send", taskId, command }).catch((error) => {',
-    "        terminal = true;",
-    '        publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
-    "        rejectDone(error);",
-    "      });",
+    "      void (async () => {",
+    "        try {",
+    '          await __millCallHost({ requestType: "task:send", taskId, command });',
+    "        } catch (error) {",
+    "          terminal = true;",
+    '          publishLocal({ ...snapshot, status: "failed", error: String(error) });',
+    "          rejectDone(error);",
+    "        }",
+    "      })();",
     "      return actor;",
     "    },",
     "    subscribe: (listener) => {",
@@ -351,7 +373,7 @@ const createProgramHostSource = (
     "    __millSend({",
     '      kind: "result",',
     "      ok: false,",
-    "      message: error instanceof Error ? error.message : String(error),",
+    "      message: String(error),",
     "    });",
     "  } finally {",
     '    process.stdin.removeAllListeners("data");',
@@ -456,7 +478,7 @@ export const executeProgramInProcessHost = (
           }),
       );
 
-      const programHostExecutable = resolveProgramHostExecutable();
+      const programHostExecutable = resolveProgramHostExecutable(input.executablePath);
       const command = ChildProcess.make(programHostExecutable, ["run", hostProgramPath], {
         cwd: input.workingDirectory,
         env: input.env,
@@ -536,7 +558,14 @@ export const executeProgramInProcessHost = (
                 runId: input.runId,
                 message,
               });
-              yield* Effect.ignore(processHandle.kill({ killSignal: "SIGTERM" }));
+              yield* processHandle.kill({ killSignal: "SIGTERM" }).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("mill.program-host:kill-after-malformed-payload-failed", {
+                    runId: input.runId,
+                    error,
+                  }),
+                ),
+              );
               return;
             }
 

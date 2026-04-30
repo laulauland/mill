@@ -60,13 +60,7 @@ export interface MakeRunStoreInput {
 const joinPath = (base: string, child: string): string =>
   base.endsWith("/") ? `${base}${child}` : `${base}/${child}`;
 
-const toMessage = (error: unknown): string => {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-};
+const toMessage = (error: unknown): string => String(error);
 
 const mapPersistenceError = (path: string) =>
   Effect.mapError((error: unknown) => new PersistenceError({ path, message: toMessage(error) }));
@@ -223,16 +217,16 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
   listRuns: (status) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const runsDirectoryExists = yield* mapPersistenceError(input.runsDirectory)(
-        fileSystem.exists(input.runsDirectory),
-      );
-
-      if (!runsDirectoryExists) {
-        return [];
-      }
-
-      const runDirectories = yield* mapPersistenceError(input.runsDirectory)(
-        fileSystem.readDirectory(input.runsDirectory),
+      const runDirectories = yield* fileSystem.readDirectory(input.runsDirectory).pipe(
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logWarning("mill.run-store:list-runs-directory-unavailable", {
+              path: input.runsDirectory,
+              error,
+            }),
+            [] as ReadonlyArray<string>,
+          ),
+        ),
       );
 
       const loadedRuns = yield* Effect.forEach(

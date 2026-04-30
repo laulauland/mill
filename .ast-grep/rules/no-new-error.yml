@@ -1,0 +1,10 @@
+id: no-new-error
+language: TypeScript
+severity: error
+message: Use tagged domain errors instead of constructing Error directly.
+ignores:
+  - "**/*.test.ts"
+rule:
+  any:
+    - pattern: "new Error($$$A)"
+    - pattern: "Error($$$A)"

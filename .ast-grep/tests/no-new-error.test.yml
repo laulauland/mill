@@ -1,0 +1,9 @@
+id: no-new-error
+valid:
+  - |
+    const error = { _tag: "ExampleError", message };
+invalid:
+  - |
+    const error = new Error("boom");
+  - |
+    const error = Error("boom");

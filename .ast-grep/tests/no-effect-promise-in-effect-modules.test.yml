@@ -1,0 +1,13 @@
+id: no-effect-promise-in-effect-modules
+valid:
+  - |
+    const program = Effect.succeed(value);
+invalid:
+  - |
+    const value = Effect.runPromise(program);
+  - |
+    const value = new Promise((resolve) => resolve(1));
+  - |
+    const value = Promise.resolve(1);
+  - |
+    const value = Promise.reject(error);

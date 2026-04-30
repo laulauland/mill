@@ -1,6 +1,6 @@
 import * as FileSystem from "effect/FileSystem";
 import * as BunServices from "@effect/platform-bun/BunServices";
-import { Effect } from "effect";
+import { Data, Effect, Exit } from "effect";
 import type {
   ConfigFileOverrides,
   DriverRegistration,
@@ -12,6 +12,12 @@ import type {
 const CONFIG_FILE_NAME = "mill.config.ts";
 const HOME_CONFIG_PATH = ".mill/config.ts";
 
+class ConfigLoaderError extends Data.TaggedError("ConfigLoaderError")<{
+  readonly operation: "pathExists" | "loadConfigModule";
+  readonly path: string;
+  readonly cause: unknown;
+}> {}
+
 const runWithBunServices = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices>,
 ): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
@@ -21,7 +27,8 @@ const defaultPathExistsEffect = (
 ): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    return yield* fileSystem.exists(path);
+    const exists = yield* Effect.exit(fileSystem.access(path));
+    return Exit.isSuccess(exists);
   });
 
 const normalizePath = (path: string): string => {
@@ -216,11 +223,12 @@ const toModuleSpecifier = (path: string, cwd: string): string => {
   return new URL(path, `file://${normalizePath(cwd)}/`).href;
 };
 
-const defaultLoadConfigModule = async (path: string): Promise<unknown> => {
-  const moduleSpecifier = toModuleSpecifier(path, process.cwd());
-  // ast-grep-ignore: no-dynamic-import
-  return import(moduleSpecifier);
-};
+const defaultLoadConfigModule =
+  (cwd: string) =>
+  async (path: string): Promise<unknown> => {
+    const moduleSpecifier = toModuleSpecifier(path, cwd);
+    return import(moduleSpecifier);
+  };
 
 const extractConfigFromModule = (moduleValue: unknown): ConfigFileOverrides | undefined => {
   if (!isRecord(moduleValue)) {
@@ -272,14 +280,18 @@ export const resolveConfigEffect = (
   options: ResolveConfigOptions,
 ): Effect.Effect<ResolvedConfig, unknown, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    const cwd = options.cwd ?? process.cwd();
-    const homeDirectory = options.homeDirectory ?? process.env.HOME;
+    const cwd = options.cwd ?? ".";
+    const homeDirectory = options.homeDirectory ?? options.env?.HOME;
     const customPathExists = options.pathExists;
     const pathExists =
       customPathExists === undefined
         ? defaultPathExistsEffect
-        : (path: string) => Effect.promise(() => customPathExists(path));
-    const loadConfigModule = options.loadConfigModule ?? defaultLoadConfigModule;
+        : (path: string) =>
+            Effect.tryPromise({
+              try: () => customPathExists(path),
+              catch: (cause) => new ConfigLoaderError({ operation: "pathExists", path, cause }),
+            });
+    const loadConfigModule = options.loadConfigModule ?? defaultLoadConfigModule(cwd);
 
     const resolvedPath = yield* resolveConfigPathEffect(cwd, homeDirectory, pathExists);
 
@@ -290,7 +302,15 @@ export const resolveConfigEffect = (
       };
     }
 
-    const loadedModule = yield* Effect.promise(() => loadConfigModule(resolvedPath.path));
+    const loadedModule = yield* Effect.tryPromise({
+      try: () => loadConfigModule(resolvedPath.path),
+      catch: (cause) =>
+        new ConfigLoaderError({
+          operation: "loadConfigModule",
+          path: resolvedPath.path,
+          cause,
+        }),
+    });
     const loadedConfig = extractConfigFromModule(loadedModule);
 
     return {

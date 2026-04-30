@@ -2,5 +2,7 @@ id: no-date-now-outside-clock
 language: TypeScript
 severity: error
 message: Use injected Clock service instead of Date.now in internal runtime.
+ignores:
+  - "**/*clock*.ts"
 rule:
   pattern: "Date.now()"

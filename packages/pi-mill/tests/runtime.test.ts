@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildMillProgramSource, buildMillTaskPayload, inferMillDriverFromModel } from "../runtime";
+import {
+  buildMillProgramSource,
+  buildMillTaskPayload,
+  inferMillDriverFromModel,
+} from "../runtime.adapter";
 
 describe("pi-mill runtime program generation", () => {
   test("generates core-compatible task payload with provider agent and role", () => {

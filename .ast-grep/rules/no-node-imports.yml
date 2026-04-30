@@ -1,12 +1,17 @@
 id: no-node-imports
 language: TypeScript
 severity: error
-message: "Direct node: imports are disallowed in application source modules."
+message: "Direct node: imports are disallowed outside explicit final-boundary adapter modules."
 files:
   - "**/src/**/*.ts"
+  - "packages/pi-mill/**/*.ts"
 ignores:
   - "**/*.test.ts"
   - "**/*.spec.ts"
+  - "packages/core/src/run-platform.adapter.ts"
+  - "packages/pi-mill/runtime.adapter.ts"
+  - "packages/pi-mill/.vendor/**"
+  - "packages/pi-mill/.pi-skills/**"
 rule:
   any:
     - pattern: 'import $$$A from "$MODULE"'
@@ -14,4 +19,4 @@ rule:
     - pattern: 'import "$MODULE"'
 constraints:
   MODULE:
-    regex: "^node:"
+    regex: "^(node:|fs$|path$|os$|url$|child_process$)"

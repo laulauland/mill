@@ -1,50 +1,70 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import {
+  homeDirectory,
+  path,
+  pathExists,
+  provideFileSystem,
+  readTextFile,
+  writeTextFile,
+} from "./platform.adapter.js";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { keyHint } from "@mariozechner/pi-coding-agent";
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { now } from "./clock.js";
+import { Config, ConfigProvider, Deferred, Effect, Exit, Option } from "effect";
+import { parseJson } from "./json.codec.js";
+import { randomToken } from "./random.js";
 import { SubagentSchema, validateParams } from "./contract.js";
 import { toErrorDetails } from "./errors.js";
 import { ObservabilityStore } from "./observability.js";
 import { RunRegistry } from "./registry.js";
-import { confirmExecution, executeProgram } from "./executors/program-executor.js";
+import { confirmExecution, executeProgram } from "./executors/program-executor.adapter.js";
 import { FactoryWidget } from "./widget.js";
 import { FactoryMonitor } from "./monitor.js";
 import { cwdToSessionDir, getSessionsBase, scanRuns } from "./scanner.js";
 import { registerMessageRenderer, notifyCompletion } from "./notify.js";
 import type { RunSummary } from "./types.js";
 
+const runObservedUiOperation = (
+  operation: Effect.Effect<void, unknown, never>,
+  label: string,
+): void => {
+  const result = Effect.runSyncExit(operation);
+  if (Exit.isFailure(result)) {
+    console.warn(`pi-mill UI operation failed: ${label}`);
+  }
+};
+
 function writeRunJson(summary: RunSummary): void {
   const dir = summary.observability?.artifactsDir;
   if (!dir) return;
-  try {
-    const data = {
-      runId: summary.runId,
-      status: summary.status,
-      task: (summary.metadata as any)?.task,
-      mill: {
-        command: (summary.metadata as any)?.millCommand,
-        args: (summary.metadata as any)?.millArgs,
-        runsDir: (summary.metadata as any)?.millRunsDir,
-      },
-      startedAt: summary.observability?.startedAt,
-      completedAt: summary.observability?.endedAt ?? Date.now(),
-      results: summary.results.map((r) => ({
-        agent: r.agent,
-        task: r.task,
-        model: r.model,
-        exitCode: r.exitCode,
-        text: r.text,
-        childRunId: r.childRunId,
-        sessionPath: r.sessionPath,
-        usage: r.usage,
-      })),
-      error: summary.error,
-    };
-    fs.writeFileSync(path.join(dir, "run.json"), JSON.stringify(data, null, 2));
-  } catch {}
+  const data = {
+    runId: summary.runId,
+    status: summary.status,
+    task: (summary.metadata as any)?.task,
+    mill: {
+      command: (summary.metadata as any)?.millCommand,
+      args: (summary.metadata as any)?.millArgs,
+      runsDir: (summary.metadata as any)?.millRunsDir,
+    },
+    startedAt: summary.observability?.startedAt,
+    completedAt: summary.observability?.endedAt ?? now(),
+    results: summary.results.map((r) => ({
+      agent: r.agent,
+      task: r.task,
+      model: r.model,
+      exitCode: r.exitCode,
+      text: r.text,
+      childRunId: r.childRunId,
+      sessionPath: r.sessionPath,
+      usage: r.usage,
+    })),
+    error: summary.error,
+  };
+  runObservedUiOperation(
+    provideFileSystem(writeTextFile(path.join(dir, "run.json"), JSON.stringify(data, null, 2))),
+    "writeRunJson",
+  );
 }
 
 /** Write a partial run.json so external monitors (pi --mill) can see active runs. */
@@ -54,25 +74,36 @@ function writeRunningMarker(
   artifactsDir: string,
   millConfig: { command: string; args: string[]; runsDir?: string },
 ): void {
-  try {
-    const data = {
-      runId,
-      status: "running",
-      task,
-      mill: {
-        command: millConfig.command,
-        args: millConfig.args,
-        runsDir: millConfig.runsDir,
-      },
-      startedAt: Date.now(),
-      results: [],
-    };
-    fs.writeFileSync(path.join(artifactsDir, "run.json"), JSON.stringify(data, null, 2));
-  } catch {}
+  const data = {
+    runId,
+    status: "running",
+    task,
+    mill: {
+      command: millConfig.command,
+      args: millConfig.args,
+      runsDir: millConfig.runsDir,
+    },
+    startedAt: now(),
+    results: [],
+  };
+  runObservedUiOperation(
+    provideFileSystem(
+      writeTextFile(path.join(artifactsDir, "run.json"), JSON.stringify(data, null, 2)),
+    ),
+    "writeRunningMarker",
+  );
 }
 
+const readOptionalConfigString = (name: string): string | undefined =>
+  Effect.runSync(
+    Effect.map(
+      Config.string(name).pipe(Config.option).parse(ConfigProvider.fromEnv()),
+      Option.getOrUndefined,
+    ),
+  );
+
 function generateRunId(): string {
-  return `mill-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `mill-${now().toString(36)}-${randomToken()}`;
 }
 
 interface ExtensionConfig {
@@ -84,24 +115,31 @@ interface ExtensionConfig {
 }
 
 function readEnabledModelsFallback(): string[] {
-  try {
-    const p = path.join(os.homedir(), ".pi", "agent", "settings.json");
-    if (!fs.existsSync(p)) return [];
-    const parsed: unknown = JSON.parse(fs.readFileSync(p, "utf-8"));
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "enabledModels" in parsed &&
-      Array.isArray((parsed as any).enabledModels)
-    ) {
-      return (parsed as any).enabledModels.filter(
-        (m: unknown): m is string => typeof m === "string" && (m as string).length > 0,
-      );
-    }
-    return [];
-  } catch {
+  const p = path.join(homeDirectory(), ".pi", "agent", "settings.json");
+  const loaded = Effect.runSyncExit(
+    provideFileSystem(
+      Effect.gen(function* () {
+        if (!(yield* pathExists(p))) return [];
+        const parsed: unknown = parseJson(yield* readTextFile(p));
+        if (
+          typeof parsed === "object" &&
+          parsed !== null &&
+          "enabledModels" in parsed &&
+          Array.isArray((parsed as any).enabledModels)
+        ) {
+          return (parsed as any).enabledModels.filter(
+            (m: unknown): m is string => typeof m === "string" && (m as string).length > 0,
+          );
+        }
+        return [];
+      }),
+    ),
+  );
+  if (Exit.isFailure(loaded)) {
+    console.warn("Unable to read pi enabledModels setting for pi-mill help text.");
     return [];
   }
+  return loaded.value;
 }
 
 // ── Text helpers ───────────────────────────────────────────────────────
@@ -237,7 +275,8 @@ export default function (pi: ExtensionAPI) {
   const extensionDir = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
   const skillsDir = path.join(extensionDir, "skills");
   pi.on("resources_discover", () => {
-    if (fs.existsSync(skillsDir)) {
+    const exists = Effect.runSyncExit(provideFileSystem(pathExists(skillsDir)));
+    if (Exit.isSuccess(exists) && exists.value) {
       return { skillPaths: [skillsDir] };
     }
     return {};
@@ -351,7 +390,7 @@ export default function (pi: ExtensionAPI) {
 
   // Depth guard: skip subagent tool registration if we're already at max depth.
   // PI_FACTORY_DEPTH is set by runtime.ts when spawning child mill processes.
-  const currentDepth = parseInt(process.env.PI_FACTORY_DEPTH || "0", 10);
+  const currentDepth = parseInt(readOptionalConfigString("PI_FACTORY_DEPTH") || "0", 10);
   if (currentDepth >= config.maxDepth) {
     return;
   }
@@ -365,7 +404,7 @@ export default function (pi: ExtensionAPI) {
       `Enabled models: ${modelsText}`,
       "Write a TypeScript script. `mill` is a global (like `process` or `console`). Use mill.task() to create task actors, call .start(), then await task.done.",
       "For sequential work, start one task and await task.done. For parallel work, create actors, call .start() on each, then await Promise.all(tasks.map((task) => task.done)).",
-      "Each task needs: agent, system, prompt, model. cwd defaults to process.cwd().",
+      "Each task needs: agent, system, prompt, model. cwd defaults to the current working directory.",
       "system defines WHO the agent is (behavior, principles, methodology). prompt defines WHAT it should do now (specific files, specific work). Don't put task details in system.",
       "Context flow: each subagent gets the parent session path and can use search_thread to explore it. Each subagent's session is persisted and available via result.sessionPath. Result text is auto-populated on result.text.",
       "Async by default: returns immediately with a runId. Results are delivered via notification when complete. Do NOT poll or check for results — just continue with other work and the notification will arrive automatically.",
@@ -383,15 +422,24 @@ export default function (pi: ExtensionAPI) {
       ctx,
     ): Promise<AgentToolResult<RunSummary>> {
       currentCtx = ctx;
-      const params = validateParams(rawParams);
+      const paramsResult = validateParams(rawParams);
+      if (paramsResult instanceof MillError) {
+        return {
+          content: [{ type: "text", text: paramsResult.details.message }],
+          details: {
+            runId: generateRunId(),
+            status: "failed" as const,
+            results: [],
+            error: paramsResult.details,
+          },
+        };
+      }
+      const params = paramsResult;
       const orchestrationRunId = generateRunId();
       let publicRunId = orchestrationRunId;
       const childRunIds = new Set<string>();
       let firstChildResolved = false;
-      let resolveFirstChildRunId: ((runId: string) => void) | undefined;
-      const firstChildRunIdPromise = new Promise<string>((resolve) => {
-        resolveFirstChildRunId = resolve;
-      });
+      const firstChildRunIdDeferred = Effect.runSync(Deferred.make<string>());
 
       const recordChildRunId = (childRunId: string | undefined): void => {
         if (!childRunId || childRunId.length === 0 || childRunIds.has(childRunId)) {
@@ -403,7 +451,7 @@ export default function (pi: ExtensionAPI) {
         if (!firstChildResolved) {
           firstChildResolved = true;
           publicRunId = childRunId;
-          resolveFirstChildRunId?.(childRunId);
+          Effect.runSync(Deferred.succeed(firstChildRunIdDeferred, childRunId));
         }
       };
 
@@ -518,108 +566,92 @@ export default function (pi: ExtensionAPI) {
         // Defer follow-up delivery to the next macrotask so very fast failures
         // (e.g. immediate throw) don't race the originating tool turn.
         setTimeout(() => {
-          try {
-            notifyCompletion(pi, registry, summary);
-          } catch (error) {
+          const notified = Effect.runSyncExit(
+            Effect.sync(() => notifyCompletion(pi, registry, summary)),
+          );
+          if (Exit.isFailure(notified)) {
             observability.push(orchestrationRunId, "warning", "notify_failed", {
-              error: String(error),
+              error: "PiMillNotifyError",
             });
           }
 
-          try {
-            widget.update(registry.getVisible(), ctx);
-          } catch {
-            /* ui may be unavailable */
-          }
+          runObservedUiOperation(
+            Effect.sync(() => widget.update(registry.getVisible(), ctx)),
+            "widgetUpdate",
+          );
         }, 0);
       };
 
       // Wire completion: persist state first, then UI updates + async notification.
-      promise.then(
-        (summary) => {
-          ingestChildRunIds(summary);
+      Effect.runFork(
+        Effect.tryPromise({ try: () => promise, catch: (error) => error }).pipe(
+          Effect.match({
+            onFailure: (err) => {
+              const details = toErrorDetails(err);
+              observability.setStatus(
+                orchestrationRunId,
+                details.code === "CANCELLED" ? "cancelled" : "failed",
+              );
 
-          observability.setStatus(
-            orchestrationRunId,
-            summary.status === "done"
-              ? "done"
-              : summary.status === "cancelled"
-                ? "cancelled"
-                : "failed",
-          );
+              const failedSummary: RunSummary = {
+                runId: orchestrationRunId,
+                status: "failed",
+                results: [],
+                error: details,
+                observability: observability.toSummary(orchestrationRunId),
+                metadata: {
+                  task: params.task,
+                  millCommand: config.millCommand,
+                  millArgs: config.millArgs,
+                  millRunsDir: config.millRunsDir,
+                  orchestrationRunId,
+                  childRunIds: Array.from(childRunIds),
+                },
+              };
 
-          const fullSummary: RunSummary = {
-            ...summary,
-            observability: observability.toSummary(orchestrationRunId),
-            metadata: {
-              task: params.task,
-              millCommand: config.millCommand,
-              millArgs: config.millArgs,
-              millRunsDir: config.millRunsDir,
-              orchestrationRunId,
-              childRunIds: Array.from(childRunIds),
+              registry.fail(orchestrationRunId, details);
+              writeRunJson(failedSummary);
+              runObservedUiOperation(
+                Effect.sync(() => widget.update(registry.getVisible(), ctx)),
+                "widgetUpdate",
+              );
+              scheduleCompletionNotification(failedSummary);
             },
-          };
+            onSuccess: (summary) => {
+              ingestChildRunIds(summary);
 
-          registry.complete(orchestrationRunId, fullSummary);
+              observability.setStatus(
+                orchestrationRunId,
+                summary.status === "done"
+                  ? "done"
+                  : summary.status === "cancelled"
+                    ? "cancelled"
+                    : "failed",
+              );
 
-          try {
-            writeRunJson(fullSummary);
-          } catch (error) {
-            observability.push(orchestrationRunId, "warning", "write_run_json_failed", {
-              error: String(error),
-            });
-          }
+              const fullSummary: RunSummary = {
+                ...summary,
+                observability: observability.toSummary(orchestrationRunId),
+                metadata: {
+                  task: params.task,
+                  millCommand: config.millCommand,
+                  millArgs: config.millArgs,
+                  millRunsDir: config.millRunsDir,
+                  orchestrationRunId,
+                  childRunIds: Array.from(childRunIds),
+                },
+              };
 
-          try {
-            widget.update(registry.getVisible(), ctx);
-          } catch {
-            /* ui may be unavailable */
-          }
-
-          scheduleCompletionNotification(fullSummary);
-        },
-        (err) => {
-          const details = toErrorDetails(err);
-          observability.setStatus(
-            orchestrationRunId,
-            details.code === "CANCELLED" ? "cancelled" : "failed",
-          );
-
-          const failedSummary: RunSummary = {
-            runId: orchestrationRunId,
-            status: "failed",
-            results: [],
-            error: details,
-            observability: observability.toSummary(orchestrationRunId),
-            metadata: {
-              task: params.task,
-              millCommand: config.millCommand,
-              millArgs: config.millArgs,
-              millRunsDir: config.millRunsDir,
-              orchestrationRunId,
-              childRunIds: Array.from(childRunIds),
+              registry.complete(orchestrationRunId, fullSummary);
+              writeRunJson(fullSummary);
+              runObservedUiOperation(
+                Effect.sync(() => widget.update(registry.getVisible(), ctx)),
+                "widgetUpdate",
+              );
+              scheduleCompletionNotification(fullSummary);
             },
-          };
-
-          registry.fail(orchestrationRunId, details);
-
-          try {
-            writeRunJson(failedSummary);
-          } catch (error) {
-            observability.push(orchestrationRunId, "warning", "write_run_json_failed", {
-              error: String(error),
-            });
-          }
-
-          try {
-            widget.update(registry.getVisible(), ctx);
-          } catch {
-            /* ui may be unavailable */
-          }
-
-          scheduleCompletionNotification(failedSummary);
-        },
+          }),
+        ),
       );
 
       // Start polling for widget updates
@@ -631,7 +663,15 @@ export default function (pi: ExtensionAPI) {
       // Surface canonical child run ids before returning whenever the program
       // actually spawns. If the program exits without spawning, we fall back to
       // the orchestration id.
-      await Promise.race([firstChildRunIdPromise, promise.then(() => undefined)]);
+      await Promise.race([
+        Effect.runPromise(Deferred.await(firstChildRunIdDeferred)),
+        Effect.runPromise(
+          Effect.tryPromise({
+            try: () => promise,
+            catch: (cause) => ({ _tag: "PiMillInitialPromiseError" as const, cause }),
+          }).pipe(Effect.exit, Effect.asVoid),
+        ),
+      ]);
 
       // Return immediately with artifact paths so orchestrator can check progress
       const artifactsDir = observability.get(orchestrationRunId)?.artifactsDir;

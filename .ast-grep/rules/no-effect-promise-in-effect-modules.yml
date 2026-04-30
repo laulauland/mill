@@ -1,0 +1,16 @@
+id: no-effect-promise-in-effect-modules
+language: TypeScript
+severity: error
+message: Effect modules must stay Effect-native and avoid raw Promise bridges.
+files:
+  - "**/*.effect.ts"
+ignores:
+  - "**/*.test.ts"
+rule:
+  any:
+    - pattern: "Effect.runPromise($$$A)"
+    - pattern: "Effect.runPromiseExit($$$A)"
+    - pattern: "new Promise<$T>($$$A)"
+    - pattern: "new Promise($$$A)"
+    - pattern: "Promise.resolve($$$A)"
+    - pattern: "Promise.reject($$$A)"

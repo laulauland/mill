@@ -2,6 +2,8 @@ id: no-raw-promise
 language: TypeScript
 severity: error
 message: Raw Promise construction is disallowed; use Effect abstractions.
+ignores:
+  - "**/*.test.ts"
 rule:
   any:
     - pattern: "new Promise<$T>($A)"

@@ -1,6 +1,3 @@
-import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as FileSystem from "effect/FileSystem";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Cause, Data, Effect, Exit, Fiber, Stream } from "effect";
@@ -13,14 +10,43 @@ import { runDetachedWorker } from "./worker.effect";
 import { executeProgramInProcessHost } from "./program-host.effect";
 import { publishIoEvent, type IoStreamEvent } from "./observer-hub.effect";
 import { resolveConfigEffect } from "./config-loader.api";
+import {
+  appendTextFile,
+  ensureDirectory,
+  randomUuid,
+  readProcessCommand,
+  readProcessTable,
+  readTextFile,
+  removePath,
+  writeTextFile,
+} from "./run-platform.adapter";
 import type { ExecutorRuntime, ExtensionRegistration, ResolveConfigOptions } from "./types";
 
 export type { RunRecord, RunSyncOutput } from "./run.schema";
+
+export type ProcessSignal = "SIGTERM" | "SIGKILL";
+
+export class ProcessControlError extends Data.TaggedError("ProcessControlError")<{
+  readonly operation: "isAlive" | "sendSignal";
+  readonly pid: number;
+  readonly signal?: ProcessSignal;
+  readonly cause: unknown;
+}> {}
+
+export interface ProcessControl {
+  readonly isAlive: (pid: number) => Effect.Effect<boolean, ProcessControlError>;
+  readonly sendSignal: (
+    pid: number,
+    signal: ProcessSignal,
+  ) => Effect.Effect<boolean, ProcessControlError>;
+}
 
 interface BaseRunInput extends ResolveConfigOptions {
   readonly driverName?: string;
   readonly executorName?: string;
   readonly runsDirectory?: string;
+  readonly executablePath?: string;
+  readonly processControl?: ProcessControl;
 }
 
 export interface SubmitRunInput extends BaseRunInput {
@@ -91,6 +117,7 @@ export interface RunWorkerInput extends BaseRunInput {
   readonly runId: string;
   readonly programPath: string;
   readonly runDepth?: number;
+  readonly workerPid?: number;
 }
 
 export interface LaunchWorkerInput {
@@ -115,6 +142,12 @@ interface EngineContext {
 
 class RunApiError extends Data.TaggedError("RunApiError")<{ message: string }> {}
 
+class LaunchWorkerError extends Data.TaggedError("LaunchWorkerError")<{
+  readonly runId: string;
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
 const DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS = 60 * 60 * 24 * 365;
 const WORKER_PID_FILENAME = "worker.pid";
 const CANCEL_LOG_PATH = "logs/cancel.log";
@@ -133,10 +166,7 @@ const normalizePath = (path: string): string => {
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
 
-const sleep = (millis: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, millis);
-  });
+const sleepEffect = (millis: number): Effect.Effect<void> => Effect.sleep(`${millis} millis`);
 
 const runDirectoryFor = (runsDirectory: string, runId: string): string =>
   joinPath(runsDirectory, runId);
@@ -144,79 +174,54 @@ const runDirectoryFor = (runsDirectory: string, runId: string): string =>
 const workerPidPathFor = (runDirectory: string): string =>
   joinPath(runDirectory, WORKER_PID_FILENAME);
 
-const appendCancelLog = (runDirectory: string, message: string): void => {
+const appendCancelLog = (
+  runDirectory: string,
+  message: string,
+): Effect.Effect<void, never, FileSystem.FileSystem> => {
   const logPath = joinPath(runDirectory, CANCEL_LOG_PATH);
   const logDirectory = logPath.slice(0, logPath.lastIndexOf("/"));
   const timestamp = new Date().toISOString();
 
-  try {
-    fs.mkdirSync(logDirectory, { recursive: true });
-    fs.appendFileSync(logPath, `${timestamp} ${message}\n`, "utf-8");
-  } catch {
-    // best effort logging only
-  }
+  return Effect.andThen(
+    ensureDirectory(logDirectory),
+    appendTextFile(logPath, `${timestamp} ${message}\n`),
+  ).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("mill.cancel-log:write-failed", { runDirectory, logPath, message, error }),
+    ),
+  );
 };
 
-const readWorkerPid = (runDirectory: string): number | undefined => {
-  const pidPath = workerPidPathFor(runDirectory);
+const readWorkerPid = (
+  runDirectory: string,
+): Effect.Effect<number | undefined, never, FileSystem.FileSystem> =>
+  readTextFile(workerPidPathFor(runDirectory)).pipe(
+    Effect.map((raw) => {
+      const trimmed = raw.trim();
+      const parsed = Number.parseInt(trimmed, 10);
 
-  try {
-    const raw = fs.readFileSync(pidPath, "utf-8").trim();
-    const parsed = Number.parseInt(raw, 10);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        return undefined;
+      }
 
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      return undefined;
-    }
+      return parsed;
+    }),
+    Effect.catch((error) =>
+      Effect.as(
+        Effect.logDebug("mill.worker-pid:read-missing-or-invalid", { runDirectory, error }),
+        undefined,
+      ),
+    ),
+  );
 
-    return parsed;
-  } catch {
-    return undefined;
-  }
-};
-
-const removeWorkerPidFile = (runDirectory: string): void => {
-  try {
-    fs.rmSync(workerPidPathFor(runDirectory), { force: true });
-  } catch {
-    // best effort cleanup only
-  }
-};
-
-const readProcessCommand = (pid: number): string | undefined => {
-  const output = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-
-  if (output.status !== 0) {
-    return undefined;
-  }
-
-  const commandLine = output.stdout.trim();
-  return commandLine.length > 0 ? commandLine : undefined;
-};
-
-const readProcessTable = (): ReadonlyArray<{ pid: number; ppid: number }> => {
-  const output = spawnSync("ps", ["-ax", "-o", "pid=,ppid="], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-
-  if (output.status !== 0) {
-    return [];
-  }
-
-  return output.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => line.split(/\s+/))
-    .map(([pidText, ppidText]) => ({
-      pid: Number.parseInt(pidText ?? "", 10),
-      ppid: Number.parseInt(ppidText ?? "", 10),
-    }))
-    .filter((entry) => Number.isInteger(entry.pid) && Number.isInteger(entry.ppid));
-};
+const removeWorkerPidFile = (
+  runDirectory: string,
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  removePath(workerPidPathFor(runDirectory)).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("mill.worker-pid:remove-failed", { runDirectory, error }),
+    ),
+  );
 
 const descendantsFor = (
   rootPid: number,
@@ -253,24 +258,6 @@ const descendantsFor = (
   return descendants;
 };
 
-const isProcessAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const sendSignal = (pid: number, signal: NodeJS.Signals): boolean => {
-  try {
-    process.kill(pid, signal);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const looksLikeMillWorkerCommand = (commandLine: string, runId: string): boolean => {
   if (!commandLine.includes("_worker")) {
     return false;
@@ -279,82 +266,180 @@ const looksLikeMillWorkerCommand = (commandLine: string, runId: string): boolean
   return commandLine.includes(`--run-id ${runId}`);
 };
 
-const terminateWorkerProcessTree = async (runsDirectory: string, runId: string): Promise<void> => {
-  const runDirectory = runDirectoryFor(runsDirectory, runId);
-  const workerPid = readWorkerPid(runDirectory);
+const countSignals = (
+  processControl: ProcessControl,
+  targets: ReadonlyArray<number>,
+  signal: ProcessSignal,
+): Effect.Effect<number> =>
+  Effect.map(
+    Effect.forEach(
+      targets,
+      (pid) =>
+        processControl
+          .sendSignal(pid, signal)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.as(
+                Effect.logDebug("mill.process:send-signal-failed", { pid, signal, error }),
+                false,
+              ),
+            ),
+          ),
+      { concurrency: "unbounded" },
+    ),
+    (results) => results.filter(Boolean).length,
+  );
 
-  if (workerPid === undefined) {
-    appendCancelLog(runDirectory, `cancel:kill skipped run=${runId} reason=no-worker-pid`);
-    return;
-  }
+const liveProcesses = (
+  processControl: ProcessControl,
+  targets: ReadonlyArray<number>,
+): Effect.Effect<ReadonlyArray<number>> =>
+  Effect.map(
+    Effect.forEach(targets, (pid) =>
+      processControl.isAlive(pid).pipe(
+        Effect.catch((error) =>
+          Effect.as(Effect.logDebug("mill.process:is-alive-failed", { pid, error }), false),
+        ),
+        Effect.map((alive) => ({ pid, alive })),
+      ),
+    ),
+    (results) => results.filter((result) => result.alive).map((result) => result.pid),
+  );
 
-  const commandLine = readProcessCommand(workerPid);
+const terminateWorkerProcessTree = (
+  runsDirectory: string,
+  runId: string,
+  processControl: ProcessControl | undefined,
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const runDirectory = runDirectoryFor(runsDirectory, runId);
 
-  if (commandLine === undefined) {
-    appendCancelLog(
-      runDirectory,
-      `cancel:kill stale-pid run=${runId} pid=${workerPid} reason=command-missing`,
+    if (processControl === undefined) {
+      yield* appendCancelLog(
+        runDirectory,
+        `cancel:kill skipped run=${runId} reason=no-process-control`,
+      );
+      return;
+    }
+
+    const workerPid = yield* readWorkerPid(runDirectory);
+
+    if (workerPid === undefined) {
+      yield* appendCancelLog(runDirectory, `cancel:kill skipped run=${runId} reason=no-worker-pid`);
+      return;
+    }
+
+    const commandInspection = yield* readProcessCommand(workerPid).pipe(
+      Effect.matchEffect({
+        onFailure: (error) =>
+          Effect.as(
+            Effect.zipRight(
+              Effect.logWarning("mill.cancel:read-worker-command-failed", {
+                runId,
+                pid: workerPid,
+                error,
+              }),
+              appendCancelLog(
+                runDirectory,
+                `cancel:kill skipped run=${runId} pid=${workerPid} reason=command-inspection-failed`,
+              ),
+            ),
+            { _tag: "inspection-failed" as const },
+          ),
+        onSuccess: (commandLine) =>
+          Effect.succeed(
+            commandLine === undefined
+              ? { _tag: "missing" as const }
+              : { _tag: "found" as const, commandLine },
+          ),
+      }),
     );
-    removeWorkerPidFile(runDirectory);
-    return;
-  }
 
-  if (!looksLikeMillWorkerCommand(commandLine, runId)) {
-    appendCancelLog(
-      runDirectory,
-      `cancel:kill skipped run=${runId} pid=${workerPid} reason=pid-mismatch command=${commandLine}`,
+    if (commandInspection._tag === "inspection-failed") {
+      return;
+    }
+
+    if (commandInspection._tag === "missing") {
+      yield* appendCancelLog(
+        runDirectory,
+        `cancel:kill stale-pid run=${runId} pid=${workerPid} reason=command-missing`,
+      );
+      yield* removeWorkerPidFile(runDirectory);
+      return;
+    }
+
+    if (!looksLikeMillWorkerCommand(commandInspection.commandLine, runId)) {
+      yield* appendCancelLog(
+        runDirectory,
+        `cancel:kill skipped run=${runId} pid=${workerPid} reason=pid-mismatch command=${commandInspection.commandLine}`,
+      );
+      return;
+    }
+
+    const table = yield* readProcessTable().pipe(
+      Effect.catch((error) =>
+        Effect.as(
+          Effect.logWarning("mill.cancel:read-process-table-failed", { runId, error }),
+          [] as ReadonlyArray<{ pid: number; ppid: number }>,
+        ),
+      ),
     );
-    return;
-  }
+    const descendants = descendantsFor(workerPid, table);
+    const targets = [...new Set([...descendants, workerPid])];
+    const termCount = yield* countSignals(processControl, targets, "SIGTERM");
 
-  const table = readProcessTable();
-  const descendants = descendantsFor(workerPid, table);
-  const targets = [...new Set([...descendants, workerPid])];
+    yield* appendCancelLog(
+      runDirectory,
+      `cancel:kill term-sent run=${runId} pid=${workerPid} targets=${targets.length} signaled=${termCount}`,
+    );
 
-  const termCount = targets.reduce(
-    (count, pid) => (sendSignal(pid, "SIGTERM") ? count + 1 : count),
-    0,
-  );
+    yield* sleepEffect(PROCESS_EXIT_GRACE_MILLIS);
 
-  appendCancelLog(
-    runDirectory,
-    `cancel:kill term-sent run=${runId} pid=${workerPid} targets=${targets.length} signaled=${termCount}`,
-  );
+    const survivors = yield* liveProcesses(processControl, targets);
+    const killCount = yield* countSignals(processControl, survivors, "SIGKILL");
 
-  await sleep(PROCESS_EXIT_GRACE_MILLIS);
+    yield* appendCancelLog(
+      runDirectory,
+      `cancel:kill kill-sent run=${runId} pid=${workerPid} survivors=${survivors.length} signaled=${killCount}`,
+    );
 
-  const survivors = targets.filter((pid) => isProcessAlive(pid));
-  const killCount = survivors.reduce(
-    (count, pid) => (sendSignal(pid, "SIGKILL") ? count + 1 : count),
-    0,
-  );
-
-  appendCancelLog(
-    runDirectory,
-    `cancel:kill kill-sent run=${runId} pid=${workerPid} survivors=${survivors.length} signaled=${killCount}`,
-  );
-
-  if (!isProcessAlive(workerPid)) {
-    removeWorkerPidFile(runDirectory);
-  }
-};
+    const workerAlive = yield* processControl
+      .isAlive(workerPid)
+      .pipe(
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logDebug("mill.process:is-alive-failed", { pid: workerPid, error }),
+            false,
+          ),
+        ),
+      );
+    if (!workerAlive) {
+      yield* removeWorkerPidFile(runDirectory);
+    }
+  });
 
 const resolveProgramPath = (cwd: string, programPath: string): string =>
   programPath.startsWith("/") ? normalizePath(programPath) : joinPath(cwd, programPath);
 
-const resolveRunsDirectory = (
+const resolveRunsDirectoryEffect = (
   homeDirectory: string | undefined,
   runsDirectory: string | undefined,
-): string => {
-  if (runsDirectory !== undefined && runsDirectory.length > 0) {
-    return runsDirectory;
-  }
+): Effect.Effect<string> =>
+  Effect.gen(function* () {
+    if (runsDirectory !== undefined && runsDirectory.length > 0) {
+      return runsDirectory;
+    }
 
-  const resolvedHomeDirectory =
-    homeDirectory?.trim() || process.env.HOME?.trim() || os.homedir().trim();
+    const resolvedHomeDirectory = homeDirectory?.trim();
 
-  return joinPath(resolvedHomeDirectory, ".mill/runs");
-};
+    if (resolvedHomeDirectory === undefined || resolvedHomeDirectory.length === 0) {
+      return yield* Effect.fail(
+        new RunApiError({ message: "Unable to resolve runs directory because HOME is unset." }),
+      );
+    }
+
+    return joinPath(resolvedHomeDirectory, ".mill/runs");
+  });
 
 const parseInteger = (value: string | undefined): number | undefined => {
   if (value === undefined) {
@@ -370,8 +455,10 @@ const parseInteger = (value: string | undefined): number | undefined => {
   return parsed;
 };
 
-const resolveCurrentRunDepth = (): number => {
-  const parsed = parseInteger(process.env[RUN_DEPTH_ENV]);
+const resolveCurrentRunDepth = (
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): number => {
+  const parsed = parseInteger(env?.[RUN_DEPTH_ENV]);
 
   if (parsed === undefined || parsed < 0) {
     return 0;
@@ -388,7 +475,7 @@ const resolveMaxRunDepth = (configured: number | undefined): number => {
   return configured;
 };
 
-const runWithBunServices = <A, E>(
+export const runWithBunServices = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices>,
 ): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
 
@@ -428,7 +515,10 @@ const makeEngineForConfigEffect = (input: BaseRunInput): Effect.Effect<EngineCon
     });
     const selectedDriver = yield* driverRegistry.resolve(input.driverName);
     const selectedExecutor = yield* executorRegistry.resolve(input.executorName);
-    const runsDirectory = resolveRunsDirectory(input.homeDirectory, input.runsDirectory);
+    const runsDirectory = yield* resolveRunsDirectoryEffect(
+      input.homeDirectory ?? input.env?.HOME,
+      input.runsDirectory,
+    );
 
     return {
       selectedDriverName: selectedDriver.name,
@@ -500,17 +590,18 @@ const filterIoEvent = (
   return true;
 };
 
-const submitRunEffect = (
+export const submitRunEffect = (
   input: SubmitRunInput,
 ): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
   Effect.gen(function* () {
-    const cwd = input.cwd ?? process.cwd();
+    const cwd = input.cwd ?? ".";
     const programPath = resolveProgramPath(cwd, input.programPath);
     const programSource = yield* readProgramSource(programPath);
     const engineContext = yield* makeEngineForConfigEffect(input);
-    const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
+    const generatedRunId = yield* randomUuid();
+    const runId = decodeRunIdSync(`run_${generatedRunId}`);
 
-    const currentRunDepth = resolveCurrentRunDepth();
+    const currentRunDepth = resolveCurrentRunDepth(input.env);
     const nextRunDepth = currentRunDepth + 1;
 
     if (nextRunDepth > engineContext.maxRunDepth) {
@@ -520,6 +611,8 @@ const submitRunEffect = (
         }),
       );
     }
+
+    yield* ensureDirectory(engineContext.runsDirectory);
 
     const submittedRun = yield* engineContext.engine.submit({
       runId,
@@ -531,17 +624,24 @@ const submitRunEffect = (
 
     const copiedProgramPath = joinPath(submittedRun.paths.runDir, "program.ts");
 
-    yield* Effect.promise(() =>
-      input.launchWorker({
-        runId: submittedRun.id,
-        programPath: copiedProgramPath,
-        runsDirectory: engineContext.runsDirectory,
-        driverName: engineContext.selectedDriverName,
-        executorName: engineContext.selectedExecutorName,
-        cwd,
-        runDepth: nextRunDepth,
-      }),
-    );
+    yield* Effect.tryPromise({
+      try: () =>
+        input.launchWorker({
+          runId: submittedRun.id,
+          programPath: copiedProgramPath,
+          runsDirectory: engineContext.runsDirectory,
+          driverName: engineContext.selectedDriverName,
+          executorName: engineContext.selectedExecutorName,
+          cwd,
+          runDepth: nextRunDepth,
+        }),
+      catch: (cause) =>
+        new LaunchWorkerError({
+          runId: submittedRun.id,
+          message: `Failed to launch worker for run ${submittedRun.id}.`,
+          cause,
+        }),
+    });
 
     return submittedRun;
   });
@@ -549,7 +649,7 @@ const submitRunEffect = (
 export const submitRun = (input: SubmitRunInput): Promise<RunRecord> =>
   runWithBunServices(submitRunEffect(input));
 
-const runProgramSyncEffect = (
+export const runProgramSyncEffect = (
   input: RunProgramSyncInput,
 ): Effect.Effect<RunSyncOutput, unknown, BunServices.BunServices> =>
   Effect.gen(function* () {
@@ -562,6 +662,7 @@ const runProgramSyncEffect = (
       timeoutSeconds,
       cwd: input.cwd,
       homeDirectory: input.homeDirectory,
+      env: input.env,
       runsDirectory: input.runsDirectory,
       driverName: input.driverName,
       executorName: input.executorName,
@@ -591,18 +692,18 @@ const runWorkerEffect = (
   input: RunWorkerInput,
 ): Effect.Effect<RunSyncOutput, unknown, BunServices.BunServices> =>
   Effect.gen(function* () {
-    const cwd = input.cwd ?? process.cwd();
+    const cwd = input.cwd ?? ".";
     const programPath = resolveProgramPath(cwd, input.programPath);
     const programSource = yield* readProgramSource(programPath);
     const engineContext = yield* makeEngineForConfigEffect(input);
     const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
     const workerPidPath = workerPidPathFor(runDirectory);
-    const runDepth = input.runDepth ?? resolveCurrentRunDepth();
+    const runDepth = input.runDepth ?? resolveCurrentRunDepth(input.env);
 
-    yield* Effect.sync(() => {
-      fs.mkdirSync(runDirectory, { recursive: true });
-      fs.writeFileSync(workerPidPath, `${process.pid}\n`, "utf-8");
-    });
+    yield* ensureDirectory(runDirectory);
+    if (input.workerPid !== undefined) {
+      yield* writeTextFile(workerPidPath, `${input.workerPid}\n`);
+    }
 
     return yield* Effect.ensuring(
       runDetachedWorker({
@@ -622,8 +723,10 @@ const runWorkerEffect = (
                 programPath,
                 programSource,
                 executorName: engineContext.selectedExecutorName,
+                executablePath: input.executablePath,
                 extensions: engineContext.selectedExtensions,
                 env: {
+                  ...input.env,
                   [RUN_DEPTH_ENV]: String(runDepth),
                 },
                 task,
@@ -648,9 +751,7 @@ const runWorkerEffect = (
               }),
           ),
       }),
-      Effect.sync(() => {
-        removeWorkerPidFile(runDirectory);
-      }),
+      removeWorkerPidFile(runDirectory),
     );
   });
 
@@ -850,8 +951,10 @@ const cancelRunEffect = (
       input.reason,
     );
 
-    yield* Effect.promise(() =>
-      terminateWorkerProcessTree(engineContext.runsDirectory, input.runId),
+    yield* terminateWorkerProcessTree(
+      engineContext.runsDirectory,
+      input.runId,
+      input.processControl,
     );
 
     return {

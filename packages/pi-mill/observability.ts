@@ -1,6 +1,13 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import {
+  ensureDirectory,
+  makeTemporaryDirectory,
+  path,
+  provideFileSystem,
+  temporaryDirectory,
+  writeTextFile,
+} from "./platform.adapter.js";
+import { Effect, Exit } from "effect";
+import { now } from "./clock.js";
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
@@ -28,15 +35,28 @@ export class ObservabilityStore {
     const record: RunRecord = {
       runId,
       status: "queued",
-      startedAt: Date.now(),
+      startedAt: now(),
       events: [],
       artifacts: [],
     };
 
     if (withArtifacts) {
-      const base = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-observe-"));
-      fs.mkdirSync(base, { recursive: true });
-      record.artifactsDir = base;
+      const created = Effect.runSyncExit(
+        provideFileSystem(
+          makeTemporaryDirectory(path.join(temporaryDirectory(), "pi-subagent-observe-")),
+        ),
+      );
+      if (Exit.isSuccess(created)) {
+        const base = created.value;
+        const ensured = Effect.runSyncExit(provideFileSystem(ensureDirectory(base)));
+        if (Exit.isSuccess(ensured)) {
+          record.artifactsDir = base;
+        } else {
+          console.warn(`Unable to create pi-mill artifacts directory ${base}.`);
+        }
+      } else {
+        console.warn("Unable to create pi-mill artifacts directory.");
+      }
     }
 
     this.runs.set(runId, record);
@@ -51,8 +71,7 @@ export class ObservabilityStore {
     const run = this.runs.get(runId);
     if (!run) return;
     run.status = status;
-    if (status === "done" || status === "failed" || status === "cancelled")
-      run.endedAt = Date.now();
+    if (status === "done" || status === "failed" || status === "cancelled") run.endedAt = now();
     if (message) this.push(runId, "status", message, { status });
   }
 
@@ -64,15 +83,25 @@ export class ObservabilityStore {
   ): void {
     const run = this.runs.get(runId);
     if (!run) return;
-    run.events.push({ time: Date.now(), type, message, data });
+    run.events.push({ time: now(), type, message, data });
   }
 
   writeArtifact(runId: string, relativePath: string, content: string): string | null {
     const run = this.runs.get(runId);
     if (!run || !run.artifactsDir) return null;
     const fullPath = path.join(run.artifactsDir, relativePath);
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    fs.writeFileSync(fullPath, content, "utf-8");
+    const written = Effect.runSyncExit(
+      provideFileSystem(
+        Effect.gen(function* () {
+          yield* ensureDirectory(path.dirname(fullPath));
+          yield* writeTextFile(fullPath, content);
+        }),
+      ),
+    );
+    if (Exit.isFailure(written)) {
+      console.warn(`Unable to write pi-mill artifact ${fullPath}.`);
+      return null;
+    }
     run.artifacts.push(fullPath);
     this.push(runId, "artifact", `artifact:${relativePath}`, { path: fullPath });
     return fullPath;

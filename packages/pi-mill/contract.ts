@@ -11,20 +11,20 @@ export const SubagentSchema = Type.Object({
 
 export type SubagentParams = Static<typeof SubagentSchema>;
 
-export function validateParams(params: SubagentParams): SubagentParams {
+export const validateParams = (params: SubagentParams): SubagentParams | MillError => {
   if (!params.task?.trim()) {
-    throw new MillError({
+    return new MillError({
       code: "INVALID_INPUT",
       message: "'task' is required.",
       recoverable: true,
     });
   }
   if (!params.code?.trim()) {
-    throw new MillError({
+    return new MillError({
       code: "INVALID_INPUT",
       message: "'code' is required and must be non-empty.",
       recoverable: true,
     });
   }
   return params;
-}
+};

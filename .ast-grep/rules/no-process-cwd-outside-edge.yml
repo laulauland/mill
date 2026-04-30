@@ -1,0 +1,11 @@
+id: no-process-cwd-outside-edge
+language: TypeScript
+severity: error
+message: Read cwd at CLI/config/runtime edges through explicit adapter helpers and pass it explicitly.
+ignores:
+  - "**/*.test.ts"
+  - "packages/cli/src/mill.ts"
+  - "packages/pi-mill/.vendor/**"
+  - "packages/pi-mill/.pi-skills/**"
+rule:
+  pattern: "process.cwd()"

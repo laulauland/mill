@@ -1,0 +1,8 @@
+id: no-promise-reject
+language: TypeScript
+severity: error
+message: Use Effect.fail with tagged errors instead of Promise.reject.
+ignores:
+  - "**/*.test.ts"
+rule:
+  pattern: "Promise.reject($$$A)"

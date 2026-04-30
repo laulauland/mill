@@ -19,11 +19,16 @@ export class AcpClientError extends Data.TaggedError("AcpClientError")<{
   message: string;
 }> {}
 
-const toMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const isAcpClientError = (error: unknown): error is AcpClientError =>
+  typeof error === "object" && error !== null && "_tag" in error && error._tag === "AcpClientError";
+
+const toMessage = (error: unknown): string => String(error);
 
 const toAcpClientError = (error: unknown): AcpClientError =>
-  error instanceof AcpClientError ? error : new AcpClientError({ message: toMessage(error) });
+  isAcpClientError(error) ? error : new AcpClientError({ message: toMessage(error) });
+
+const logNonFatalAcpError = (operation: string, error: AcpClientError): Effect.Effect<void> =>
+  Effect.logWarning("mill.acp:non-fatal-operation-failed", { operation, message: error.message });
 
 const makeAdapter = (
   name: string,
@@ -153,20 +158,21 @@ const collectPrompt = (
   sessionId: string,
   setActiveStream: (stream: AgentStream | undefined) => void,
 ): Effect.Effect<AgentTurnOutput, AcpClientError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const configOptions = agent.configOptionsFor(sessionId);
-      const modelPreference = findModelPreference(configOptions, input.model);
-      const stream = agent.prompt(sessionId, {
-        prompt: turn.prompt,
-        systemPrompt: input.system,
-        ...(modelPreference === undefined ? {} : { modelPreference }),
-      });
-      const events: Array<AgentRuntimeEvent> = [];
+  Effect.gen(function* () {
+    const configOptions = agent.configOptionsFor(sessionId);
+    const modelPreference = findModelPreference(configOptions, input.model);
+    const stream = agent.prompt(sessionId, {
+      prompt: turn.prompt,
+      systemPrompt: input.system,
+      ...(modelPreference === undefined ? {} : { modelPreference }),
+    });
 
-      setActiveStream(stream);
+    setActiveStream(stream);
 
-      try {
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const events: Array<AgentRuntimeEvent> = [];
+
         for await (const event of stream) {
           events.push(...eventToAgentEvents(event));
         }
@@ -186,12 +192,10 @@ const collectPrompt = (
             stopReason: mapStopReason(stopReason),
           },
         } satisfies AgentTurnOutput;
-      } finally {
-        setActiveStream(undefined);
-      }
-    },
-    catch: toAcpClientError,
-  });
+      },
+      catch: toAcpClientError,
+    });
+  }).pipe(Effect.ensuring(Effect.sync(() => setActiveStream(undefined))));
 
 export const createAcpSession = (
   name: string,
@@ -211,26 +215,31 @@ export const createAcpSession = (
       catch: toAcpClientError,
     });
 
+    const closeAgentAfterSessionFailure = Effect.tryPromise({
+      try: () => agent.close(),
+      catch: toAcpClientError,
+    }).pipe(Effect.catch((error) => logNonFatalAcpError("closeAgentAfterSessionFailure", error)));
+
     const sessionId = yield* Effect.tryPromise({
       try: () => agent.createSession({ cwd: input.runDirectory, systemPrompt: input.system }),
-      catch: async (error) => {
-        await agent.close().catch(() => undefined);
-        return toAcpClientError(error);
-      },
-    });
+      catch: toAcpClientError,
+    }).pipe(Effect.tapError(() => closeAgentAfterSessionFailure));
 
     let activeStream: AgentStream | undefined;
     let closed = false;
 
     const close = (): Effect.Effect<void, AcpClientError> =>
-      Effect.tryPromise({
-        try: async () => {
-          if (closed) return;
-          closed = true;
-          await agent.closeSession(sessionId).catch(() => undefined);
-          await agent.close();
-        },
-        catch: toAcpClientError,
+      Effect.gen(function* () {
+        if (closed) return;
+        closed = true;
+        yield* Effect.tryPromise({
+          try: () => agent.closeSession(sessionId),
+          catch: toAcpClientError,
+        }).pipe(Effect.catch((error) => logNonFatalAcpError("closeSession", error)));
+        yield* Effect.tryPromise({
+          try: () => agent.close(),
+          catch: toAcpClientError,
+        });
       });
 
     return {
@@ -240,15 +249,18 @@ export const createAcpSession = (
           activeStream = stream;
         }),
       cancelTurn: () =>
-        Effect.tryPromise({
-          try: async () => {
-            const stream = activeStream;
-            if (stream !== undefined) {
-              await stream.cancel().catch(() => undefined);
-            }
-            await agent.cancel(sessionId).catch(() => undefined);
-          },
-          catch: toAcpClientError,
+        Effect.gen(function* () {
+          const stream = activeStream;
+          if (stream !== undefined) {
+            yield* Effect.tryPromise({
+              try: () => stream.cancel(),
+              catch: toAcpClientError,
+            }).pipe(Effect.catch((error) => logNonFatalAcpError("streamCancel", error)));
+          }
+          yield* Effect.tryPromise({
+            try: () => agent.cancel(sessionId),
+            catch: toAcpClientError,
+          }).pipe(Effect.catch((error) => logNonFatalAcpError("agentCancel", error)));
         }),
       close,
     } satisfies AgentSession;

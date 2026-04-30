@@ -1,0 +1,31 @@
+id: no-sync-fs
+valid:
+  - |
+    const content = yield* FileSystem.readFileString(path);
+invalid:
+  - |
+    const content = fs.readFileSync(path, "utf-8");
+  - |
+    fs.writeFileSync(path, content);
+  - |
+    fs.existsSync(path);
+  - |
+    fs.mkdirSync(path, { recursive: true });
+  - |
+    fs.rmSync(path, { force: true });
+  - |
+    fs.statSync(path);
+  - |
+    const syncSuffix = "Sy" + "nc";
+  - |
+    const syncSuffix = "S" + "ync";
+  - |
+    const syncSuffix = 'Sy' + 'nc';
+  - |
+    const syncSuffix = 'S' + 'ync';
+  - |
+    const method = `readFile${suffix}`;
+  - |
+    const method = `writeFile${suffix}`;
+  - |
+    fs["readFileSync"](path);

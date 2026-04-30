@@ -9,3 +9,15 @@ invalid:
     } catch (error) {
       report(error);
     }
+  - |
+    try {
+      run();
+    } catch {
+      recover();
+    }
+  - |
+    try {
+      run();
+    } finally {
+      cleanup();
+    }

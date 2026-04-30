@@ -1,10 +1,12 @@
+import { Data, Effect } from "effect";
 import {
   cancelRun,
   getRunStatus,
   listRuns,
-  runProgramSync,
+  runProgramSyncEffect,
+  runWithBunServices,
   runWorker,
-  submitRun,
+  submitRunEffect,
   waitForRun,
   watchRun,
   type CancelRunInput,
@@ -20,10 +22,15 @@ import {
 } from "./run.api";
 import type { ResolveConfigOptions } from "./types";
 
+class MissingLaunchWorkerError extends Data.TaggedError("MissingLaunchWorkerError")<{
+  readonly message: string;
+}> {}
+
 interface MillRuntimeBaseOptions extends ResolveConfigOptions {
   readonly runsDirectory?: string;
   readonly driverName?: string;
   readonly executorName?: string;
+  readonly executablePath?: string;
 }
 
 export interface MillRuntimeOptions extends MillRuntimeBaseOptions {
@@ -41,6 +48,7 @@ export interface MillRuntimeWorkerInput {
   readonly runId: string;
   readonly programPath: string;
   readonly runDepth?: number;
+  readonly workerPid?: number;
 }
 
 export interface MillRuntimeWaitInput {
@@ -91,9 +99,7 @@ const mergeRunInput = (
 ): SubmitRunInput & RunProgramSyncInput => ({
   ...options,
   programPath: input.programPath,
-  launchWorker:
-    options.launchWorker ??
-    (() => Promise.reject(new Error("Mill runtime launchWorker is required for run()."))),
+  launchWorker: options.launchWorker as (input: LaunchWorkerInput) => Promise<void>,
   metadata: input.metadata,
   waitTimeoutSeconds: input.waitTimeoutSeconds,
 });
@@ -111,22 +117,34 @@ export const createMillRuntime = (options: MillRuntimeOptions): MillRuntime => {
     let snapshot: RunRecord | undefined;
     let started = false;
     const runInput = mergeRunInput(options, input);
-    let resolveDone: (output: RunRecord | RunSyncOutput) => void = () => undefined;
-    let rejectDone: (error: unknown) => void = () => undefined;
-    const done = new Promise<RunRecord | RunSyncOutput>((resolve, reject) => {
-      resolveDone = resolve;
-      rejectDone = reject;
-    });
+    const deferred = Promise.withResolvers<RunRecord | RunSyncOutput>();
+    const done = deferred.promise;
 
-    const startRun = async (): Promise<void> => {
-      try {
-        const output =
-          input.sync === true ? await runProgramSync(runInput) : await submitRun(runInput);
-        snapshot = "run" in output ? output.run : output;
-        resolveDone(output);
-      } catch (error) {
-        rejectDone(error);
+    const startRun = (): void => {
+      if (options.launchWorker === undefined) {
+        deferred.reject(
+          new MissingLaunchWorkerError({
+            message: "Mill runtime launchWorker is required for run().",
+          }),
+        );
+        return;
       }
+
+      const outputEffect = (
+        input.sync === true ? runProgramSyncEffect(runInput) : submitRunEffect(runInput)
+      ).pipe(
+        Effect.tap((output) =>
+          Effect.sync(() => {
+            snapshot = "run" in output ? output.run : output;
+          }),
+        ),
+        Effect.match({
+          onFailure: (error) => deferred.reject(error),
+          onSuccess: (output) => deferred.resolve(output),
+        }),
+      );
+
+      void runWithBunServices(outputEffect);
     };
 
     const actor: MillRuntimeRunActor = {
@@ -173,6 +191,7 @@ export const createMillRuntime = (options: MillRuntimeOptions): MillRuntime => {
         runId: input.runId,
         programPath: input.programPath,
         runDepth: input.runDepth,
+        workerPid: input.workerPid,
       } satisfies RunWorkerInput),
     runRef,
     watch: (input) =>

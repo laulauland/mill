@@ -1,0 +1,17 @@
+id: no-node-child-process
+language: TypeScript
+severity: error
+message: Use Effect platform Command/Process services or isolate process control in explicit final-boundary adapters.
+ignores:
+  - "**/*.test.ts"
+  - "packages/cli/src/mill.ts"
+  - "packages/core/src/run-platform.adapter.ts"
+  - "packages/pi-mill/**"
+  - "packages/pi-mill/runtime.adapter.ts"
+  - "packages/pi-mill/.vendor/**"
+  - "packages/pi-mill/.pi-skills/**"
+rule:
+  any:
+    - pattern: 'import $$$A from "node:child_process"'
+    - pattern: 'import { $$$A } from "node:child_process"'
+    - pattern: "process.kill($$$A)"

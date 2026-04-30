@@ -2,10 +2,7 @@ id: no-try-catch
 language: TypeScript
 severity: error
 message: Avoid try/catch control flow; use Effect error channels.
+ignores:
+  - "**/*.test.ts"
 rule:
-  pattern: |
-    try {
-      $$$A
-    } catch ($$$B) {
-      $$$C
-    }
+  kind: try_statement

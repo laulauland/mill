@@ -115,8 +115,16 @@ const makeInitialRunSnapshot = (id: string): RunSnapshot => ({
   tasks: {},
 });
 
-const errorMessageFromUnknown = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const errorMessageFromUnknown = (error: unknown): string => {
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return String(error);
+};
 
 export const makeTaskActorRuntime = (
   input: TaskInput,

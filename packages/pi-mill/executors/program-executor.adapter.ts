@@ -1,6 +1,7 @@
-import { pathToFileURL } from "node:url";
+import { pathToFileURL } from "../platform.adapter.js";
 import { highlightCode, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { Effect } from "effect";
 import { MillError, toErrorDetails } from "../errors.js";
 import type { ObservabilityStore } from "../observability.js";
 import {
@@ -9,7 +10,7 @@ import {
   patchPromiseAll,
   prepareProgramModule,
   preflightTypecheck,
-} from "../runtime.js";
+} from "../runtime.adapter.js";
 import type { ExecutionResult, RunSummary } from "../types.js";
 
 // ── Confirmation UI ────────────────────────────────────────────────────
@@ -163,7 +164,7 @@ export async function confirmExecution(
 
 // ── Program execution ──────────────────────────────────────────────────
 
-export async function executeProgram(input: {
+export function executeProgram(input: {
   ctx: ExtensionContext;
   runId: string;
   code: string;
@@ -181,153 +182,182 @@ export async function executeProgram(input: {
   millArgs?: string[];
   millRunsDir?: string;
 }): Promise<RunSummary> {
-  const { ctx, runId, code, obs } = input;
-  const resultsByTask = new Map<string, ExecutionResult>();
-  const results: ExecutionResult[] = [];
-
-  const sync = () => {
-    results.splice(0, results.length, ...resultsByTask.values());
-  };
-  const emit = (status: RunSummary["status"], error?: RunSummary["error"]) => {
-    sync();
-    input.onUpdate?.({
-      runId,
-      status,
-      results: [...results],
-      observability: obs.toSummary(runId),
-      error,
-    });
-  };
-
-  let runtime: ReturnType<typeof createMillRuntime> | null = null;
-  try {
-    // Write program source as early as possible so failed preflight/confirmation runs
-    // still keep a legible copy of the attempted program.
-    obs.writeArtifact(runId, "program.ts", code);
-
-    // Preflight typecheck — catch type errors before showing confirmation dialog
-    const typeErrors = await preflightTypecheck(code);
-    if (typeErrors) {
-      throw new MillError({
-        code: "INVALID_INPUT",
-        message: `Type errors in program code:\n${typeErrors}`,
-        recoverable: true,
-      });
-    }
-
-    if (!input.skipConfirmation) {
-      const confirmation = await confirmExecution(ctx, code);
-      if (!confirmation.approved) {
-        throw new MillError({
-          code: "CONFIRMATION_REJECTED",
-          message: confirmation.reason ? `Cancelled: ${confirmation.reason}` : "Cancelled by user.",
-          recoverable: true,
-        });
-      }
-    }
-
-    emit("running");
-    obs.push(runId, "info", "program:start", { codeBytes: code.length });
-
-    runtime = createMillRuntime(ctx, runId, obs, {
-      defaultSignal: input.signal,
-      onTaskUpdate: (result) => {
-        resultsByTask.set(result.taskId, result);
-        emit("running");
-      },
-      onChildRunSubmitted: input.onChildRunSubmitted,
-      parentSessionPath: input.parentSessionPath,
-      piSessionKey: input.piSessionKey,
-      sessionDir: input.sessionDir,
-      millCommand: input.millCommand,
-      millArgs: input.millArgs,
-      millRunsDir: input.millRunsDir,
-    });
-
-    const { modulePath } = prepareProgramModule(code);
-    const restorePromise = patchPromiseAll(obs, runId);
-    const restoreConsole = patchConsole(obs, runId);
-
-    // Inject runtime global.
-    const prevMill = (globalThis as any).mill;
-    const restoreGlobals = () => {
-      if (prevMill === undefined) delete (globalThis as any).mill;
-      else (globalThis as any).mill = prevMill;
-    };
-
-    (globalThis as any).mill = runtime;
-
-    let importPromise: Promise<unknown>;
-    try {
-      importPromise = import(pathToFileURL(modulePath).toString());
-      // Prevent unhandled rejection if importPromise rejects before being awaited
-      importPromise.catch(() => {});
-    } catch (e) {
-      restoreGlobals();
-      restorePromise();
-      restoreConsole();
-      throw e;
-    }
-
-    if (input.signal) {
-      if (input.signal.aborted) {
-        restoreGlobals();
-        restorePromise();
-        restoreConsole();
-        throw new MillError({
-          code: "CANCELLED",
-          message: "Cancelled before execution.",
-          recoverable: true,
-        });
-      }
-      let onAbort: (() => void) | undefined;
-      const cancelled = new Promise<never>((_resolve, reject) => {
-        onAbort = () =>
-          reject(new MillError({ code: "CANCELLED", message: "Cancelled.", recoverable: true }));
-        input.signal?.addEventListener("abort", onAbort, { once: true });
-      });
-      try {
-        await Promise.race([importPromise, cancelled]);
-      } finally {
-        if (onAbort) input.signal?.removeEventListener("abort", onAbort);
-        restoreGlobals();
-        restorePromise();
-        restoreConsole();
-      }
-    } else {
-      try {
-        await importPromise;
-      } finally {
-        restoreGlobals();
-        restorePromise();
-        restoreConsole();
-      }
-    }
-
-    emit("done");
-    return {
-      runId,
-      status: "done",
-      results,
-      observability: obs.toSummary(runId),
-      metadata: { modulePath },
-    };
-  } catch (error) {
-    const details = toErrorDetails(error);
-    obs.push(runId, "error", details.message, { code: details.code });
-    const status =
-      details.code === "CANCELLED" || details.code === "CONFIRMATION_REJECTED"
-        ? "cancelled"
-        : "failed";
-    emit(status, details);
-    return { runId, status, results, observability: obs.toSummary(runId), error: details };
-  } finally {
-    if (runtime) {
-      try {
-        await runtime.shutdown(true);
-      } catch (e) {
-        obs.push(runId, "warning", "shutdown_failed", { error: String(e) });
-      }
-    }
-  }
+  return Effect.runPromise(executeProgramEffect(input));
 }
+
+const executeProgramEffect = (input: {
+  ctx: ExtensionContext;
+  runId: string;
+  code: string;
+  task: string;
+  cwd: string;
+  obs: ObservabilityStore;
+  onUpdate?: (summary: RunSummary) => void;
+  onChildRunSubmitted?: (runId: string, taskId: string) => void;
+  signal?: AbortSignal;
+  parentSessionPath?: string;
+  piSessionKey?: string;
+  sessionDir?: string;
+  skipConfirmation?: boolean;
+  millCommand?: string;
+  millArgs?: string[];
+  millRunsDir?: string;
+}): Effect.Effect<RunSummary> =>
+  Effect.gen(function* () {
+    const { ctx, runId, code, obs } = input;
+    const resultsByTask = new Map<string, ExecutionResult>();
+    const results: ExecutionResult[] = [];
+    let runtime: ReturnType<typeof createMillRuntime> | null = null;
+
+    const sync = () => {
+      results.splice(0, results.length, ...resultsByTask.values());
+    };
+    const emit = (status: RunSummary["status"], error?: RunSummary["error"]) => {
+      sync();
+      input.onUpdate?.({
+        runId,
+        status,
+        results: [...results],
+        observability: obs.toSummary(runId),
+        error,
+      });
+    };
+
+    const restoreAll = (
+      restoreGlobals: () => void,
+      restorePromise: () => void,
+      restoreConsole: () => void,
+    ) =>
+      Effect.sync(() => {
+        restoreGlobals();
+        restorePromise();
+        restoreConsole();
+      });
+
+    return yield* Effect.gen(function* () {
+      obs.writeArtifact(runId, "program.ts", code);
+
+      const typeErrors = yield* Effect.promise(() => preflightTypecheck(code));
+      if (typeErrors) {
+        return yield* Effect.fail(
+          new MillError({
+            code: "INVALID_INPUT",
+            message: `Type errors in program code:
+${typeErrors}`,
+            recoverable: true,
+          }),
+        );
+      }
+
+      if (!input.skipConfirmation) {
+        const confirmation = yield* Effect.promise(() => confirmExecution(ctx, code));
+        if (!confirmation.approved) {
+          return yield* Effect.fail(
+            new MillError({
+              code: "CONFIRMATION_REJECTED",
+              message: confirmation.reason
+                ? `Cancelled: ${confirmation.reason}`
+                : "Cancelled by user.",
+              recoverable: true,
+            }),
+          );
+        }
+      }
+
+      emit("running");
+      obs.push(runId, "info", "program:start", { codeBytes: code.length });
+
+      runtime = createMillRuntime(ctx, runId, obs, {
+        defaultSignal: input.signal,
+        onTaskUpdate: (result) => {
+          resultsByTask.set(result.taskId, result);
+          emit("running");
+        },
+        onChildRunSubmitted: input.onChildRunSubmitted,
+        parentSessionPath: input.parentSessionPath,
+        piSessionKey: input.piSessionKey,
+        sessionDir: input.sessionDir,
+        millCommand: input.millCommand,
+        millArgs: input.millArgs,
+        millRunsDir: input.millRunsDir,
+      });
+
+      const { modulePath } = yield* Effect.promise(() => prepareProgramModule(code));
+      const restorePromise = patchPromiseAll(obs, runId);
+      const restoreConsole = patchConsole(obs, runId);
+      const prevMill = (globalThis as any).mill;
+      const restoreGlobals = () => {
+        if (prevMill === undefined) delete (globalThis as any).mill;
+        else (globalThis as any).mill = prevMill;
+      };
+      (globalThis as any).mill = runtime;
+
+      const importEffect = Effect.tryPromise({
+        try: () => import(pathToFileURL(modulePath).toString()),
+        catch: (error) => error,
+      });
+      const cancellationEffect = input.signal
+        ? Effect.callback<never, MillError>((resume) => {
+            if (input.signal?.aborted) {
+              resume(
+                Effect.fail(
+                  new MillError({
+                    code: "CANCELLED",
+                    message: "Cancelled before execution.",
+                    recoverable: true,
+                  }),
+                ),
+              );
+              return;
+            }
+            const onAbort = () =>
+              resume(
+                Effect.fail(
+                  new MillError({ code: "CANCELLED", message: "Cancelled.", recoverable: true }),
+                ),
+              );
+            input.signal?.addEventListener("abort", onAbort, { once: true });
+            return Effect.sync(() => input.signal?.removeEventListener("abort", onAbort));
+          })
+        : Effect.never;
+
+      yield* Effect.race(importEffect, cancellationEffect).pipe(
+        Effect.ensuring(restoreAll(restoreGlobals, restorePromise, restoreConsole)),
+      );
+
+      emit("done");
+      return {
+        runId,
+        status: "done" as const,
+        results,
+        observability: obs.toSummary(runId),
+        metadata: { modulePath },
+      };
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          const details = toErrorDetails(error);
+          obs.push(runId, "error", details.message, { code: details.code });
+          const status =
+            details.code === "CANCELLED" || details.code === "CONFIRMATION_REJECTED"
+              ? "cancelled"
+              : "failed";
+          emit(status, details);
+          return { runId, status, results, observability: obs.toSummary(runId), error: details };
+        }),
+      ),
+      Effect.ensuring(
+        Effect.gen(function* () {
+          if (runtime) {
+            yield* Effect.promise(() => runtime.shutdown(true)).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() =>
+                  obs.push(runId, "warning", "shutdown_failed", { error: String(error) }),
+                ),
+              ),
+            );
+          }
+        }),
+      ),
+    );
+  });

@@ -1,0 +1,7 @@
+id: no-process-cwd-outside-edge
+valid:
+  - |
+    const cwd = input.cwd;
+invalid:
+  - |
+    const cwd = process.cwd();

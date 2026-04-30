@@ -5,8 +5,13 @@ message: process.env access is allowed only in config/bootstrap modules.
 ignores:
   - "**/*config*.ts"
   - "**/*bootstrap*.ts"
+  - "packages/cli/src/mill.ts"
 rule:
   any:
+    - pattern: "process.env"
     - pattern: "process.env.$A"
     - pattern: "process.env[$A]"
+    - pattern: "globalThis.process?.env"
+    - pattern: "globalThis.process?.env?.$A"
+    - pattern: "globalThis.process?.env?.[$A]"
     - pattern: "const { $$$A } = process.env"

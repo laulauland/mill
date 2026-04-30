@@ -1,0 +1,32 @@
+id: no-sync-fs
+language: TypeScript
+severity: error
+message: Avoid sync filesystem APIs; use Effect FileSystem or isolate truly final-boundary sync IO.
+ignores:
+  - "**/*.test.ts"
+  - "packages/pi-mill/.vendor/**"
+  - "packages/pi-mill/.pi-skills/**"
+rule:
+  any:
+    - pattern: "$FS.readFileSync($$$A)"
+    - pattern: "$FS.writeFileSync($$$A)"
+    - pattern: "$FS.appendFileSync($$$A)"
+    - pattern: "$FS.existsSync($$$A)"
+    - pattern: "$FS.mkdirSync($$$A)"
+    - pattern: "$FS.rmSync($$$A)"
+    - pattern: "$FS.statSync($$$A)"
+    - pattern: "$FS[$METHOD]($$$A)"
+    - pattern: '"Sy" + "nc"'
+    - pattern: '"S" + "ync"'
+    - pattern: "'Sy' + 'nc'"
+    - pattern: "'S' + 'ync'"
+    - pattern: "`readFile${$SUFFIX}`"
+    - pattern: "`writeFile${$SUFFIX}`"
+    - pattern: "`appendFile${$SUFFIX}`"
+    - pattern: "`exists${$SUFFIX}`"
+    - pattern: "`mkdir${$SUFFIX}`"
+    - pattern: "`rm${$SUFFIX}`"
+    - pattern: "`stat${$SUFFIX}`"
+constraints:
+  METHOD:
+    regex: "(readFile|writeFile|appendFile|exists|mkdir|rm|stat).*Sync|.*Sync$"

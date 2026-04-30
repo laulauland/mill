@@ -1,0 +1,7 @@
+id: no-instanceof-error
+valid:
+  - |
+    const message = normalizeUnknownError(error);
+invalid:
+  - |
+    const message = error instanceof Error ? error.message : String(error);

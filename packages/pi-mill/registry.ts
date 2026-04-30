@@ -1,3 +1,4 @@
+import { now } from "./clock.js";
 import type { RunSummary } from "./types.js";
 import type { ErrorDetails } from "./errors.js";
 
@@ -32,7 +33,7 @@ export class RunRegistry {
       summary,
       promise,
       abort,
-      startedAt: Date.now(),
+      startedAt: now(),
       task: meta?.task,
     };
 
@@ -64,7 +65,7 @@ export class RunRegistry {
     if (!record) return;
     record.summary = summary;
     record.status = summary.status === "running" ? "done" : summary.status;
-    record.completedAt = Date.now();
+    record.completedAt = now();
   }
 
   fail(runId: string, error: ErrorDetails): void {
@@ -73,7 +74,7 @@ export class RunRegistry {
     record.status = "failed";
     record.summary.status = "failed";
     record.summary.error = error;
-    record.completedAt = Date.now();
+    record.completedAt = now();
   }
 
   cancel(runId: string): void {
@@ -81,7 +82,7 @@ export class RunRegistry {
     if (!record) return;
     record.status = "cancelled";
     record.summary.status = "cancelled";
-    record.completedAt = Date.now();
+    record.completedAt = now();
     record.abort?.abort();
   }
 

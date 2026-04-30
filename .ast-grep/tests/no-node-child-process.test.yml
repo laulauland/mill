@@ -1,0 +1,11 @@
+id: no-node-child-process
+valid:
+  - |
+    import * as Command from "effect/Command";
+  - |
+    const alive = yield* processControl.isAlive(pid);
+invalid:
+  - |
+    import { spawn } from "node:child_process";
+  - |
+    process.kill(pid, "SIGTERM");

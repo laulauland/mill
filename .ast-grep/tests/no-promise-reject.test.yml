@@ -1,0 +1,7 @@
+id: no-promise-reject
+valid:
+  - |
+    const failed = Effect.fail(error);
+invalid:
+  - |
+    const failed = Promise.reject(error);

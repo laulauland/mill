@@ -7,3 +7,9 @@ invalid:
     const homeDirectory = process.env.HOME;
   - |
     const { HOME } = process.env;
+  - |
+    const env = process.env;
+  - |
+    const homeDirectory = globalThis.process?.env?.HOME;
+  - |
+    const homeDirectory = globalThis.process?.env?.["HOME"];

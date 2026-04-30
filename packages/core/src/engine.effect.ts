@@ -154,13 +154,7 @@ const toIsoTimestamp = Effect.map(Clock.currentTimeMillis, (millis) =>
   new Date(millis).toISOString(),
 );
 
-const toMessage = (error: unknown): string => {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-};
+const toMessage = (error: unknown): string => String(error);
 
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {

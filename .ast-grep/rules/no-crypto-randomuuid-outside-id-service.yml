@@ -1,0 +1,18 @@
+id: no-crypto-randomuuid-outside-id-service
+language: TypeScript
+severity: error
+message: Use an injected ID/random service or explicit adapter helper instead of crypto.randomUUID directly.
+ignores:
+  - "**/*.test.ts"
+  - "**/*id*.ts"
+  - "**/*random*.ts"
+  - "packages/core/src/run-platform.adapter.ts"
+  - "packages/pi-mill/platform.adapter.ts"
+  - "packages/pi-mill/runtime.adapter.ts"
+  - "packages/pi-mill/executors/program-executor.adapter.ts"
+  - "packages/pi-mill/.vendor/**"
+  - "packages/pi-mill/.pi-skills/**"
+rule:
+  any:
+    - pattern: "crypto.randomUUID()"
+    - pattern: "randomUUID()"
