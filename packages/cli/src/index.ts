@@ -205,7 +205,7 @@ const createDefaultConfig = (env: Readonly<Record<string, string | undefined>>) 
     extensions: [],
     authoring: {
       instructions:
-        "Use systemPrompt for WHO and prompt for WHAT. Prefer cheaper models for search and stronger models for synthesis.",
+        "Use agent for provider/model, system for WHO, and prompt for WHAT. Prefer cheaper models for search and stronger models for synthesis.",
     },
   });
 
@@ -654,7 +654,7 @@ const INIT_CONFIG_TEMPLATE = [
   "  // Optional: override driver/executor defaults.",
   "  // maxRunDepth: 1, // recursion guard for nested `mill run`",
   "  authoring: {",
-  '    instructions: "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation). Prefer codex for synthesis, cerebras for fast retrieval.",',
+  '    instructions: "Use agent for provider/model, system for WHO (role/method), prompt for WHAT (explicit task + scope + validation). Prefer codex for synthesis, cerebras for fast retrieval.",',
   "  },",
   "};",
 ].join("\n");
@@ -1030,8 +1030,9 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
 };
 
 const STATIC_AUTHORING_HELP_LINES = [
-  "  systemPrompt = WHO the agent is (personality, methodology, output format)",
-  "  prompt       = WHAT to do now (specific files, concrete task)",
+  '  agent = WHICH provider/model should do the task, e.g. codex("openai-codex/gpt-5.3-codex")',
+  "  system = WHO the agent is (personality, methodology, output format)",
+  "  prompt = WHAT to do now (specific files, concrete task)",
 ] as const;
 
 interface DriverModelCatalogEntry {
@@ -1100,24 +1101,24 @@ ${renderModelCatalogHelp(helpContext.modelCatalog)}
 Examples:
 
   Sequential pipeline:
-    const scan = await mill.spawn({
-      agent: "scout",
-      systemPrompt: "You are a code risk analyst.",
+    const scan = mill.task({
+      agent: codex("openai-codex/gpt-5.3-codex"),
+      role: "scout",
+      system: "You are a code risk analyst.",
       prompt: "Review src/auth and summarize top security risks.",
-      model: "openai-codex/gpt-5.3-codex",
-    });
-    const plan = await mill.spawn({
-      agent: "planner",
-      systemPrompt: "You turn findings into an execution-ready plan.",
-      prompt: \`Create remediation steps from:\\n\\n\${scan.text}\`,
-      model: "anthropic/claude-sonnet-4-6",
-    });
+    }).start();
+    const scanResult = await scan.done;
+    const plan = mill.task({
+      agent: claude("anthropic/claude-sonnet-4-6"),
+      role: "planner",
+      system: "You turn findings into an execution-ready plan.",
+      prompt: \`Create remediation steps from:\\n\\n\${scanResult.text}\`,
+    }).start();
 
   Parallel fan-out:
-    const [security, perf] = await Promise.all([
-      mill.spawn({ agent: "security", systemPrompt: "...", prompt: "Review src/auth/", model: "anthropic/claude-sonnet-4-6" }),
-      mill.spawn({ agent: "perf", systemPrompt: "...", prompt: "Profile src/api/", model: "cerebras/zai-glm-4.7" }),
-    ]);
+    const security = mill.task({ agent: claude("anthropic/claude-sonnet-4-6"), prompt: "Review src/auth/" }).start();
+    const perf = mill.task({ agent: codex("openai-codex/gpt-5.3-codex"), prompt: "Profile src/api/" }).start();
+    const [securityResult, perfResult] = await Promise.all([security.done, perf.done]);
 
 ${renderAuthoringHelp(helpContext.authoring)}
 

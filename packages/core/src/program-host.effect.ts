@@ -5,10 +5,11 @@ import {
   ProgramHostProtocolPrefix,
   decodeProgramHostInboundMessage,
   type ProgramHostInboundMessage,
+  type ProgramHostOutboundMessage,
   type ProgramHostResponseMessage,
 } from "./program-host.schema";
-import type { ProgramHostTaskOptions } from "./program-host.schema";
-import type { SpawnOptions, SpawnResult } from "./spawn.schema";
+import type { ProgramHostTaskCommand } from "./program-host.schema";
+import { makeTaskActorRuntime, type TaskActorRuntime } from "./task-actor.effect";
 import type { ExtensionRegistration, TaskInput, TaskResult } from "./types";
 
 export class ProgramHostError extends Data.TaggedError("ProgramHostError")<{
@@ -25,7 +26,6 @@ export interface ExecuteProgramInProcessHostInput {
   readonly executorName: string;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly env?: Readonly<Record<string, string>>;
-  readonly spawn: (input: SpawnOptions) => Effect.Effect<SpawnResult, unknown>;
   readonly task: (input: TaskInput) => Effect.Effect<TaskResult, unknown>;
   readonly onIo?: (input: {
     readonly stream: "stdout" | "stderr";
@@ -140,25 +140,61 @@ const createProgramHostSource = (
     '  process.stdout.write(__millProtocolPrefix + JSON.stringify(message) + "\\n");',
     "};",
     "",
-    "const __millResolveResponse = (message) => {",
-    '  if (message.kind !== "response") {',
+    "const __millTaskControllers = new Map();",
+    "",
+    "const __millPublishTaskSnapshot = (taskId, snapshot) => {",
+    "  const controller = __millTaskControllers.get(taskId);",
+    "  if (controller === undefined) return;",
+    "  if (JSON.stringify(controller.snapshot) === JSON.stringify(snapshot)) return;",
+    "  controller.snapshot = snapshot;",
+    "  for (const listener of controller.listeners) listener(snapshot);",
+    "  if (controller.terminal) return;",
+    '  if (snapshot.status === "complete" && snapshot.result !== undefined) {',
+    "    controller.terminal = true;",
+    "    controller.resolveDone(snapshot.result);",
+    "  }",
+    '  if (snapshot.status === "cancelled" && snapshot.result !== undefined) {',
+    "    controller.terminal = true;",
+    "    controller.resolveDone(snapshot.result);",
+    "  }",
+    '  if (snapshot.status === "failed") {',
+    "    controller.terminal = true;",
+    '    controller.rejectDone(new Error(String(snapshot.error ?? "task failed")));',
+    "  }",
+    "};",
+    "",
+    "const __millResolveParentMessage = (message) => {",
+    '  if (message.kind === "response") {',
+    "    const pending = __millPending.get(message.requestId);",
+    "    if (pending === undefined) return;",
+    "    __millPending.delete(message.requestId);",
+    "    if (message.ok === true) {",
+    "      pending.resolve(message.value);",
+    "      return;",
+    "    }",
+    '    pending.reject(new Error(String(message.message ?? "program host request failed")));',
     "    return;",
     "  }",
     "",
-    "  const pending = __millPending.get(message.requestId);",
-    "",
-    "  if (pending === undefined) {",
+    '  if (message.kind === "task:snapshot") {',
+    "    __millPublishTaskSnapshot(message.taskId, message.snapshot);",
     "    return;",
     "  }",
     "",
-    "  __millPending.delete(message.requestId);",
-    "",
-    "  if (message.ok === true) {",
-    "    pending.resolve(message.value);",
+    '  if (message.kind === "task:done") {',
+    "    const controller = __millTaskControllers.get(message.taskId);",
+    "    if (controller === undefined || controller.terminal) return;",
+    "    controller.terminal = true;",
+    "    controller.resolveDone(message.result);",
     "    return;",
     "  }",
     "",
-    '  pending.reject(new Error(String(message.message ?? "program host request failed")));',
+    '  if (message.kind === "task:error") {',
+    "    const controller = __millTaskControllers.get(message.taskId);",
+    "    if (controller === undefined || controller.terminal) return;",
+    "    controller.terminal = true;",
+    '    controller.rejectDone(new Error(String(message.message ?? "task failed")));',
+    "  }",
     "};",
     "",
     'process.stdin.setEncoding("utf8");',
@@ -180,9 +216,9 @@ const createProgramHostSource = (
     "    }",
     "",
     "    try {",
-    "      __millResolveResponse(JSON.parse(line));",
+    "      __millResolveParentMessage(JSON.parse(line));",
     "    } catch (_error) {",
-    "      // Ignore malformed parent responses.",
+    "      // Ignore malformed parent messages.",
     "    }",
     "  }",
     "});",
@@ -212,34 +248,6 @@ const createProgramHostSource = (
     "  ...extra,",
     "});",
     "",
-    "const __millTaskCancelledResult = (input, taskId, reason) => ({",
-    '  text: "",',
-    "  sessionRef: `task://program-host/${taskId}`,",
-    "  role: input.role ?? input.agent.driver,",
-    "  model: input.agent.model,",
-    "  driver: input.agent.driver,",
-    "  exitCode: 1,",
-    '  stopReason: "cancelled",',
-    '  errorMessage: reason ?? "Task cancelled",',
-    "});",
-    "",
-    'const __millTaskBusy = (status) => status === "starting" || status === "running" || status === "queued" || status === "interrupting";',
-    "",
-    "const __millCommandMode = (input, command) => {",
-    '  if (command?.type === "cancel") return "interrupt";',
-    '  return command?.mode ?? input.steering ?? "queue";',
-    "};",
-    "",
-    "const __millQueuedCommand = (command, mode) => {",
-    '  if (command?.type !== "message" && command?.type !== "context") return undefined;',
-    "  return {",
-    "    type: command.type,",
-    '    content: String(command.content ?? ""),',
-    '    from: command.type === "context" ? command.from : undefined,',
-    "    mode,",
-    "  };",
-    "};",
-    "",
     "const __millCreateTaskActor = (input) => {",
     "  __millRequestCounter += 1;",
     "  const taskId = `task_${__millRequestCounter}`;",
@@ -253,23 +261,14 @@ const createProgramHostSource = (
     "    resolveDone = resolve;",
     "    rejectDone = reject;",
     "  });",
-    "  const publish = (next) => {",
-    "    snapshot = next;",
-    "    for (const listener of listeners) listener(snapshot);",
-    "  };",
-    "  const complete = (result) => {",
-    "    if (terminal) return;",
+    "  const controller = { listeners, snapshot, terminal, resolveDone, rejectDone };",
+    "  __millTaskControllers.set(taskId, controller);",
+    "  const publishLocal = (next) => __millPublishTaskSnapshot(taskId, next);",
+    '  __millCallHost({ requestType: "task:create", taskId, input }).catch((error) => {',
     "    terminal = true;",
-    '    publish({ ...snapshot, status: "complete", text: String(result?.text ?? ""), sessionRef: result?.sessionRef, result });',
-    "    resolveDone(result);",
-    "  };",
-    "  const fail = (error) => {",
-    "    if (terminal) return;",
-    "    terminal = true;",
-    "    const message = error instanceof Error ? error.message : String(error);",
-    '    publish({ ...snapshot, status: "failed", error: message });',
+    '    publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
     "    rejectDone(error);",
-    "  };",
+    "  });",
     "  const actor = {",
     "    id: taskId,",
     '    ref: { runId: "program-host", taskId },',
@@ -277,65 +276,43 @@ const createProgramHostSource = (
     "    start: () => {",
     "      if (started || terminal) return actor;",
     "      started = true;",
-    '      publish({ ...snapshot, status: "running" });',
-    '      __millCallHost({ requestType: "task", input }).then(complete, fail);',
+    '      __millCallHost({ requestType: "task:start", taskId }).catch((error) => {',
+    "        terminal = true;",
+    '        publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
+    "        rejectDone(error);",
+    "      });",
     "      return actor;",
     "    },",
     '    stop: () => actor.cancel("Task stopped"),',
     "    cancel: (reason) => {",
     "      if (terminal) return actor;",
-    "      terminal = true;",
-    "      const result = __millTaskCancelledResult(input, taskId, reason);",
-    '      publish({ ...snapshot, status: "cancelled", result, error: result.errorMessage });',
-    "      resolveDone(result);",
+    '      __millCallHost({ requestType: "task:cancel", taskId, reason }).catch((error) => {',
+    "        terminal = true;",
+    '        publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
+    "        rejectDone(error);",
+    "      });",
     "      return actor;",
     "    },",
     "    send: (command) => {",
-    '      if (command?.type === "cancel") return actor.cancel(command.reason);',
     "      if (terminal) return actor;",
-
-    "      const mode = __millCommandMode(input, command);",
-    "      const queued = __millQueuedCommand(command, mode);",
-    "      if (queued === undefined) return actor;",
-    '      if (mode === "queue") {',
-    "        publish({",
-    "          ...snapshot,",
-    '          status: __millTaskBusy(snapshot.status) || snapshot.status === "idle" ? "queued" : snapshot.status,',
-    "          queue: [...snapshot.queue, queued],",
-    "        });",
-    "        return actor;",
-    "      }",
-    '      if (mode === "interrupt") {',
-    "        publish({",
-    "          ...snapshot,",
-    '          status: __millTaskBusy(snapshot.status) ? "interrupting" : snapshot.status,',
-    '          error: "Task interrupt requested; driver-level interrupt is not available yet.",',
-    "          queue: [...snapshot.queue, queued],",
-    "        });",
-    "        return actor;",
-    "      }",
-    "      publish({",
-    "        ...snapshot,",
-    '        error: __millTaskBusy(snapshot.status) ? "Task is busy and rejected the steering command." : "Task rejected the steering command.",',
+    '      __millCallHost({ requestType: "task:send", taskId, command }).catch((error) => {',
+    "        terminal = true;",
+    '        publishLocal({ ...snapshot, status: "failed", error: error instanceof Error ? error.message : String(error) });',
+    "        rejectDone(error);",
     "      });",
     "      return actor;",
     "    },",
     "    subscribe: (listener) => {",
     "      listeners.add(listener);",
-    "      listener(snapshot);",
+    "      listener(controller.snapshot);",
     "      return { unsubscribe: () => listeners.delete(listener) };",
     "    },",
-    "    getSnapshot: () => snapshot,",
+    "    getSnapshot: () => controller.snapshot,",
     "  };",
     "  return actor;",
     "};",
     "",
     "const __millApi = {",
-    "  spawn: (input) =>",
-    "    __millCallHost({",
-    '      requestType: "spawn",',
-    "      input,",
-    "    }),",
     "  task: (input) => __millCreateTaskActor(input),",
     "};",
     "",
@@ -390,13 +367,18 @@ const createProgramHostSource = (
   ].join("\n");
 };
 
-const encodeResponse = (response: ProgramHostResponseMessage): Uint8Array =>
-  textEncoder.encode(`${JSON.stringify(response)}\n`);
+const encodeOutbound = (message: ProgramHostOutboundMessage): Uint8Array =>
+  textEncoder.encode(`${JSON.stringify(message)}\n`);
+
+const sendOutbound = (
+  queue: Queue.Queue<Uint8Array>,
+  message: ProgramHostOutboundMessage,
+): Effect.Effect<void> => Effect.asVoid(Queue.offer(queue, encodeOutbound(message)));
 
 const sendResponse = (
   queue: Queue.Queue<Uint8Array>,
   response: ProgramHostResponseMessage,
-): Effect.Effect<void> => Effect.asVoid(Queue.offer(queue, encodeResponse(response)));
+): Effect.Effect<void> => sendOutbound(queue, response);
 
 const summarizeCause = (cause: Exit.Exit<unknown, unknown>["cause"]): string => Cause.pretty(cause);
 
@@ -420,10 +402,11 @@ const completeResult = (
     return result;
   });
 
-const runProgramTask = (
-  task: ExecuteProgramInProcessHostInput["task"],
-  input: ProgramHostTaskOptions,
-): Effect.Effect<TaskResult, unknown> => task(input);
+interface ProgramHostTaskActorState {
+  readonly actor: TaskActorRuntime;
+}
+
+const taskNotFoundMessage = (taskId: string): string => `Unknown task actor ${taskId}`;
 
 export const executeProgramInProcessHost = (
   input: ExecuteProgramInProcessHostInput,
@@ -506,6 +489,21 @@ export const executeProgramInProcessHost = (
       });
 
       const responseQueue = yield* Queue.unbounded<Uint8Array>();
+      const taskActorsRef = yield* Ref.make<ReadonlyMap<string, ProgramHostTaskActorState>>(
+        new Map(),
+      );
+
+      const getTaskActor = (taskId: string): Effect.Effect<TaskActorRuntime, string> =>
+        Effect.gen(function* () {
+          const actors = yield* Ref.get(taskActorsRef);
+          const state = actors.get(taskId);
+
+          if (state === undefined) {
+            return yield* Effect.fail(taskNotFoundMessage(taskId));
+          }
+
+          return state.actor;
+        });
 
       const stdinFiber = yield* Effect.forkDetach(
         Stream.run(Stream.fromQueue(responseQueue), processHandle.stdin),
@@ -549,37 +547,93 @@ export const executeProgramInProcessHost = (
               return;
             }
 
-            if (message.requestType === "spawn") {
-              const spawnExit = yield* Effect.exit(input.spawn(message.input));
+            if (message.requestType === "task:create") {
+              const createExit = yield* Effect.exit(
+                makeTaskActorRuntime(message.input, {
+                  execute: input.task,
+                  runId: input.runId,
+                  taskId: message.taskId,
+                }),
+              );
 
-              if (Exit.isSuccess(spawnExit)) {
+              if (Exit.isFailure(createExit)) {
                 yield* sendResponse(responseQueue, {
                   kind: "response",
                   requestId: message.requestId,
-                  ok: true,
-                  value: spawnExit.value,
+                  ok: false,
+                  message: summarizeCause(createExit.cause),
                 });
                 return;
               }
 
+              const actor = createExit.value;
+              actor.subscribe((snapshot) => {
+                if (snapshot.status === "idle") {
+                  return;
+                }
+
+                Effect.runFork(
+                  sendOutbound(responseQueue, {
+                    kind: "task:snapshot",
+                    taskId: actor.id,
+                    snapshot,
+                  }),
+                );
+              });
+              yield* Effect.forkDetach(
+                actor.done.pipe(
+                  Effect.matchEffect({
+                    onFailure: (error) =>
+                      sendOutbound(responseQueue, {
+                        kind: "task:error",
+                        taskId: actor.id,
+                        message: toMessage(error),
+                      }),
+                    onSuccess: (result) =>
+                      sendOutbound(responseQueue, {
+                        kind: "task:done",
+                        taskId: actor.id,
+                        result,
+                      }),
+                  }),
+                ),
+              );
+
+              yield* Ref.update(taskActorsRef, (actors) => {
+                const next = new Map(actors);
+                next.set(message.taskId, { actor });
+                return next;
+              });
               yield* sendResponse(responseQueue, {
                 kind: "response",
                 requestId: message.requestId,
-                ok: false,
-                message: summarizeCause(spawnExit.cause),
+                ok: true,
+                value: actor.getSnapshot(),
               });
               return;
             }
 
-            if (message.requestType === "task") {
-              const taskExit = yield* Effect.exit(runProgramTask(input.task, message.input));
+            if (message.requestType === "task:start") {
+              const actorExit = yield* Effect.exit(getTaskActor(message.taskId));
 
-              if (Exit.isSuccess(taskExit)) {
+              if (Exit.isFailure(actorExit)) {
                 yield* sendResponse(responseQueue, {
                   kind: "response",
                   requestId: message.requestId,
-                  ok: true,
-                  value: taskExit.value,
+                  ok: false,
+                  message: summarizeCause(actorExit.cause),
+                });
+                return;
+              }
+
+              const startExit = yield* Effect.exit(actorExit.value.start);
+
+              if (Exit.isFailure(startExit)) {
+                yield* sendResponse(responseQueue, {
+                  kind: "response",
+                  requestId: message.requestId,
+                  ok: false,
+                  message: summarizeCause(startExit.cause),
                 });
                 return;
               }
@@ -587,8 +641,78 @@ export const executeProgramInProcessHost = (
               yield* sendResponse(responseQueue, {
                 kind: "response",
                 requestId: message.requestId,
-                ok: false,
-                message: summarizeCause(taskExit.cause),
+                ok: true,
+                value: actorExit.value.getSnapshot(),
+              });
+              return;
+            }
+
+            if (message.requestType === "task:send") {
+              const actorExit = yield* Effect.exit(getTaskActor(message.taskId));
+
+              if (Exit.isFailure(actorExit)) {
+                yield* sendResponse(responseQueue, {
+                  kind: "response",
+                  requestId: message.requestId,
+                  ok: false,
+                  message: summarizeCause(actorExit.cause),
+                });
+                return;
+              }
+
+              const sendExit = yield* Effect.exit(
+                actorExit.value.send(message.command as ProgramHostTaskCommand),
+              );
+
+              if (Exit.isFailure(sendExit)) {
+                yield* sendResponse(responseQueue, {
+                  kind: "response",
+                  requestId: message.requestId,
+                  ok: false,
+                  message: summarizeCause(sendExit.cause),
+                });
+                return;
+              }
+
+              yield* sendResponse(responseQueue, {
+                kind: "response",
+                requestId: message.requestId,
+                ok: true,
+                value: actorExit.value.getSnapshot(),
+              });
+              return;
+            }
+
+            if (message.requestType === "task:cancel") {
+              const actorExit = yield* Effect.exit(getTaskActor(message.taskId));
+
+              if (Exit.isFailure(actorExit)) {
+                yield* sendResponse(responseQueue, {
+                  kind: "response",
+                  requestId: message.requestId,
+                  ok: false,
+                  message: summarizeCause(actorExit.cause),
+                });
+                return;
+              }
+
+              const cancelExit = yield* Effect.exit(actorExit.value.cancel(message.reason));
+
+              if (Exit.isFailure(cancelExit)) {
+                yield* sendResponse(responseQueue, {
+                  kind: "response",
+                  requestId: message.requestId,
+                  ok: false,
+                  message: summarizeCause(cancelExit.cause),
+                });
+                return;
+              }
+
+              yield* sendResponse(responseQueue, {
+                kind: "response",
+                requestId: message.requestId,
+                ok: true,
+                value: actorExit.value.getSnapshot(),
               });
               return;
             }

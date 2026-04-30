@@ -164,7 +164,7 @@ const makeConfig = (): MillConfig => ({
     },
   ],
   authoring: {
-    instructions: "use spawn + extension APIs",
+    instructions: "use task + extension APIs",
   },
 });
 
@@ -238,13 +238,14 @@ describe("run.api integration", () => {
       programPath,
       [
         'const note = await mill.tools.echo("hello");',
-        "const spawned = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         "  prompt: note,",
-        '  model: "openai/gpt-5.3-codex",',
-        "});",
-        'return JSON.stringify({ note, driver: spawned.driver, executor: globalThis.__millExecutorName ?? "unknown" });',
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        'return JSON.stringify({ note, driver: result.driver, executor: globalThis.__millExecutorName ?? "unknown" });',
       ].join("\n"),
       "utf-8",
     );

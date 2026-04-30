@@ -1,9 +1,9 @@
 import * as Schema from "effect/Schema";
-import { SpawnOptions } from "./spawn.schema";
 
 export const ProgramHostProtocolPrefix = "__MILL_HOST__";
 
 const RequestId = Schema.NonEmptyString;
+const TaskId = Schema.NonEmptyString;
 
 const AgentProvider = Schema.Struct({
   driver: Schema.NonEmptyString,
@@ -24,18 +24,57 @@ export const ProgramHostTaskOptions = Schema.Struct({
 
 export type ProgramHostTaskOptions = Schema.Schema.Type<typeof ProgramHostTaskOptions>;
 
-export const ProgramHostSpawnRequestMessage = Schema.Struct({
+export const ProgramHostTaskCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("message"),
+    content: Schema.String,
+    mode: Schema.optional(SteeringPolicy),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("context"),
+    content: Schema.String,
+    from: Schema.optional(
+      Schema.Union([Schema.String, Schema.Struct({ runId: Schema.String, taskId: Schema.String })]),
+    ),
+    mode: Schema.optional(SteeringPolicy),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("cancel"),
+    reason: Schema.optional(Schema.String),
+  }),
+]);
+
+export type ProgramHostTaskCommand = Schema.Schema.Type<typeof ProgramHostTaskCommand>;
+
+export const ProgramHostTaskCreateRequestMessage = Schema.Struct({
   kind: Schema.Literal("request"),
   requestId: RequestId,
-  requestType: Schema.Literal("spawn"),
-  input: SpawnOptions,
+  requestType: Schema.Literal("task:create"),
+  taskId: TaskId,
+  input: ProgramHostTaskOptions,
 });
 
-export const ProgramHostTaskRequestMessage = Schema.Struct({
+export const ProgramHostTaskStartRequestMessage = Schema.Struct({
   kind: Schema.Literal("request"),
   requestId: RequestId,
-  requestType: Schema.Literal("task"),
-  input: ProgramHostTaskOptions,
+  requestType: Schema.Literal("task:start"),
+  taskId: TaskId,
+});
+
+export const ProgramHostTaskSendRequestMessage = Schema.Struct({
+  kind: Schema.Literal("request"),
+  requestId: RequestId,
+  requestType: Schema.Literal("task:send"),
+  taskId: TaskId,
+  command: ProgramHostTaskCommand,
+});
+
+export const ProgramHostTaskCancelRequestMessage = Schema.Struct({
+  kind: Schema.Literal("request"),
+  requestId: RequestId,
+  requestType: Schema.Literal("task:cancel"),
+  taskId: TaskId,
+  reason: Schema.optional(Schema.String),
 });
 
 export const ProgramHostExtensionRequestMessage = Schema.Struct({
@@ -60,8 +99,10 @@ export const ProgramHostFailureResultMessage = Schema.Struct({
 });
 
 export const ProgramHostInboundMessage = Schema.Union([
-  ProgramHostSpawnRequestMessage,
-  ProgramHostTaskRequestMessage,
+  ProgramHostTaskCreateRequestMessage,
+  ProgramHostTaskStartRequestMessage,
+  ProgramHostTaskSendRequestMessage,
+  ProgramHostTaskCancelRequestMessage,
   ProgramHostExtensionRequestMessage,
   ProgramHostSuccessResultMessage,
   ProgramHostFailureResultMessage,
@@ -89,9 +130,36 @@ export const ProgramHostFailureResponseMessage = Schema.Struct({
   message: Schema.String,
 });
 
+export const ProgramHostTaskSnapshotMessage = Schema.Struct({
+  kind: Schema.Literal("task:snapshot"),
+  taskId: TaskId,
+  snapshot: Schema.Unknown,
+});
+
+export const ProgramHostTaskDoneMessage = Schema.Struct({
+  kind: Schema.Literal("task:done"),
+  taskId: TaskId,
+  result: Schema.Unknown,
+});
+
+export const ProgramHostTaskErrorMessage = Schema.Struct({
+  kind: Schema.Literal("task:error"),
+  taskId: TaskId,
+  message: Schema.String,
+});
+
 export const ProgramHostResponseMessage = Schema.Union([
   ProgramHostSuccessResponseMessage,
   ProgramHostFailureResponseMessage,
 ]);
 
+export const ProgramHostOutboundMessage = Schema.Union([
+  ProgramHostSuccessResponseMessage,
+  ProgramHostFailureResponseMessage,
+  ProgramHostTaskSnapshotMessage,
+  ProgramHostTaskDoneMessage,
+  ProgramHostTaskErrorMessage,
+]);
+
 export type ProgramHostResponseMessage = Schema.Schema.Type<typeof ProgramHostResponseMessage>;
+export type ProgramHostOutboundMessage = Schema.Schema.Type<typeof ProgramHostOutboundMessage>;

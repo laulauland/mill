@@ -611,7 +611,7 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
         runId: decodeRunIdSync(input.runId),
         programPath,
         runsDirectory: engineContext.runsDirectory,
-        executeProgram: (spawn, task) =>
+        executeProgram: (_spawn, task) =>
           Effect.mapError(
             engineContext.selectedExecutorRuntime.runProgram({
               runId: input.runId,
@@ -627,7 +627,6 @@ export const runWorker = async (input: RunWorkerInput): Promise<RunSyncOutput> =
                 env: {
                   [RUN_DEPTH_ENV]: String(runDepth),
                 },
-                spawn,
                 task,
                 onIo: ({ stream, line }) =>
                   Effect.flatMap(

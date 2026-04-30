@@ -227,13 +227,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "globalThis.__millLastText = scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "globalThis.__millLastText = result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -373,13 +374,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -426,13 +428,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -476,13 +479,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -522,13 +526,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -568,13 +573,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -619,13 +625,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "globalThis.__millAsyncText = scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "globalThis.__millAsyncText = result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -681,7 +688,7 @@ describe("runCli", () => {
         "utf-8",
       );
 
-      expect(copiedProgram).toContain("mill.spawn");
+      expect(copiedProgram).toContain("mill.task");
       expect(workerLog.length).toBeGreaterThan(0);
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -696,13 +703,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "globalThis.__millWaitText = scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "globalThis.__millWaitText = result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -782,13 +790,14 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -969,13 +978,14 @@ describe("runCli", () => {
       [
         "await new Promise((resolve) => setTimeout(resolve, 100));",
         'console.log("program-io");',
-        "const scan = await mill.spawn({",
-        '  agent: "scout",',
-        '  systemPrompt: "You are concise.",',
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  system: "You are concise.",',
         '  prompt: "Say hello",',
-        '  model: "openai-codex/gpt-5.3-codex",',
-        "});",
-        "return scan.text;",
+        '  role: "scout",',
+        "}).start();",
+        "const result = await task.done;",
+        "return result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -1180,7 +1190,7 @@ describe("runCli", () => {
     expect(stdout[0]).toContain("codex (provider/model-id):");
     expect(stdout[0]).not.toContain("pi (provider/model-id):");
     expect(stdout[0]).toContain("Authoring:\n  CUSTOM_AUTHORING_INSTRUCTIONS");
-    expect(stdout[0]).not.toContain("systemPrompt = WHO the agent is");
+    expect(stdout[0]).not.toContain("system = WHO the agent is");
   });
 
   it("falls back to static authoring guidance in root help when config omits authoring", async () => {
@@ -1211,8 +1221,8 @@ describe("runCli", () => {
     expect(stdout[0]).toContain("Models:");
     expect(stdout[0]).toContain("pi (provider/model-id):");
     expect(stdout[0]).not.toContain("claude (provider/model-id):");
-    expect(stdout[0]).toContain("systemPrompt = WHO the agent is");
-    expect(stdout[0]).toContain("prompt       = WHAT to do now");
+    expect(stdout[0]).toContain("system = WHO the agent is");
+    expect(stdout[0]).toContain("prompt = WHAT to do now");
     expect(stdout[0]).not.toContain("From config:");
   });
 
@@ -1249,7 +1259,7 @@ describe("runCli", () => {
     expect(stdout.join("\n")).toContain("Models:");
     expect(stdout.join("\n")).toContain("codex (provider/model-id):");
     expect(stdout.join("\n")).not.toContain("pi (provider/model-id):");
-    expect(stdout.join("\n")).not.toContain("systemPrompt = WHO the agent is");
+    expect(stdout.join("\n")).not.toContain("system = WHO the agent is");
   });
 
   it("honors --driver override in command help model catalog", async () => {
@@ -1302,7 +1312,9 @@ describe("runCli", () => {
 
     expect(code).toBe(0);
     expect(stderr).toHaveLength(0);
-    expect(stdout.join("\n")).toContain("Authoring:\n  systemPrompt = WHO the agent is");
+    expect(stdout.join("\n")).toContain(
+      "Authoring:\n  agent = WHICH provider/model should do the task",
+    );
     expect(stdout.join("\n")).toContain("Models:");
     expect(stdout.join("\n")).toContain("pi (provider/model-id):");
     expect(stdout.join("\n")).not.toContain("claude (provider/model-id):");
