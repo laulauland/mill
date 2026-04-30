@@ -168,7 +168,7 @@ const makeConfig = (): MillConfig => ({
       name: "tools",
       setup: () => Effect.fail("setup exploded"),
       onEvent: (event) =>
-        event.type === "spawn:start" ? Effect.fail("event exploded") : Effect.void,
+        event.type === "task:start" ? Effect.fail("event exploded") : Effect.void,
       api: {
         echo: (...args) => Effect.succeed(`echo:${String(args[0] ?? "")}`),
       },
@@ -289,7 +289,7 @@ describe("run.api integration", () => {
       expect(output.run.status).toBe("complete");
       expect(output.run.driver).toBe("codex");
       expect(output.run.executor).toBe("vm");
-      expect(output.result.spawns[0]?.driver).toBe("codex");
+      expect(output.result.tasks[0]?.driver).toBe("codex");
 
       const parsedProgramResult = Schema.decodeUnknownSync(ProgramResultEnvelope)(
         output.result.programResult ?? "{}",
@@ -375,8 +375,8 @@ describe("run.api integration", () => {
       });
 
       expect(output.run.status).toBe("complete");
-      expect(output.result.spawns).toHaveLength(1);
-      expect(output.result.spawns[0]?.driver).toBe("codex");
+      expect(output.result.tasks).toHaveLength(1);
+      expect(output.result.tasks[0]?.driver).toBe("codex");
 
       const parsed = JSON.parse(String(output.result.programResult ?? "{}")) as {
         readonly text?: string;

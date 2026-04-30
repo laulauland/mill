@@ -124,7 +124,7 @@ mill wait <runId> --timeout            block until complete/failed/cancelled
 mill watch [--run <runId>]             watch streams (default: events)
   --channel events|io|all              choose stream channel
   --source driver|program              io source filter (io/all only)
-  --spawn <spawnId>                    io spawn/task filter (io/all only; storage still uses legacy ids)
+  --task <taskId>                      io task filter (io/all only)
 mill cancel <runId>                    mark cancelled + kill worker process tree
 mill ls [--status <filter>]            list runs
 mill init [--global]                   generate starter config (local or ~/.mill/config.ts)
@@ -203,7 +203,7 @@ Model catalog source by built-in driver registration:
 
 Built on Effect v4 / effect-smol. Public boundaries expose Promise ergonomics through actor `.done` and runtime facade methods. Engine, drivers, persistence, task actor internals, and schemas are Effect-first.
 
-Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON event log, results, and task/driver session pointers. Some persisted event names still use the historical `spawn:*` vocabulary while the public API moves to task actors.
+Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON task-native event log, results, and task/driver session pointers. New persisted orchestration events use `task:*` vocabulary.
 
 ## Development
 

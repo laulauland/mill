@@ -4,10 +4,10 @@ import {
   RunResult,
   RunStatus,
   SchemaVersion,
-  SpawnId,
+  TaskId,
   type RunId as RunIdType,
 } from "./run.schema";
-import { SpawnOptions, SpawnResult } from "./spawn.schema";
+import { TaskOptions, TaskResult } from "./task.schema";
 
 const EventEnvelope = {
   schemaVersion: SchemaVersion,
@@ -61,95 +61,95 @@ export const RunCancelledEvent = Schema.Struct({
 });
 export type RunCancelledEvent = Schema.Schema.Type<typeof RunCancelledEvent>;
 
-export const SpawnStartEvent = Schema.Struct({
+export const TaskStartEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:start"),
+  type: Schema.Literal("task:start"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
-    input: SpawnOptions,
+    taskId: TaskId,
+    input: TaskOptions,
   }),
 });
-export type SpawnStartEvent = Schema.Schema.Type<typeof SpawnStartEvent>;
+export type TaskStartEvent = Schema.Schema.Type<typeof TaskStartEvent>;
 
-export const SpawnMilestoneEvent = Schema.Struct({
+export const TaskMilestoneEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:milestone"),
+  type: Schema.Literal("task:milestone"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     message: Schema.NonEmptyString,
   }),
 });
-export type SpawnMilestoneEvent = Schema.Schema.Type<typeof SpawnMilestoneEvent>;
+export type TaskMilestoneEvent = Schema.Schema.Type<typeof TaskMilestoneEvent>;
 
-export const SpawnToolCallEvent = Schema.Struct({
+export const TaskToolCallEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:tool_call"),
+  type: Schema.Literal("task:tool_call"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     toolName: Schema.NonEmptyString,
   }),
 });
-export type SpawnToolCallEvent = Schema.Schema.Type<typeof SpawnToolCallEvent>;
+export type TaskToolCallEvent = Schema.Schema.Type<typeof TaskToolCallEvent>;
 
-export const SpawnErrorEvent = Schema.Struct({
+export const TaskErrorEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:error"),
+  type: Schema.Literal("task:error"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     message: Schema.String,
   }),
 });
-export type SpawnErrorEvent = Schema.Schema.Type<typeof SpawnErrorEvent>;
+export type TaskErrorEvent = Schema.Schema.Type<typeof TaskErrorEvent>;
 
-export const SpawnMessageChunkEvent = Schema.Struct({
+export const TaskMessageChunkEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:message_chunk"),
+  type: Schema.Literal("task:message_chunk"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     text: Schema.String,
   }),
 });
-export type SpawnMessageChunkEvent = Schema.Schema.Type<typeof SpawnMessageChunkEvent>;
+export type TaskMessageChunkEvent = Schema.Schema.Type<typeof TaskMessageChunkEvent>;
 
-export const SpawnThoughtChunkEvent = Schema.Struct({
+export const TaskThoughtChunkEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:thought_chunk"),
+  type: Schema.Literal("task:thought_chunk"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     text: Schema.String,
   }),
 });
-export type SpawnThoughtChunkEvent = Schema.Schema.Type<typeof SpawnThoughtChunkEvent>;
+export type TaskThoughtChunkEvent = Schema.Schema.Type<typeof TaskThoughtChunkEvent>;
 
-export const SpawnPlanEvent = Schema.Struct({
+export const TaskPlanEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:plan"),
+  type: Schema.Literal("task:plan"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     steps: Schema.Array(Schema.String),
   }),
 });
-export type SpawnPlanEvent = Schema.Schema.Type<typeof SpawnPlanEvent>;
+export type TaskPlanEvent = Schema.Schema.Type<typeof TaskPlanEvent>;
 
-export const SpawnCompleteEvent = Schema.Struct({
+export const TaskCompleteEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:complete"),
+  type: Schema.Literal("task:complete"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
-    result: SpawnResult,
+    taskId: TaskId,
+    result: TaskResult,
   }),
 });
-export type SpawnCompleteEvent = Schema.Schema.Type<typeof SpawnCompleteEvent>;
+export type TaskCompleteEvent = Schema.Schema.Type<typeof TaskCompleteEvent>;
 
-export const SpawnCancelledEvent = Schema.Struct({
+export const TaskCancelledEvent = Schema.Struct({
   ...EventEnvelope,
-  type: Schema.Literal("spawn:cancelled"),
+  type: Schema.Literal("task:cancelled"),
   payload: Schema.Struct({
-    spawnId: SpawnId,
+    taskId: TaskId,
     reason: Schema.optional(Schema.String),
   }),
 });
-export type SpawnCancelledEvent = Schema.Schema.Type<typeof SpawnCancelledEvent>;
+export type TaskCancelledEvent = Schema.Schema.Type<typeof TaskCancelledEvent>;
 
 export const ExtensionErrorEvent = Schema.Struct({
   ...EventEnvelope,
@@ -168,15 +168,15 @@ export const MillEvent = Schema.Union([
   RunCompleteEvent,
   RunFailedEvent,
   RunCancelledEvent,
-  SpawnStartEvent,
-  SpawnMilestoneEvent,
-  SpawnToolCallEvent,
-  SpawnMessageChunkEvent,
-  SpawnThoughtChunkEvent,
-  SpawnPlanEvent,
-  SpawnErrorEvent,
-  SpawnCompleteEvent,
-  SpawnCancelledEvent,
+  TaskStartEvent,
+  TaskMilestoneEvent,
+  TaskToolCallEvent,
+  TaskMessageChunkEvent,
+  TaskThoughtChunkEvent,
+  TaskPlanEvent,
+  TaskErrorEvent,
+  TaskCompleteEvent,
+  TaskCancelledEvent,
   ExtensionErrorEvent,
 ]);
 export type MillEvent = Schema.Schema.Type<typeof MillEvent>;

@@ -73,7 +73,7 @@ return await task.done;
 mill run <program.ts> [--json] [--sync] [--runs-dir <path>] [--driver <name>] [--executor <name>] [--meta-json <json>]
 mill status <runId> [--json] [--runs-dir <path>] [--driver <name>]
 mill wait <runId> --timeout <seconds> [--json] [--runs-dir <path>] [--driver <name>]
-mill watch [--run <runId>] [--since-time <iso>] [--channel events|io|all] [--source driver|program] [--spawn <spawnId>] [--json] [--runs-dir <path>] [--driver <name>]
+mill watch [--run <runId>] [--since-time <iso>] [--channel events|io|all] [--source driver|program] [--task <taskId>] [--json] [--runs-dir <path>] [--driver <name>]
 mill ls [--json] [--status <status>] [--runs-dir <path>] [--driver <name>]
 mill cancel <runId> [--json] [--runs-dir <path>] [--driver <name>]
 mill init [--global]
@@ -150,11 +150,11 @@ pending -> running -> complete
       program.ts               # copied execution input
       logs/
         worker.log
-      spawns/
-        <spawnId>.json         # current storage detail for derived task summaries
+      tasks/
+        <taskId>.json          # optional derived task summaries
 ```
 
-Some persisted event/storage names still use historical `spawn` vocabulary. Public authoring docs use task actors.
+New persisted orchestration events and run results use task vocabulary (`task:*`, `taskId`, `tasks`). Driver internals may still use older adapter names until the session-first cleanup.
 
 ## 6) Config contract (`mill.config.ts`)
 

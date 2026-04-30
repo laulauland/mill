@@ -35,7 +35,7 @@ For run `<runId>` in runs dir `<runsDir>`:
 - `<runsDir>/<runId>/logs/worker.log`
 - `<runsDir>/<runId>/logs/cancel.log`
 
-Some older/current driver artifacts may still use `spawnId` naming. Treat that as storage vocabulary; public authored programs use task actors.
+New engine/store artifacts use `taskId` naming. Some driver adapter internals may still use older spawn-shaped names until the session-first cleanup; public authored programs use task actors.
 
 ## 4) Session behavior (ACP drivers)
 

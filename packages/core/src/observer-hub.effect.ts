@@ -7,7 +7,7 @@ export interface IoStreamEvent {
   readonly stream: "stdout" | "stderr";
   readonly line: string;
   readonly timestamp: string;
-  readonly spawnId?: string;
+  readonly taskId?: string;
 }
 
 const tier1PubSubByRun = new Map<string, PubSub.PubSub<MillEvent>>();

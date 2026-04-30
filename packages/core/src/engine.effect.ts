@@ -2,22 +2,27 @@ import { Cause, Clock, Data, Effect, Exit, Ref, Stream } from "effect";
 import {
   makeEventEnvelope,
   type MillEvent,
-  type SpawnCompleteEvent,
-  type SpawnMessageChunkEvent,
-  type SpawnMilestoneEvent,
-  type SpawnPlanEvent,
-  type SpawnStartEvent,
-  type SpawnThoughtChunkEvent,
-  type SpawnToolCallEvent,
+  type TaskCompleteEvent,
+  type TaskMessageChunkEvent,
+  type TaskMilestoneEvent,
+  type TaskPlanEvent,
+  type TaskStartEvent,
+  type TaskThoughtChunkEvent,
+  type TaskToolCallEvent,
 } from "./event.schema";
 import {
-  decodeSpawnIdSync,
+  decodeTaskIdSync,
   type RunId,
   type RunResult,
   type RunSyncOutput,
-  type SpawnId,
+  type TaskId,
 } from "./run.schema";
-import { decodeSpawnResult, type SpawnOptions, type SpawnResult } from "./spawn.schema";
+import {
+  decodeTaskResult,
+  type TaskOptions,
+  type TaskResult as TaskStorageResult,
+} from "./task.schema";
+import type { SpawnOptions, SpawnResult } from "./spawn.schema";
 import type {
   DriverRuntime,
   DriverSpawnEvent,
@@ -87,7 +92,7 @@ export interface RunSyncInput extends RunSubmitInput {
 
 export interface InspectRef {
   readonly runId: RunId;
-  readonly spawnId?: SpawnId;
+  readonly taskId?: TaskId;
 }
 
 export type InspectResult =
@@ -98,11 +103,11 @@ export type InspectResult =
       readonly result: RunResult | undefined;
     }
   | {
-      readonly kind: "spawn";
+      readonly kind: "task";
       readonly runId: RunId;
-      readonly spawnId: SpawnId;
+      readonly taskId: TaskId;
       readonly events: ReadonlyArray<MillEvent>;
-      readonly result: SpawnResult | undefined;
+      readonly result: TaskStorageResult | undefined;
     };
 
 export interface CancelResult {
@@ -489,14 +494,14 @@ const waitForRunTerminal = (
     }
   });
 
-const appendSpawnErrorEvent = (
+const appendTaskErrorEvent = (
   extensions: ReadonlyArray<ExtensionRegistration>,
   extensionContext: ExtensionContext,
   lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
   sequenceRef: Ref.Ref<number>,
   runStore: RunStore,
   runId: RunId,
-  spawnId: string,
+  taskId: string,
   message: string,
 ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
   appendTier1EventWithHooks(
@@ -508,9 +513,9 @@ const appendSpawnErrorEvent = (
     runId,
     (sequence, timestamp) => ({
       ...makeEventEnvelope(runId, sequence, timestamp),
-      type: "spawn:error",
+      type: "task:error",
       payload: {
-        spawnId: decodeSpawnIdSync(spawnId),
+        taskId: decodeTaskIdSync(taskId),
         message,
       },
     }),
@@ -519,53 +524,53 @@ const appendSpawnErrorEvent = (
 const terminalEventForRun = (event: MillEvent): boolean =>
   event.type === "run:complete" || event.type === "run:failed" || event.type === "run:cancelled";
 
-const isSpawnEventForSpawn = (event: MillEvent, spawnId: SpawnId): boolean => {
-  if (event.type === "spawn:start") {
-    return event.payload.spawnId === spawnId;
+const isTaskEventForTask = (event: MillEvent, taskId: TaskId): boolean => {
+  if (event.type === "task:start") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:milestone") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:milestone") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:tool_call") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:tool_call") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:message_chunk") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:message_chunk") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:thought_chunk") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:thought_chunk") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:plan") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:plan") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:error") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:error") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:complete") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:complete") {
+    return event.payload.taskId === taskId;
   }
 
-  if (event.type === "spawn:cancelled") {
-    return event.payload.spawnId === spawnId;
+  if (event.type === "task:cancelled") {
+    return event.payload.taskId === taskId;
   }
 
   return false;
 };
 
-const spawnResultFromEvents = (
+const taskResultFromEvents = (
   events: ReadonlyArray<MillEvent>,
-  spawnId: SpawnId,
-): SpawnResult | undefined => {
+  taskId: TaskId,
+): TaskStorageResult | undefined => {
   const completion = events.find(
-    (event): event is Extract<MillEvent, { type: "spawn:complete" }> =>
-      event.type === "spawn:complete" && event.payload.spawnId === spawnId,
+    (event): event is Extract<MillEvent, { type: "task:complete" }> =>
+      event.type === "task:complete" && event.payload.taskId === taskId,
   );
 
   if (completion === undefined) {
@@ -577,17 +582,40 @@ const spawnResultFromEvents = (
 
 const DefaultTaskSystemPrompt = "You are a helpful coding agent.";
 
-const taskInputToStorageSpawnOptions = (taskInput: TaskInput): SpawnOptions => ({
-  agent: taskInput.role ?? taskInput.agent.driver,
-  systemPrompt: taskInput.system ?? DefaultTaskSystemPrompt,
-  prompt: taskInput.prompt,
-  model: taskInput.agent.model,
+const spawnOptionsToStorageTaskOptions = (
+  spawnInput: SpawnOptions,
+  driver: string,
+): TaskOptions => ({
+  role: spawnInput.agent,
+  system: spawnInput.systemPrompt,
+  prompt: spawnInput.prompt,
+  model: spawnInput.model,
+  driver,
 });
 
-const spawnResultFromTaskResult = (result: TaskResult): SpawnResult => ({
+const taskInputToStorageTaskOptions = (taskInput: TaskInput): TaskOptions => ({
+  role: taskInput.role ?? taskInput.agent.driver,
+  system: taskInput.system ?? DefaultTaskSystemPrompt,
+  prompt: taskInput.prompt,
+  model: taskInput.agent.model,
+  driver: taskInput.agent.driver,
+});
+
+const storageTaskResultFromSpawnResult = (result: SpawnResult): TaskStorageResult => ({
   text: result.text,
   sessionRef: result.sessionRef,
-  agent: result.role,
+  role: result.agent,
+  model: result.model,
+  driver: result.driver,
+  exitCode: result.exitCode,
+  stopReason: result.stopReason,
+  errorMessage: result.errorMessage,
+});
+
+const storageTaskResultFromTaskResult = (result: TaskResult): TaskStorageResult => ({
+  text: result.text,
+  sessionRef: result.sessionRef,
+  role: result.role,
   model: result.model,
   driver: result.driver,
   exitCode: result.exitCode,
@@ -692,13 +720,13 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           lifecycleState = yield* applyLifecycleTransition(lifecycleState, event);
         }
 
-        const existingSpawnCount = existingEvents.filter(
-          (event) => event.type === "spawn:start",
+        const existingTaskCount = existingEvents.filter(
+          (event) => event.type === "task:start",
         ).length;
-        const existingSpawnResults = existingEvents
+        const existingTaskStorageResults = existingEvents
           .filter(
-            (event): event is Extract<MillEvent, { type: "spawn:complete" }> =>
-              event.type === "spawn:complete",
+            (event): event is Extract<MillEvent, { type: "task:complete" }> =>
+              event.type === "task:complete",
           )
           .map((event) => event.payload.result);
 
@@ -709,8 +737,10 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
         const lifecycleStateRef = yield* Ref.make(lifecycleState);
         const sequenceRef = yield* Ref.make(maxSequence);
-        const spawnCounterRef = yield* Ref.make(existingSpawnCount);
-        const spawnResultsRef = yield* Ref.make<ReadonlyArray<SpawnResult>>(existingSpawnResults);
+        const taskCounterRef = yield* Ref.make(existingTaskCount);
+        const taskResultsRef = yield* Ref.make<ReadonlyArray<TaskStorageResult>>(
+          existingTaskStorageResults,
+        );
         const extensionContext: ExtensionContext = {
           runId: runInput.runId,
           driverName: input.driverName,
@@ -718,7 +748,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         };
 
         const publishDriverRawLines = (
-          spawnId: SpawnId,
+          taskId: TaskId,
           rawLines: ReadonlyArray<string> | undefined,
         ): Effect.Effect<void> =>
           Effect.gen(function* () {
@@ -731,25 +761,25 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 stream: "stdout",
                 line: rawLine,
                 timestamp,
-                spawnId,
+                taskId,
               });
             }
           });
 
         const appendDriverEvents = (
-          spawnId: SpawnId,
+          taskId: TaskId,
           driverEvents: ReadonlyArray<DriverSpawnEvent>,
         ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
           Effect.gen(function* () {
             for (const driverEvent of driverEvents) {
               if (driverEvent.type === "milestone") {
                 const milestoneEvent: Omit<
-                  SpawnMilestoneEvent,
+                  TaskMilestoneEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
                 > = {
-                  type: "spawn:milestone",
+                  type: "task:milestone",
                   payload: {
-                    spawnId,
+                    taskId,
                     message: driverEvent.message,
                   },
                 };
@@ -770,12 +800,12 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               if (driverEvent.type === "tool_call") {
                 const toolCallEvent: Omit<
-                  SpawnToolCallEvent,
+                  TaskToolCallEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
                 > = {
-                  type: "spawn:tool_call",
+                  type: "task:tool_call",
                   payload: {
-                    spawnId,
+                    taskId,
                     toolName: driverEvent.toolName,
                   },
                 };
@@ -796,12 +826,12 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               if (driverEvent.type === "message_chunk") {
                 const messageChunkEvent: Omit<
-                  SpawnMessageChunkEvent,
+                  TaskMessageChunkEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
                 > = {
-                  type: "spawn:message_chunk",
+                  type: "task:message_chunk",
                   payload: {
-                    spawnId,
+                    taskId,
                     text: driverEvent.text,
                   },
                 };
@@ -822,12 +852,12 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               if (driverEvent.type === "thought_chunk") {
                 const thoughtChunkEvent: Omit<
-                  SpawnThoughtChunkEvent,
+                  TaskThoughtChunkEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
                 > = {
-                  type: "spawn:thought_chunk",
+                  type: "task:thought_chunk",
                   payload: {
-                    spawnId,
+                    taskId,
                     text: driverEvent.text,
                   },
                 };
@@ -848,12 +878,12 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               if (driverEvent.type === "plan") {
                 const planEvent: Omit<
-                  SpawnPlanEvent,
+                  TaskPlanEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
                 > = {
-                  type: "spawn:plan",
+                  type: "task:plan",
                   payload: {
-                    spawnId,
+                    taskId,
                     steps: driverEvent.steps,
                   },
                 };
@@ -924,20 +954,21 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           ProgramExecutionError | PersistenceError | LifecycleInvariantError
         > =>
           Effect.gen(function* () {
-            const nextSpawnCounter = yield* Ref.updateAndGet(
-              spawnCounterRef,
+            const nextTaskCounter = yield* Ref.updateAndGet(
+              taskCounterRef,
               (counter) => counter + 1,
             );
-            const spawnId = decodeSpawnIdSync(`spawn_${nextSpawnCounter}`);
+            const taskId = decodeTaskIdSync(`task_${nextTaskCounter}`);
+            const storageInput = spawnOptionsToStorageTaskOptions(spawnInput, input.driver.name);
 
-            const spawnStartEvent: Omit<
-              SpawnStartEvent,
+            const taskStartEvent: Omit<
+              TaskStartEvent,
               "schemaVersion" | "runId" | "sequence" | "timestamp"
             > = {
-              type: "spawn:start",
+              type: "task:start",
               payload: {
-                spawnId,
-                input: spawnInput,
+                taskId,
+                input: storageInput,
               },
             };
 
@@ -950,13 +981,13 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               runInput.runId,
               (sequence, timestamp) => ({
                 ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                ...spawnStartEvent,
+                ...taskStartEvent,
               }),
             );
 
             yield* Effect.logDebug("mill.engine:spawn-driver-start", {
               runId: runInput.runId,
-              spawnId,
+              taskId,
               driver: input.driver.name,
               agent: spawnInput.agent,
               model: spawnInput.model,
@@ -967,7 +998,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 input.driver.spawn({
                   runId: runInput.runId,
                   runDirectory: joinPath(input.runsDirectory, runInput.runId),
-                  spawnId,
+                  taskId,
                   agent: spawnInput.agent,
                   systemPrompt: spawnInput.systemPrompt,
                   prompt: spawnInput.prompt,
@@ -986,19 +1017,19 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               yield* Effect.logDebug("mill.engine:spawn-driver-failed", {
                 runId: runInput.runId,
-                spawnId,
+                taskId,
                 driver: input.driver.name,
                 message: failureMessage,
               });
 
-              yield* appendSpawnErrorEvent(
+              yield* appendTaskErrorEvent(
                 input.extensions,
                 extensionContext,
                 lifecycleStateRef,
                 sequenceRef,
                 runStore,
                 runInput.runId,
-                spawnId,
+                taskId,
                 failureMessage,
               );
 
@@ -1012,37 +1043,37 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
             yield* Effect.logDebug("mill.engine:spawn-driver-complete", {
               runId: runInput.runId,
-              spawnId,
+              taskId,
               driver: input.driver.name,
               rawLines: driverOutputExit.value.raw?.length ?? 0,
               events: driverOutputExit.value.events.length,
             });
 
-            yield* publishDriverRawLines(spawnId, driverOutputExit.value.raw);
-            yield* appendDriverEvents(spawnId, driverOutputExit.value.events);
+            yield* publishDriverRawLines(taskId, driverOutputExit.value.raw);
+            yield* appendDriverEvents(taskId, driverOutputExit.value.events);
 
-            const spawnResultExit = yield* Effect.exit(
+            const taskStorageResultExit = yield* Effect.exit(
               Effect.mapError(
-                decodeSpawnResult(driverOutputExit.value.result),
+                decodeTaskResult(storageTaskResultFromSpawnResult(driverOutputExit.value.result)),
                 (error) =>
                   new ProgramExecutionError({
                     runId: runInput.runId,
-                    message: `Spawn result decode failed: ${toMessage(error)}`,
+                    message: `Task result decode failed: ${toMessage(error)}`,
                   }),
               ),
             );
 
-            if (Exit.isFailure(spawnResultExit)) {
-              const failureMessage = Cause.pretty(spawnResultExit.cause);
+            if (Exit.isFailure(taskStorageResultExit)) {
+              const failureMessage = Cause.pretty(taskStorageResultExit.cause);
 
-              yield* appendSpawnErrorEvent(
+              yield* appendTaskErrorEvent(
                 input.extensions,
                 extensionContext,
                 lifecycleStateRef,
                 sequenceRef,
                 runStore,
                 runInput.runId,
-                spawnId,
+                taskId,
                 failureMessage,
               );
 
@@ -1054,15 +1085,15 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               );
             }
 
-            const spawnResult = spawnResultExit.value;
-            const spawnCompleteEvent: Omit<
-              SpawnCompleteEvent,
+            const taskStorageResult = taskStorageResultExit.value;
+            const taskCompleteEvent: Omit<
+              TaskCompleteEvent,
               "schemaVersion" | "runId" | "sequence" | "timestamp"
             > = {
-              type: "spawn:complete",
+              type: "task:complete",
               payload: {
-                spawnId,
-                result: spawnResult,
+                taskId,
+                result: taskStorageResult,
               },
             };
 
@@ -1075,22 +1106,22 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               runInput.runId,
               (sequence, timestamp) => ({
                 ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                ...spawnCompleteEvent,
+                ...taskCompleteEvent,
               }),
             );
 
-            yield* Ref.update(spawnResultsRef, (items) => [...items, spawnResult]);
+            yield* Ref.update(taskResultsRef, (items) => [...items, taskStorageResult]);
 
             yield* Effect.logDebug("mill.engine:spawn-complete", {
               runId: runInput.runId,
-              spawnId,
-              agent: spawnResult.agent,
-              model: spawnResult.model,
-              sessionRef: spawnResult.sessionRef,
-              exitCode: spawnResult.exitCode,
+              taskId,
+              agent: taskStorageResult.role,
+              model: taskStorageResult.model,
+              sessionRef: taskStorageResult.sessionRef,
+              exitCode: taskStorageResult.exitCode,
             });
 
-            return spawnResult;
+            return driverOutputExit.value.result;
           });
 
         const task = (
@@ -1100,7 +1131,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           ProgramExecutionError | PersistenceError | LifecycleInvariantError
         > =>
           Effect.gen(function* () {
-            const storageInput = taskInputToStorageSpawnOptions(taskInput);
+            const storageInput = taskInputToStorageTaskOptions(taskInput);
 
             if (input.driver.createTaskSession === undefined) {
               return yield* Effect.fail(
@@ -1111,19 +1142,19 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               );
             }
 
-            const nextSpawnCounter = yield* Ref.updateAndGet(
-              spawnCounterRef,
+            const nextTaskCounter = yield* Ref.updateAndGet(
+              taskCounterRef,
               (counter) => counter + 1,
             );
-            const spawnId = decodeSpawnIdSync(`spawn_${nextSpawnCounter}`);
+            const taskId = decodeTaskIdSync(`task_${nextTaskCounter}`);
 
-            const spawnStartEvent: Omit<
-              SpawnStartEvent,
+            const taskStartEvent: Omit<
+              TaskStartEvent,
               "schemaVersion" | "runId" | "sequence" | "timestamp"
             > = {
-              type: "spawn:start",
+              type: "task:start",
               payload: {
-                spawnId,
+                taskId,
                 input: storageInput,
               },
             };
@@ -1137,15 +1168,15 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               runInput.runId,
               (sequence, timestamp) => ({
                 ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                ...spawnStartEvent,
+                ...taskStartEvent,
               }),
             );
 
             yield* Effect.logDebug("mill.engine:task-session-start", {
               runId: runInput.runId,
-              spawnId,
+              taskId,
               driver: input.driver.name,
-              agent: storageInput.agent,
+              role: storageInput.role,
               model: storageInput.model,
             });
 
@@ -1154,9 +1185,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 const session = yield* input.driver.createTaskSession!({
                   runId: runInput.runId,
                   runDirectory: joinPath(input.runsDirectory, runInput.runId),
-                  taskId: spawnId,
-                  agent: storageInput.agent,
-                  systemPrompt: storageInput.systemPrompt,
+                  taskId,
+                  agent: storageInput.role,
+                  systemPrompt: storageInput.system,
                   model: storageInput.model,
                 });
 
@@ -1179,19 +1210,19 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               yield* Effect.logDebug("mill.engine:task-session-failed", {
                 runId: runInput.runId,
-                spawnId,
+                taskId,
                 driver: input.driver.name,
                 message: failureMessage,
               });
 
-              yield* appendSpawnErrorEvent(
+              yield* appendTaskErrorEvent(
                 input.extensions,
                 extensionContext,
                 lifecycleStateRef,
                 sequenceRef,
                 runStore,
                 runInput.runId,
-                spawnId,
+                taskId,
                 failureMessage,
               );
 
@@ -1203,18 +1234,18 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               );
             }
 
-            yield* publishDriverRawLines(spawnId, driverOutputExit.value.raw);
-            yield* appendDriverEvents(spawnId, driverOutputExit.value.events);
+            yield* publishDriverRawLines(taskId, driverOutputExit.value.raw);
+            yield* appendDriverEvents(taskId, driverOutputExit.value.events);
 
             const taskResult = taskResultFromTaskTurnOutput(driverOutputExit.value);
-            const storageResult = spawnResultFromTaskResult(taskResult);
-            const spawnCompleteEvent: Omit<
-              SpawnCompleteEvent,
+            const storageResult = storageTaskResultFromTaskResult(taskResult);
+            const taskCompleteEvent: Omit<
+              TaskCompleteEvent,
               "schemaVersion" | "runId" | "sequence" | "timestamp"
             > = {
-              type: "spawn:complete",
+              type: "task:complete",
               payload: {
-                spawnId,
+                taskId,
                 result: storageResult,
               },
             };
@@ -1228,15 +1259,15 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               runInput.runId,
               (sequence, timestamp) => ({
                 ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                ...spawnCompleteEvent,
+                ...taskCompleteEvent,
               }),
             );
 
-            yield* Ref.update(spawnResultsRef, (items) => [...items, storageResult]);
+            yield* Ref.update(taskResultsRef, (items) => [...items, storageResult]);
 
             yield* Effect.logDebug("mill.engine:task-complete", {
               runId: runInput.runId,
-              spawnId,
+              taskId,
               role: taskResult.role,
               model: taskResult.model,
               sessionRef: taskResult.sessionRef,
@@ -1248,7 +1279,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
         const executionExit = yield* Effect.exit(runInput.executeProgram(spawn, task));
         const completedAt = yield* toIsoTimestamp;
-        const spawnResults = yield* Ref.get(spawnResultsRef);
+        const taskResults = yield* Ref.get(taskResultsRef);
         const startedAt = activeRun.createdAt;
 
         if (Exit.isSuccess(executionExit)) {
@@ -1257,7 +1288,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             status: "complete",
             startedAt,
             completedAt,
-            spawns: spawnResults,
+            tasks: taskResults,
             programResult:
               typeof executionExit.value === "string"
                 ? executionExit.value
@@ -1296,7 +1327,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           status: "failed",
           startedAt,
           completedAt,
-          spawns: spawnResults,
+          tasks: taskResults,
           errorMessage: failureMessage,
         };
 
@@ -1396,7 +1427,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         const run = yield* runStore.getRun(ref.runId);
         const events = yield* runStore.readEvents(ref.runId);
 
-        if (ref.spawnId === undefined) {
+        if (ref.taskId === undefined) {
           const result = yield* runStore.getResult(ref.runId);
 
           return {
@@ -1407,14 +1438,14 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           } satisfies InspectResult;
         }
 
-        const spawnEvents = events.filter((event) => isSpawnEventForSpawn(event, ref.spawnId));
+        const taskEvents = events.filter((event) => isTaskEventForTask(event, ref.taskId));
 
         return {
-          kind: "spawn",
+          kind: "task",
           runId: ref.runId,
-          spawnId: ref.spawnId,
-          events: spawnEvents,
-          result: spawnResultFromEvents(events, ref.spawnId),
+          taskId: ref.taskId,
+          events: taskEvents,
+          result: taskResultFromEvents(events, ref.taskId),
         } satisfies InspectResult;
       }),
 

@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { SpawnResult } from "./spawn.schema";
+import { TaskResult } from "./task.schema";
 
 export const SchemaVersion = Schema.Literal(1);
 export type SchemaVersion = Schema.Schema.Type<typeof SchemaVersion>;
@@ -7,8 +7,8 @@ export type SchemaVersion = Schema.Schema.Type<typeof SchemaVersion>;
 export const RunId = Schema.String.pipe(Schema.brand("RunId"));
 export type RunId = Schema.Schema.Type<typeof RunId>;
 
-export const SpawnId = Schema.String.pipe(Schema.brand("SpawnId"));
-export type SpawnId = Schema.Schema.Type<typeof SpawnId>;
+export const TaskId = Schema.String.pipe(Schema.brand("TaskId"));
+export type TaskId = Schema.Schema.Type<typeof TaskId>;
 
 export const RunStatus = Schema.Literals(["pending", "running", "complete", "failed", "cancelled"]);
 export type RunStatus = Schema.Schema.Type<typeof RunStatus>;
@@ -45,7 +45,7 @@ export const RunResult = Schema.Struct({
   status: RunTerminalStatus,
   startedAt: Schema.String,
   completedAt: Schema.String,
-  spawns: Schema.Array(SpawnResult),
+  tasks: Schema.Array(TaskResult),
   programResult: Schema.optional(Schema.String),
   errorMessage: Schema.optional(Schema.String),
 });
@@ -63,8 +63,8 @@ export const RunSyncOutputJson = Schema.fromJsonString(RunSyncOutput);
 
 export const decodeRunId = Schema.decodeUnknownEffect(RunId);
 export const decodeRunIdSync = Schema.decodeUnknownSync(RunId);
-export const decodeSpawnId = Schema.decodeUnknownEffect(SpawnId);
-export const decodeSpawnIdSync = Schema.decodeUnknownSync(SpawnId);
+export const decodeTaskId = Schema.decodeUnknownEffect(TaskId);
+export const decodeTaskIdSync = Schema.decodeUnknownSync(TaskId);
 export const decodeRunRecordJson = Schema.decodeUnknownEffect(RunRecordJson);
 export const decodeRunRecordJsonSync = Schema.decodeUnknownSync(RunRecordJson);
 export const decodeRunResultJson = Schema.decodeUnknownEffect(RunResultJson);

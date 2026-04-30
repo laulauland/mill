@@ -40,7 +40,7 @@ const parseEvents = (content: string): ReadonlyArray<MillEvent> =>
     .map((line) => decodeMillEventJsonSync(line));
 
 const runTerminalTypes = new Set(["run:complete", "run:failed", "run:cancelled"]);
-const spawnTerminalTypes = new Set(["spawn:complete", "spawn:error", "spawn:cancelled"]);
+const taskTerminalTypes = new Set(["task:complete", "task:error", "task:cancelled"]);
 
 describe("MillEngine sync lifecycle", () => {
   it("submits pending runs before worker execution", async () => {
@@ -70,7 +70,7 @@ describe("MillEngine sync lifecycle", () => {
     }
   });
 
-  it("persists deterministic run/start/spawn/complete lifecycle", async () => {
+  it("persists deterministic run/start/task/complete lifecycle", async () => {
     const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-"));
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
@@ -102,7 +102,7 @@ describe("MillEngine sync lifecycle", () => {
       );
 
       expect(output.result.status).toBe("complete");
-      expect(output.result.spawns).toHaveLength(1);
+      expect(output.result.tasks).toHaveLength(1);
       expect(output.run.status).toBe("complete");
 
       const status = await runWithBunServices(engine.status(runId));
@@ -113,11 +113,11 @@ describe("MillEngine sync lifecycle", () => {
 
       expect(events.length).toBeGreaterThan(0);
 
-      const spawnComplete = events.find((event) => event.type === "spawn:complete");
-      expect(spawnComplete).toBeDefined();
+      const taskComplete = events.find((event) => event.type === "task:complete");
+      expect(taskComplete).toBeDefined();
 
-      if (spawnComplete !== undefined && spawnComplete.type === "spawn:complete") {
-        expect(spawnComplete.payload.result.sessionRef.length).toBeGreaterThan(0);
+      if (taskComplete !== undefined && taskComplete.type === "task:complete") {
+        expect(taskComplete.payload.result.sessionRef.length).toBeGreaterThan(0);
       }
 
       for (const event of events) {
@@ -130,29 +130,29 @@ describe("MillEngine sync lifecycle", () => {
       const runTerminalCount = events.filter((event) => runTerminalTypes.has(event.type)).length;
       expect(runTerminalCount).toBe(1);
 
-      const spawnIds = events
+      const taskIds = events
         .filter(
-          (event): event is Extract<MillEvent, { type: "spawn:start" }> =>
-            event.type === "spawn:start",
+          (event): event is Extract<MillEvent, { type: "task:start" }> =>
+            event.type === "task:start",
         )
-        .map((event) => event.payload.spawnId);
+        .map((event) => event.payload.taskId);
 
-      for (const spawnId of spawnIds) {
+      for (const taskId of taskIds) {
         const terminalCount = events.filter((event) => {
-          if (!spawnTerminalTypes.has(event.type)) {
+          if (!taskTerminalTypes.has(event.type)) {
             return false;
           }
 
-          if (event.type === "spawn:complete") {
-            return event.payload.spawnId === spawnId;
+          if (event.type === "task:complete") {
+            return event.payload.taskId === taskId;
           }
 
-          if (event.type === "spawn:error") {
-            return event.payload.spawnId === spawnId;
+          if (event.type === "task:error") {
+            return event.payload.taskId === taskId;
           }
 
-          if (event.type === "spawn:cancelled") {
-            return event.payload.spawnId === spawnId;
+          if (event.type === "task:cancelled") {
+            return event.payload.taskId === taskId;
           }
 
           return false;
@@ -230,7 +230,7 @@ describe("MillEngine sync lifecycle", () => {
                 status: "complete",
                 startedAt: "2026-02-23T20:00:00.000Z",
                 completedAt: "2026-02-23T20:00:02.000Z",
-                spawns: [],
+                tasks: [],
               },
             },
           }),
@@ -244,7 +244,7 @@ describe("MillEngine sync lifecycle", () => {
               status: "complete",
               startedAt: "2026-02-23T20:00:00.000Z",
               completedAt: "2026-02-23T20:00:02.000Z",
-              spawns: [],
+              tasks: [],
             },
             "2026-02-23T20:00:02.000Z",
           ),
@@ -307,7 +307,7 @@ describe("MillEngine sync lifecycle", () => {
     }
   });
 
-  it("inspect returns decoded persisted run and spawn views", async () => {
+  it("inspect returns decoded persisted run and task views", async () => {
     const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-inspect-"));
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
@@ -345,22 +345,22 @@ describe("MillEngine sync lifecycle", () => {
         expect(inspectedRun.events.length).toBeGreaterThan(0);
       }
 
-      const spawnStart = inspectedRun.events.find((event) => event.type === "spawn:start");
-      expect(spawnStart).toBeDefined();
+      const taskStart = inspectedRun.events.find((event) => event.type === "task:start");
+      expect(taskStart).toBeDefined();
 
-      if (spawnStart === undefined || spawnStart.type !== "spawn:start") {
+      if (taskStart === undefined || taskStart.type !== "task:start") {
         return;
       }
 
-      const inspectedSpawn = await runWithBunServices(
-        engine.inspect({ runId, spawnId: spawnStart.payload.spawnId }),
+      const inspectedTask = await runWithBunServices(
+        engine.inspect({ runId, taskId: taskStart.payload.taskId }),
       );
 
-      expect(inspectedSpawn.kind).toBe("spawn");
+      expect(inspectedTask.kind).toBe("task");
 
-      if (inspectedSpawn.kind === "spawn") {
-        expect(inspectedSpawn.spawnId).toBe(spawnStart.payload.spawnId);
-        expect(inspectedSpawn.result?.sessionRef).toBe("session/scout");
+      if (inspectedTask.kind === "task") {
+        expect(inspectedTask.taskId).toBe(taskStart.payload.taskId);
+        expect(inspectedTask.result?.sessionRef).toBe("session/scout");
       }
     } finally {
       await rm(runsDirectory, { recursive: true, force: true });

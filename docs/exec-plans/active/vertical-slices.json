@@ -29,13 +29,13 @@
       "goal": "Enable one complete deterministic execution path from CLI to engine to driver with persisted run artifacts.",
       "acceptanceCriteria": [
         "Test intent: unit (schema/decode/store), integration (engine↔driver), e2e (`run --sync`).",
-        "`mill run <program.ts> --sync --json` executes a program with injected `mill.spawn` and returns structured result.",
+        "`mill run <program.ts> --sync --json` executes a program with injected `mill.task` and returns structured result.",
         "Run directory includes `run.json`, `events.ndjson` (append-only), and `result.json` per SPEC §5.3.",
         "Persisted events decode through Schema discriminated union and include `schemaVersion`, `runId`, sequence, and timestamp.",
-        "`spawn:complete` payload includes non-empty `sessionRef` (SPEC invariant #2)."
+        "`task:complete` payload includes non-empty `sessionRef` (SPEC invariant #2)."
       ],
       "deliverables": [
-        "`packages/core/src/*.schema.ts` for run/spawn/event unions.",
+        "`packages/core/src/*.schema.ts` for run/task/event unions.",
         "`packages/core/src/run-store.effect.ts` and sync lifecycle in `engine.effect.ts`.",
         "CLI handlers for `run --sync` and `status` in `packages/cli`.",
         "`packages/driver-acp` codec + process-driver implementation using `Command.make(cmd, ...args)`."
@@ -55,7 +55,7 @@
         "Test intent: unit (transition guards), integration (wait over persisted/live events), e2e (`wait` timeout/terminal behavior).",
         "`mill wait <runId> --timeout <seconds>` resolves on first terminal event and never permits terminal->non-terminal transitions.",
         "Duplicate terminal emissions are deterministically ignored or rejected per documented policy.",
-        "Exactly one terminal event per run and per spawn is enforced in tests (SPEC §9.6 and invariant #6).",
+        "Exactly one terminal event per run and per task is enforced in tests (SPEC §9.6 and invariant #6).",
         "Timeout behavior is deterministic and surfaced as typed error/output contract."
       ],
       "deliverables": [
@@ -140,7 +140,7 @@
       "acceptanceCriteria": [
         "Test intent: integration plus e2e command matrix across inspect/session/cancel/watch with concurrent runs.",
         "`watch --json` emits valid JSONL tier-1 events; `watch --raw` streams tier-2 raw passthrough without persistence.",
-        "`inspect <runId>[.<spawnId>] --json` returns decoded persisted data; `--session` resolves driver-owned session pointer.",
+        "`inspect <runId>[.<taskId>] --json` returns decoded persisted data; `--session` resolves driver-owned session pointer.",
         "`cancel <runId>` is interruption-safe, idempotent, and no-op for already terminal runs; emits at most one `run:cancelled` terminal event.",
         "`ls` and `status` remain consistent with terminal invariants and persisted snapshots after cancellations/completions."
       ],

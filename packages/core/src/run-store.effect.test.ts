@@ -97,7 +97,7 @@ describe("RunStore", () => {
             status: "complete",
             startedAt: "2026-02-23T20:00:00.000Z",
             completedAt: "2026-02-23T20:00:02.000Z",
-            spawns: [],
+            tasks: [],
           },
           "2026-02-23T20:00:02.000Z",
         ),

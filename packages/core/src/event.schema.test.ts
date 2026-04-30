@@ -2,20 +2,20 @@ import { describe, expect, it } from "bun:test";
 import { decodeMillEventJsonSync } from "./event.schema";
 
 describe("MillEvent schema union", () => {
-  it("decodes persisted spawn:complete events with required envelope fields", () => {
+  it("decodes persisted task:complete events with required envelope fields", () => {
     const event = decodeMillEventJsonSync(
       JSON.stringify({
         schemaVersion: 1,
         runId: "run_test_01",
         sequence: 5,
         timestamp: "2026-02-23T20:00:00.000Z",
-        type: "spawn:complete",
+        type: "task:complete",
         payload: {
-          spawnId: "spawn_01",
+          taskId: "task_01",
           result: {
             text: "done",
             sessionRef: "session/pi/test",
-            agent: "scout",
+            role: "scout",
             model: "openai/gpt-5.3-codex",
             driver: "pi",
             exitCode: 0,
@@ -28,9 +28,9 @@ describe("MillEvent schema union", () => {
     expect(event.runId).toBe("run_test_01");
     expect(event.sequence).toBe(5);
     expect(event.timestamp).toBe("2026-02-23T20:00:00.000Z");
-    expect(event.type).toBe("spawn:complete");
+    expect(event.type).toBe("task:complete");
 
-    if (event.type === "spawn:complete") {
+    if (event.type === "task:complete") {
       expect(event.payload.result.sessionRef.length).toBeGreaterThan(0);
     }
   });

@@ -6,9 +6,9 @@ type RunTerminalEventType = Extract<
   MillEvent["type"],
   "run:complete" | "run:failed" | "run:cancelled"
 >;
-type SpawnTerminalEventType = Extract<
+type TaskTerminalEventType = Extract<
   MillEvent["type"],
-  "spawn:complete" | "spawn:error" | "spawn:cancelled"
+  "task:complete" | "task:error" | "task:cancelled"
 >;
 
 export class LifecycleInvariantError extends Data.TaggedError("LifecycleInvariantError")<{
@@ -18,54 +18,54 @@ export class LifecycleInvariantError extends Data.TaggedError("LifecycleInvarian
 
 export type LifecycleGuardState = {
   readonly runTerminal?: RunTerminalEventType;
-  readonly spawnTerminals: Readonly<Record<string, SpawnTerminalEventType>>;
+  readonly taskTerminals: Readonly<Record<string, TaskTerminalEventType>>;
 };
 
 export const initialLifecycleGuardState: LifecycleGuardState = {
-  spawnTerminals: {},
+  taskTerminals: {},
 };
 
 const isRunTerminalType = (eventType: MillEvent["type"]): eventType is RunTerminalEventType =>
   eventType === "run:complete" || eventType === "run:failed" || eventType === "run:cancelled";
 
-const isSpawnTerminalType = (eventType: MillEvent["type"]): eventType is SpawnTerminalEventType =>
-  eventType === "spawn:complete" || eventType === "spawn:error" || eventType === "spawn:cancelled";
+const isTaskTerminalType = (eventType: MillEvent["type"]): eventType is TaskTerminalEventType =>
+  eventType === "task:complete" || eventType === "task:error" || eventType === "task:cancelled";
 
-const spawnIdForEvent = (event: MillEvent): string | undefined => {
-  if (event.type === "spawn:start") {
-    return event.payload.spawnId;
+const taskIdForEvent = (event: MillEvent): string | undefined => {
+  if (event.type === "task:start") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:milestone") {
-    return event.payload.spawnId;
+  if (event.type === "task:milestone") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:tool_call") {
-    return event.payload.spawnId;
+  if (event.type === "task:tool_call") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:message_chunk") {
-    return event.payload.spawnId;
+  if (event.type === "task:message_chunk") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:thought_chunk") {
-    return event.payload.spawnId;
+  if (event.type === "task:thought_chunk") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:plan") {
-    return event.payload.spawnId;
+  if (event.type === "task:plan") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:complete") {
-    return event.payload.spawnId;
+  if (event.type === "task:complete") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:error") {
-    return event.payload.spawnId;
+  if (event.type === "task:error") {
+    return event.payload.taskId;
   }
 
-  if (event.type === "spawn:cancelled") {
-    return event.payload.spawnId;
+  if (event.type === "task:cancelled") {
+    return event.payload.taskId;
   }
 
   return undefined;
@@ -85,20 +85,20 @@ export const applyLifecycleTransition = (
       );
     }
 
-    const spawnId = spawnIdForEvent(event);
+    const taskId = taskIdForEvent(event);
 
-    if (spawnId !== undefined && state.spawnTerminals[spawnId] !== undefined) {
+    if (taskId !== undefined && state.taskTerminals[taskId] !== undefined) {
       return yield* Effect.fail(
         new LifecycleInvariantError({
           runId: event.runId,
-          message: `Event ${event.type} violates terminal single-shot policy for spawn ${spawnId}: terminal already set to ${state.spawnTerminals[spawnId]}.`,
+          message: `Event ${event.type} violates terminal single-shot policy for task ${taskId}: terminal already set to ${state.taskTerminals[taskId]}.`,
         }),
       );
     }
 
     const nextRunTerminal = isRunTerminalType(event.type) ? event.type : state.runTerminal;
 
-    if (spawnId === undefined || !isSpawnTerminalType(event.type)) {
+    if (taskId === undefined || !isTaskTerminalType(event.type)) {
       return {
         ...state,
         runTerminal: nextRunTerminal,
@@ -108,9 +108,9 @@ export const applyLifecycleTransition = (
     return {
       ...state,
       runTerminal: nextRunTerminal,
-      spawnTerminals: {
-        ...state.spawnTerminals,
-        [spawnId]: event.type,
+      taskTerminals: {
+        ...state.taskTerminals,
+        [taskId]: event.type,
       },
     };
   });

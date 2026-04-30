@@ -817,7 +817,7 @@ interface WatchCommandInput {
   readonly sinceTime: Option.Option<string>;
   readonly channel: Option.Option<WatchChannel>;
   readonly source: Option.Option<WatchSource>;
-  readonly spawn: Option.Option<string>;
+  readonly task: Option.Option<string>;
   readonly json: boolean;
   readonly runsDir: Option.Option<string>;
   readonly driver: Option.Option<string>;
@@ -835,7 +835,7 @@ const watchCommand = async (
   const watchInput = {
     channel: fromOption(command.channel),
     source: fromOption(command.source),
-    spawnId: fromOption(command.spawn),
+    taskId: fromOption(command.task),
     sinceTimeIso: fromOption(command.sinceTime),
     onEvent: (line: string) => {
       io.stdout(line);
@@ -977,7 +977,7 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       sinceTime: optionalTextOption("since-time"),
       channel: Options.choice("channel", WATCH_CHANNELS).pipe(Options.optional),
       source: Options.choice("source", WATCH_SOURCES).pipe(Options.optional),
-      spawn: optionalTextOption("spawn"),
+      task: optionalTextOption("task"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
       driver: optionalTextOption("driver"),

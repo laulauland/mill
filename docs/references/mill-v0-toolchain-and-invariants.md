@@ -114,7 +114,7 @@ scripts/
 8. `Effect.runPromise` is the only permitted Effect→Promise bridge.
 9. Runtime/domain internals do not read `process.env`, `Date.now()`, or `Math.random()` directly.
 10. `mill run` returns immediately by default.
-11. Public docs use task vocabulary; historical `spawn` names are storage/internal details until fully migrated.
+11. Public docs and new persisted orchestration records use task vocabulary (`task:*`, `taskId`, `tasks`); historical `spawn` names are limited to legacy/driver adapter internals until fully migrated.
 12. `spawn-agent` remains internal to `@mill/driver-acp`.
 
 ## 21) v0 non-goals

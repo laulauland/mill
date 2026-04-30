@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, type Effect as EffectType } from "effect";
-import { decodeRunIdSync, decodeSpawnIdSync } from "./run.schema";
+import { decodeRunIdSync, decodeTaskIdSync } from "./run.schema";
 import { runWithRuntime } from "./test-runtime";
 import {
   applyLifecycleTransition,
@@ -11,7 +11,7 @@ import {
 const runEffect = <A, E>(effect: EffectType<A, E>): Promise<A> => runWithRuntime(effect);
 
 const runId = decodeRunIdSync("run_lifecycle_guard");
-const spawnId = decodeSpawnIdSync("spawn_lifecycle_guard");
+const taskId = decodeTaskIdSync("task_lifecycle_guard");
 
 const runStartEvent = {
   schemaVersion: 1 as const,
@@ -47,14 +47,15 @@ describe("lifecycle guard transitions", () => {
         runId,
         sequence: 3,
         timestamp: "2026-02-23T20:00:02.000Z",
-        type: "spawn:start",
+        type: "task:start",
         payload: {
-          spawnId,
+          taskId,
           input: {
-            agent: "scout",
-            systemPrompt: "You are concise.",
+            role: "scout",
+            system: "You are concise.",
             prompt: "summarize",
             model: "openai/gpt-5.3-codex",
+            driver: "pi",
           },
         },
       }),
@@ -65,13 +66,13 @@ describe("lifecycle guard transitions", () => {
         runId,
         sequence: 4,
         timestamp: "2026-02-23T20:00:03.000Z",
-        type: "spawn:complete",
+        type: "task:complete",
         payload: {
-          spawnId,
+          taskId,
           result: {
             text: "done",
             sessionRef: "session/scout",
-            agent: "scout",
+            role: "scout",
             model: "openai/gpt-5.3-codex",
             driver: "pi",
             exitCode: 0,
@@ -93,11 +94,11 @@ describe("lifecycle guard transitions", () => {
             status: "complete",
             startedAt: "2026-02-23T20:00:00.000Z",
             completedAt: "2026-02-23T20:00:04.000Z",
-            spawns: [
+            tasks: [
               {
                 text: "done",
                 sessionRef: "session/scout",
-                agent: "scout",
+                role: "scout",
                 model: "openai/gpt-5.3-codex",
                 driver: "pi",
                 exitCode: 0,
@@ -123,7 +124,7 @@ describe("lifecycle guard transitions", () => {
             status: "complete",
             startedAt: "2026-02-23T20:00:00.000Z",
             completedAt: "2026-02-23T20:00:01.000Z",
-            spawns: [],
+            tasks: [],
           },
         },
       }),
@@ -181,7 +182,7 @@ describe("lifecycle guard transitions", () => {
     });
   });
 
-  it("rejects duplicate spawn terminal emissions for a single spawn", async () => {
+  it("rejects duplicate task terminal emissions for a single task", async () => {
     let state = await runEffect(
       applyLifecycleTransition(initialLifecycleGuardState, {
         ...runStartEvent,
@@ -195,14 +196,15 @@ describe("lifecycle guard transitions", () => {
         runId,
         sequence: 2,
         timestamp: "2026-02-23T20:00:01.000Z",
-        type: "spawn:start",
+        type: "task:start",
         payload: {
-          spawnId,
+          taskId,
           input: {
-            agent: "scout",
-            systemPrompt: "You are concise.",
+            role: "scout",
+            system: "You are concise.",
             prompt: "summarize",
             model: "openai/gpt-5.3-codex",
+            driver: "pi",
           },
         },
       }),
@@ -214,9 +216,9 @@ describe("lifecycle guard transitions", () => {
         runId,
         sequence: 3,
         timestamp: "2026-02-23T20:00:02.000Z",
-        type: "spawn:error",
+        type: "task:error",
         payload: {
-          spawnId,
+          taskId,
           message: "driver failed",
         },
       }),
@@ -229,9 +231,9 @@ describe("lifecycle guard transitions", () => {
           runId,
           sequence: 4,
           timestamp: "2026-02-23T20:00:03.000Z",
-          type: "spawn:cancelled",
+          type: "task:cancelled",
           payload: {
-            spawnId,
+            taskId,
           },
         }),
       ),

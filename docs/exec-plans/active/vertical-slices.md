@@ -75,11 +75,11 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 2. `mill run <program.ts> --sync --json` executes a program with injected `mill.task` actor API and returns structured result.
 3. Run directory includes `run.json`, `events.ndjson` (append-only), and `result.json` per SPEC §5.3.
 4. Persisted events decode through Schema discriminated union and include `schemaVersion`, `runId`, sequence, timestamp.
-5. `spawn:complete` payload includes non-empty `sessionRef` (SPEC invariant #2).
+5. `task:complete` payload includes non-empty `sessionRef` (SPEC invariant #2).
 
 **Deliverables**
 
-- `packages/core/src/*.schema.ts` for run/spawn/event unions.
+- `packages/core/src/*.schema.ts` for run/task/event unions.
 - `packages/core/src/run-store.effect.ts`, `engine.effect.ts` sync lifecycle.
 - `packages/cli` command handlers for `run --sync` and `status` JSON/human output.
 - `packages/driver-acp` codec + process-driver implementation using `Command.make(cmd, ...args)`.
@@ -94,9 +94,9 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 **Status (2026-02-23)**
 
 - ✅ Added Tier-1 event discriminated union schemas in `packages/core/src/event.schema.ts` with persisted decode helpers (`Schema.parseJson` + `Schema.decodeUnknown*`).
-- ✅ Expanded run/spawn schema contracts with typed decode utilities for persisted artifacts (`run.json`, `result.json`) and runtime validation of `SpawnResult` (`sessionRef` non-empty).
+- ✅ Expanded run/task schema contracts with typed decode utilities for persisted artifacts (`run.json`, `result.json`) and runtime validation of `TaskResult` (`sessionRef` non-empty).
 - ✅ Implemented `packages/core/src/run-store.effect.ts` for run directory creation and append-only `events.ndjson` persistence.
-- ✅ Implemented sync lifecycle orchestration in `packages/core/src/engine.effect.ts` (run start/status, spawn mapping, run terminal persistence).
+- ✅ Implemented sync lifecycle orchestration in `packages/core/src/engine.effect.ts` (run start/status, task mapping, run terminal persistence).
 - ✅ Implemented `run --sync` and `status` CLI command handlers in `packages/cli/src/index.ts`, with JSON mode contract preserved on stdout.
 - ✅ Implemented process-backed ACP driver runtime in `packages/driver-acp` with codec decoding and command invocation via `Command.make(cmd, ...args)`.
 - ✅ Added unit/integration/e2e coverage for schemas, run store, engine↔driver flow, CLI `run --sync`, CLI `status`, and persisted artifact verification.
@@ -120,7 +120,7 @@ Enforce lifecycle correctness guarantees before detached execution complexity is
 1. **Test intent:** unit (transition guards), integration (wait over persisted/live events), e2e (`wait` timeout/terminal behavior).
 2. `wait` resolves on first terminal event and never transitions terminal->non-terminal afterward.
 3. Duplicate terminal emissions are deterministically ignored or rejected per documented policy.
-4. Exactly one terminal event per run and per spawn is enforced in tests (SPEC §9.6 + invariant #6).
+4. Exactly one terminal event per run and per task is enforced in tests (SPEC §9.6 + invariant #6).
 5. Timeout behavior is deterministic and surfaced as typed error/output contract.
 
 **Deliverables**
@@ -159,7 +159,7 @@ Implement async-by-default submission with private worker process semantics.
 
 - core/runtime: worker orchestration, submit metadata, status updates
 - cli: `run` (default async), `_worker` private command path, `status`
-- driver-acp: exercised in worker-executed program spawns
+- driver-acp: exercised in worker-executed program tasks
 
 **Acceptance criteria**
 
@@ -321,6 +321,6 @@ Complete observer/control semantics for robust long-running orchestration operat
 - ✅ Added core observer fanout hub (`packages/core/src/observer-hub.effect.ts`) and wired engine tier-1/tier-2 publishing to persisted append + in-memory live subscribers.
 - ✅ Extended `MillEngine` with `watch`, `watchIo`, `cancel`, and `list` semantics.
 - ✅ Hardened append path synchronization against concurrent terminal transitions by rehydrating lifecycle guard state from persisted events before each append.
-- ✅ Added CLI `watch` channel/source/spawn filters and removed the separate `inspect` command surface.
+- ✅ Added CLI `watch` channel/source/task filters and removed the separate `inspect` command surface.
 - ✅ Fixed async submit detachment stdio to `ignore` so `run --json` remains non-blocking even under captured stdout in e2e contexts.
 - ✅ Added integration/e2e coverage for command matrix behavior across watch/cancel/ls, including concurrent run cancellation invariants.

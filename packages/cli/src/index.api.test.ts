@@ -102,11 +102,11 @@ const RunSyncEnvelope = Schema.fromJsonString(
     result: Schema.Struct({
       runId: Schema.String,
       status: Schema.String,
-      spawns: Schema.Array(
+      tasks: Schema.Array(
         Schema.Struct({
           text: Schema.String,
           sessionRef: Schema.String,
-          agent: Schema.String,
+          role: Schema.String,
           model: Schema.String,
           driver: Schema.String,
           exitCode: Schema.Number,
@@ -161,7 +161,7 @@ const WatchOutputEnvelope = Schema.fromJsonString(
       stream: Schema.Union([Schema.Literal("stdout"), Schema.Literal("stderr")]),
       line: Schema.String,
       timestamp: Schema.String,
-      spawnId: Schema.optional(Schema.String),
+      taskId: Schema.optional(Schema.String),
     }),
   ]),
 );
@@ -265,7 +265,7 @@ describe("runCli", () => {
       expect(runPayload.run.driver).toBe("codex");
       expect(runPayload.run.executor).toBe("direct");
       expect(runPayload.result.status).toBe("complete");
-      expect(runPayload.result.spawns).toHaveLength(1);
+      expect(runPayload.result.tasks).toHaveLength(1);
 
       const statusStdout: Array<string> = [];
       const statusStderr: Array<string> = [];
@@ -343,8 +343,8 @@ describe("runCli", () => {
       const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(runPayload.run.status).toBe("complete");
       expect(runPayload.result.status).toBe("complete");
-      expect(runPayload.result.spawns).toHaveLength(1);
-      expect(runPayload.result.spawns[0]?.text).toBe("Hello from fake agent");
+      expect(runPayload.result.tasks).toHaveLength(1);
+      expect(runPayload.result.tasks[0]?.text).toBe("Hello from fake agent");
 
       const resultFile = JSON.parse(await readFile(runPayload.run.paths.resultFile, "utf-8")) as {
         readonly programResult?: string;
@@ -412,7 +412,7 @@ describe("runCli", () => {
       const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(payload.run.driver).toBe("pi");
       expect(payload.run.executor).toBe("direct");
-      expect(payload.result.spawns[0]?.driver).toBe("pi");
+      expect(payload.result.tasks[0]?.driver).toBe("pi");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
@@ -462,7 +462,7 @@ describe("runCli", () => {
       const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(payload.run.driver).toBe("claude");
       expect(payload.run.executor).toBe("direct");
-      expect(payload.result.spawns[0]?.driver).toBe("claude");
+      expect(payload.result.tasks[0]?.driver).toBe("claude");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }
@@ -508,7 +508,7 @@ describe("runCli", () => {
       expect(runCode).toBe(0);
       const payload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
       expect(payload.run.driver).toBe("claude");
-      expect(payload.result.spawns[0]?.driver).toBe("claude");
+      expect(payload.result.tasks[0]?.driver).toBe("claude");
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

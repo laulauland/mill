@@ -62,7 +62,7 @@ export type WatchOutput =
       readonly stream: "stdout" | "stderr";
       readonly line: string;
       readonly timestamp: string;
-      readonly spawnId?: string;
+      readonly taskId?: string;
     };
 
 export interface WatchRunInput extends Omit<
@@ -72,7 +72,7 @@ export interface WatchRunInput extends Omit<
   readonly runId?: string;
   readonly channel?: WatchChannel;
   readonly source?: WatchSource;
-  readonly spawnId?: string;
+  readonly taskId?: string;
   readonly sinceTimeIso?: string;
   readonly pathExists?: (path: string) => Promise<boolean>;
   readonly loadConfigModule?: (path: string) => Promise<unknown>;
@@ -472,7 +472,7 @@ const toWatchIoOutput = (event: IoStreamEvent): WatchOutput => ({
   stream: event.stream,
   line: event.line,
   timestamp: event.timestamp,
-  spawnId: event.spawnId,
+  taskId: event.taskId,
 });
 
 const emitWatchOutput = (
@@ -486,13 +486,13 @@ const emitWatchOutput = (
 const filterIoEvent = (
   event: IoStreamEvent,
   source: WatchSource | undefined,
-  spawnId: string | undefined,
+  taskId: string | undefined,
 ): boolean => {
   if (source !== undefined && event.source !== source) {
     return false;
   }
 
-  if (spawnId !== undefined && event.spawnId !== spawnId) {
+  if (taskId !== undefined && event.taskId !== taskId) {
     return false;
   }
 
@@ -718,17 +718,17 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
     return Promise.reject(new Error("watch --channel io|all requires --run <runId>."));
   }
 
-  if (input.runId === undefined && (input.source !== undefined || input.spawnId !== undefined)) {
-    return Promise.reject(new Error("watch --source/--spawn requires --run <runId>."));
+  if (input.runId === undefined && (input.source !== undefined || input.taskId !== undefined)) {
+    return Promise.reject(new Error("watch --source/--task requires --run <runId>."));
   }
 
   if (channel === "io" && input.sinceTimeIso !== undefined) {
     return Promise.reject(new Error("watch --channel io does not support --since-time."));
   }
 
-  if (channel === "events" && (input.source !== undefined || input.spawnId !== undefined)) {
+  if (channel === "events" && (input.source !== undefined || input.taskId !== undefined)) {
     return Promise.reject(
-      new Error("watch --source/--spawn require --channel io or --channel all."),
+      new Error("watch --source/--task require --channel io or --channel all."),
     );
   }
 
@@ -753,7 +753,7 @@ export const watchRun = async (input: WatchRunInput): Promise<void> => {
   );
 
   const ioStream = Stream.filter(engineContext.engine.watchIo(runId), (event) =>
-    filterIoEvent(event, input.source, input.spawnId),
+    filterIoEvent(event, input.source, input.taskId),
   );
 
   if (channel === "events") {

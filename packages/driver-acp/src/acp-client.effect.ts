@@ -259,7 +259,7 @@ export const createAcpTaskSession = (
 const toTaskSessionInput = (input: DriverSpawnInput): DriverTaskSessionInput => ({
   runId: input.runId,
   runDirectory: input.runDirectory,
-  taskId: input.spawnId,
+  taskId: input.taskId,
   agent: input.agent,
   systemPrompt: input.systemPrompt,
   model: input.model,

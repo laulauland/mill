@@ -50,7 +50,7 @@ export interface MillRuntimeWaitInput {
 export interface MillRuntimeWatchInput {
   readonly channel?: WatchRunInput["channel"];
   readonly source?: WatchRunInput["source"];
-  readonly spawnId?: string;
+  readonly taskId?: string;
   readonly sinceTimeIso?: string;
   readonly onEvent: (line: string) => void;
 }
@@ -158,7 +158,7 @@ export const createMillRuntime = (options: MillRuntimeOptions): MillRuntime => {
         ...mergeRunRefInput(options, runId),
         channel: input.channel,
         source: input.source,
-        spawnId: input.spawnId,
+        taskId: input.taskId,
         sinceTimeIso: input.sinceTimeIso,
         onEvent: input.onEvent,
       }),
@@ -180,7 +180,7 @@ export const createMillRuntime = (options: MillRuntimeOptions): MillRuntime => {
         ...options,
         channel: input.channel,
         source: input.source,
-        spawnId: input.spawnId,
+        taskId: input.taskId,
         sinceTimeIso: input.sinceTimeIso,
         onEvent: input.onEvent,
       }),

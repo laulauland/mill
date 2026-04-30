@@ -208,7 +208,7 @@ describe("makeAcpDriver", () => {
       driver.spawn({
         runId: "run_test",
         runDirectory: "/tmp/run_test",
-        spawnId: "spawn_test",
+        taskId: "spawn_test",
         agent: "scout",
         systemPrompt: "You are concise.",
         prompt: "Say hello",
@@ -333,7 +333,7 @@ describe("makeAcpDriver", () => {
       driver.spawn({
         runId: "run_refusal",
         runDirectory: "/tmp/run_refusal",
-        spawnId: "spawn_refusal",
+        taskId: "spawn_refusal",
         agent: "scout",
         systemPrompt: "You are concise.",
         prompt: "Say hello",
@@ -355,7 +355,7 @@ describe("makeAcpDriver", () => {
       driver.spawn({
         runId: "run_cancelled",
         runDirectory: "/tmp/run_cancelled",
-        spawnId: "spawn_cancelled",
+        taskId: "spawn_cancelled",
         agent: "scout",
         systemPrompt: "You are concise.",
         prompt: "Say hello",

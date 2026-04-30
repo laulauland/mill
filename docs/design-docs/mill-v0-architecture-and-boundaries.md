@@ -119,7 +119,7 @@ Internally the CLI should stay a thin wrapper over the runtime facade / actor-co
 
 ## Storage/event vocabulary
 
-Public docs use task vocabulary. Some persisted event and storage names still use historical `spawn:*` / `spawnId` vocabulary because the current driver/event pipeline has not been fully renamed. Treat those names as storage details, not the primary public authoring API.
+Public docs and new persisted orchestration records use task vocabulary: `task:*` events, `taskId` identifiers, and `tasks` run results. Some driver adapter internals still use older spawn-shaped names until the session-first cleanup, but the engine/store boundary is task-native.
 
 ## Effect v4 package baseline
 
