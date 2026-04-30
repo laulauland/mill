@@ -1,6 +1,11 @@
 import { Effect } from "effect";
-import type { DriverProcessConfig, DriverRuntime, DriverSpawnInput } from "@mill/core";
-import { runAcpSession } from "./acp-client.effect";
+import type {
+  DriverProcessConfig,
+  DriverRuntime,
+  DriverSpawnInput,
+  DriverTaskSessionInput,
+} from "@mill/core";
+import { createAcpTaskSession, runAcpSession } from "./acp-client.effect";
 
 export const makeAcpDriver = (
   name: string,
@@ -14,6 +19,18 @@ export const makeAcpDriver = (
         ...output.result,
         driver: name,
       },
+    })),
+  createTaskSession: (input: DriverTaskSessionInput) =>
+    Effect.map(createAcpTaskSession(name, processConfig, input), (session) => ({
+      ...session,
+      startTurn: (turn) =>
+        Effect.map(session.startTurn(turn), (output) => ({
+          ...output,
+          result: {
+            ...output.result,
+            driver: name,
+          },
+        })),
     })),
   resolveSession: ({ sessionRef }) =>
     Effect.succeed({

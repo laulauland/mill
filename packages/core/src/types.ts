@@ -174,6 +174,26 @@ export interface DriverSpawnOutput {
   readonly result: SpawnOutput;
 }
 
+export interface DriverTaskSessionInput {
+  readonly runId: string;
+  readonly runDirectory: string;
+  readonly taskId: string;
+  readonly agent: string;
+  readonly systemPrompt: string;
+  readonly model: string;
+}
+
+export interface DriverTaskTurnInput {
+  readonly prompt: string;
+}
+
+export interface DriverTaskSession {
+  readonly sessionRef: string;
+  readonly startTurn: (input: DriverTaskTurnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
+  readonly cancelTurn: (reason?: string) => Effect.Effect<void, unknown>;
+  readonly close: () => Effect.Effect<void, unknown>;
+}
+
 export interface DriverSessionPointer {
   readonly driver: string;
   readonly sessionRef: string;
@@ -183,6 +203,9 @@ export interface DriverSessionPointer {
 export interface DriverRuntime {
   readonly name: string;
   readonly spawn: (input: DriverSpawnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
+  readonly createTaskSession?: (
+    input: DriverTaskSessionInput,
+  ) => Effect.Effect<DriverTaskSession, unknown>;
   readonly resolveSession?: (input: {
     readonly sessionRef: string;
   }) => Effect.Effect<DriverSessionPointer, unknown>;
