@@ -7,7 +7,7 @@ import {
   type ConfigOption,
 } from "spawn-agent";
 import type {
-  DriverProcessConfig,
+  AgentProcessConfig,
   AgentRuntimeEvent,
   AgentSession,
   AgentSessionInput,
@@ -32,7 +32,7 @@ const logNonFatalAcpError = (operation: string, error: AcpClientError): Effect.E
 
 const makeAdapter = (
   name: string,
-  processConfig: DriverProcessConfig | undefined,
+  processConfig: AgentProcessConfig | undefined,
 ): AgentAdapter | "claude" | "codex" | "pi" => {
   if (processConfig === undefined) {
     if (name === "claude" || name === "codex" || name === "pi") {
@@ -199,7 +199,7 @@ const collectPrompt = (
 
 export const createAcpSession = (
   name: string,
-  processConfig: DriverProcessConfig | undefined,
+  processConfig: AgentProcessConfig | undefined,
   input: AgentSessionInput,
 ): Effect.Effect<AgentSession, AcpClientError> =>
   Effect.gen(function* () {

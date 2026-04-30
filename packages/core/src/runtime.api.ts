@@ -10,6 +10,7 @@ import {
   waitForRun,
   watchRun,
   type CancelRunInput,
+  type ProcessControl,
   type LaunchWorkerInput,
   type ListRunsInput,
   type RunProgramSyncInput,
@@ -20,17 +21,22 @@ import {
   type RunSyncOutput,
   type WatchRunInput,
 } from "./run.api";
-import type { ResolveConfigOptions } from "./types";
+import type { AgentRuntime, ExtensionRegistration } from "./types";
 
 class MissingLaunchWorkerError extends Data.TaggedError("MissingLaunchWorkerError")<{
   readonly message: string;
 }> {}
 
-interface MillRuntimeBaseOptions extends ResolveConfigOptions {
+interface MillRuntimeBaseOptions {
+  readonly cwd?: string;
+  readonly homeDirectory?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly runsDirectory?: string;
-  readonly driverName?: string;
-  readonly executorName?: string;
+  readonly maxRunDepth?: number;
+  readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
+  readonly extensions?: ReadonlyArray<ExtensionRegistration>;
   readonly executablePath?: string;
+  readonly processControl?: ProcessControl;
 }
 
 export interface MillRuntimeOptions extends MillRuntimeBaseOptions {

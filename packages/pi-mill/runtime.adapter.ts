@@ -452,11 +452,7 @@ function writeMillProgramEffect(input: {
   prompt: string;
   agent: string;
   modelId: string;
-}): Effect.Effect<
-  { dir: string; filePath: string; driver: string },
-  unknown,
-  FileSystem.FileSystem
-> {
+}): Effect.Effect<{ dir: string; filePath: string }, unknown, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const dir = yield* makeTemporaryDirectoryEffect(
       path.join(temporaryDirectory(), "pi-mill-task-"),
@@ -470,7 +466,7 @@ function writeMillProgramEffect(input: {
     });
 
     yield* writeTextFileEffect(filePath, source, 0o600);
-    return { dir, filePath, driver: inferMillDriverFromModel(input.modelId) };
+    return { dir, filePath };
   });
 }
 
@@ -703,8 +699,6 @@ async function runSubagentProcess(input: SubagentTaskInput): ExecutionResultProm
     "run",
     tempProgram.filePath,
     "--json",
-    "--driver",
-    tempProgram.driver,
     "--meta-json",
     metadata,
   ];

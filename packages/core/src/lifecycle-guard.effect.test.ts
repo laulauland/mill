@@ -219,7 +219,7 @@ describe("lifecycle guard transitions", () => {
         type: "task:error",
         payload: {
           taskId,
-          message: "driver failed",
+          message: "agent failed",
         },
       }),
     );

@@ -4,7 +4,7 @@ import { claude, codex, pi } from "./task.api";
 const agentModel = "openai-codex/gpt-5.3-codex";
 
 describe("agent provider factories", () => {
-  it("creates provider descriptors for built-in ACP drivers", () => {
+  it("creates provider descriptors for built-in ACP providers", () => {
     expect(codex(agentModel)).toEqual({
       driver: "codex",
       model: agentModel,

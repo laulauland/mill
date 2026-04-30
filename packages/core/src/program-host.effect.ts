@@ -15,7 +15,6 @@ export interface ExecuteProgramInProcessHostInput {
   readonly workingDirectory: string;
   readonly programPath: string;
   readonly programSource: string;
-  readonly executorName: string;
   readonly executablePath?: string;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly env?: Readonly<Record<string, string>>;
@@ -182,12 +181,9 @@ export const executeProgramInProcessHost = (
     yield* Effect.mapError(
       fileSystem.writeFileString(
         markerPath,
-        [
-          "program-host:import",
-          `runId=${input.runId}`,
-          `executor=${input.executorName}`,
-          `programPath=${input.programPath}`,
-        ].join("\n"),
+        ["program-host:import", `runId=${input.runId}`, `programPath=${input.programPath}`].join(
+          "\n",
+        ),
       ),
       (error) =>
         new ProgramHostError({

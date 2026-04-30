@@ -11,13 +11,12 @@ import { makeRunStore } from "./run-store.effect";
 import { runWithBunServices } from "./test-runtime";
 import { ProcessControlError, cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
 import { createMillRuntime } from "./runtime.api";
-import type { MillConfig } from "./types";
+import type { AgentRuntime, ExtensionRegistration } from "./types";
 
 const ProgramResultEnvelope = Schema.fromJsonString(
   Schema.Struct({
     note: Schema.optional(Schema.String),
     driver: Schema.optional(Schema.String),
-    executor: Schema.optional(Schema.String),
   }),
 );
 
@@ -42,126 +41,51 @@ const waitForProcessExit = async (pid: number, timeoutMillis: number): Promise<v
   throw new Error(`child process ${pid} did not exit in time`);
 };
 
-const makeConfig = (): MillConfig => ({
-  defaultDriver: "default",
-  defaultExecutor: "direct",
+const makeAgentRuntime = (name: string): AgentRuntime => ({
+  name,
+  createSession: (input) =>
+    Effect.succeed({
+      sessionRef: `session/${name}/${input.role}`,
+      startTurn: (turn) =>
+        Effect.succeed({
+          events: [
+            {
+              type: "milestone",
+              message: `${name}:${input.role}`,
+            },
+          ],
+          result: {
+            text: `${name}:${turn.prompt}`,
+            sessionRef: `session/${name}/${input.role}`,
+            role: input.role,
+            model: input.model,
+            driver: name,
+            exitCode: 0,
+          },
+        }),
+      cancelTurn: () => Effect.void,
+      close: () => Effect.void,
+    }),
+});
+
+const extensions: ReadonlyArray<ExtensionRegistration> = [
+  {
+    name: "tools",
+    setup: () => Effect.fail("setup exploded"),
+    onEvent: (event) => (event.type === "task:start" ? Effect.fail("event exploded") : Effect.void),
+    api: {
+      echo: (...args) => Effect.succeed(`echo:${String(args[0] ?? "")}`),
+    },
+  },
+];
+
+const makeRunOptions = () => ({
+  agentRuntimes: {
+    default: makeAgentRuntime("default"),
+    codex: makeAgentRuntime("codex"),
+  },
+  extensions,
   maxRunDepth: 1,
-  drivers: {
-    default: {
-      description: "default driver",
-      modelFormat: "provider/model-id",
-      process: {
-        command: "default",
-        args: [],
-        env: {},
-      },
-      models: Effect.succeed(["default/model"]),
-      runtime: {
-        name: "default",
-        createSession: (input) =>
-          Effect.succeed({
-            sessionRef: `session/default/${input.role}`,
-            startTurn: (turn) =>
-              Effect.succeed({
-                events: [
-                  {
-                    type: "milestone",
-                    message: `default:${input.role}`,
-                  },
-                ],
-                result: {
-                  text: `default:${turn.prompt}`,
-                  sessionRef: `session/default/${input.role}`,
-                  role: input.role,
-                  model: input.model,
-                  driver: "default",
-                  exitCode: 0,
-                },
-              }),
-            cancelTurn: () => Effect.void,
-            close: () => Effect.void,
-          }),
-      },
-    },
-    codex: {
-      description: "codex driver",
-      modelFormat: "provider/model-id",
-      process: {
-        command: "codex",
-        args: [],
-        env: {},
-      },
-      models: Effect.succeed(["openai/gpt-5.3-codex"]),
-      runtime: {
-        name: "codex",
-        createSession: (input) =>
-          Effect.succeed({
-            sessionRef: `session/codex/${input.role}`,
-            startTurn: (turn) =>
-              Effect.succeed({
-                events: [
-                  {
-                    type: "milestone",
-                    message: `codex:${input.role}`,
-                  },
-                ],
-                result: {
-                  text: `codex:${turn.prompt}`,
-                  sessionRef: `session/codex/${input.role}`,
-                  role: input.role,
-                  model: input.model,
-                  driver: "codex",
-                  exitCode: 0,
-                },
-              }),
-            cancelTurn: () => Effect.void,
-            close: () => Effect.void,
-          }),
-      },
-    },
-  },
-  executors: {
-    direct: {
-      description: "direct executor",
-      runtime: {
-        name: "direct",
-        runProgram: (input) =>
-          Effect.andThen(
-            Effect.sync(() => {
-              (globalThis as { __millExecutorName?: string }).__millExecutorName = "direct";
-            }),
-            input.execute,
-          ),
-      },
-    },
-    vm: {
-      description: "vm executor",
-      runtime: {
-        name: "vm",
-        runProgram: (input) =>
-          Effect.andThen(
-            Effect.sync(() => {
-              (globalThis as { __millExecutorName?: string }).__millExecutorName = "vm";
-            }),
-            input.execute,
-          ),
-      },
-    },
-  },
-  extensions: [
-    {
-      name: "tools",
-      setup: () => Effect.fail("setup exploded"),
-      onEvent: (event) =>
-        event.type === "task:start" ? Effect.fail("event exploded") : Effect.void,
-      api: {
-        echo: (...args) => Effect.succeed(`echo:${String(args[0] ?? "")}`),
-      },
-    },
-  ],
-  authoring: {
-    instructions: "use task + extension APIs",
-  },
 });
 
 describe("run.api integration", () => {
@@ -169,7 +93,7 @@ describe("run.api integration", () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-runtime-api-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
-    const defaults = makeConfig();
+    const runOptions = makeRunOptions();
 
     await writeFile(
       programPath,
@@ -188,23 +112,17 @@ describe("run.api integration", () => {
 
     try {
       const runtime = createMillRuntime({
-        defaults,
+        ...runOptions,
         cwd: tempDirectory,
         homeDirectory,
-        pathExists: async () => false,
-        driverName: "codex",
-        executorName: "direct",
         launchWorker: async (launchInput) => {
           await runWorker({
-            defaults,
+            ...runOptions,
             runId: launchInput.runId,
             programPath: launchInput.programPath,
             cwd: launchInput.cwd,
             homeDirectory,
             runsDirectory: launchInput.runsDirectory,
-            driverName: launchInput.driverName,
-            executorName: launchInput.executorName,
-            pathExists: async () => false,
           });
         },
       });
@@ -215,7 +133,6 @@ describe("run.api integration", () => {
       expect(run.getSnapshot()?.status).toBe("complete");
 
       if ("run" in output) {
-        expect(output.run.driver).toBe("codex");
         expect(output.result.programResult).toBe("codex:from runtime");
       }
     } finally {
@@ -223,7 +140,7 @@ describe("run.api integration", () => {
     }
   });
 
-  it("selects driver/executor overrides, injects extension API, and emits extension:error events", async () => {
+  it("uses task agent providers, injects extension API, and emits extension:error events", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-api-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
@@ -243,40 +160,32 @@ describe("run.api integration", () => {
         '  role: "scout",',
         "}).start();",
         "const taskResult = await task.done;",
-        'export const result = JSON.stringify({ note, driver: taskResult.driver, executor: globalThis.__millExecutorName ?? "unknown" });',
+        "export const result = JSON.stringify({ note, driver: taskResult.driver });",
       ].join("\n"),
       "utf-8",
     );
 
-    const defaults = makeConfig();
+    const runOptions = makeRunOptions();
 
     try {
       const output = await runProgramSync({
-        defaults,
+        ...runOptions,
         programPath,
         cwd: tempDirectory,
         homeDirectory,
-        pathExists: async () => false,
-        driverName: "codex",
-        executorName: "vm",
         launchWorker: async (launchInput) => {
           await runWorker({
-            defaults,
+            ...runOptions,
             runId: launchInput.runId,
             programPath: launchInput.programPath,
             cwd: launchInput.cwd,
             homeDirectory,
             runsDirectory: launchInput.runsDirectory,
-            driverName: launchInput.driverName,
-            executorName: launchInput.executorName,
-            pathExists: async () => false,
           });
         },
       });
 
       expect(output.run.status).toBe("complete");
-      expect(output.run.driver).toBe("codex");
-      expect(output.run.executor).toBe("vm");
       expect(output.result.tasks[0]?.driver).toBe("codex");
 
       const parsedProgramResult = Schema.decodeUnknownSync(ProgramResultEnvelope)(
@@ -285,7 +194,6 @@ describe("run.api integration", () => {
 
       expect(parsedProgramResult.note).toBe("echo:hello");
       expect(parsedProgramResult.driver).toBe("codex");
-      expect(parsedProgramResult.executor).toBe("vm");
 
       const eventsContent = await readFile(output.run.paths.eventsFile, "utf-8");
       const eventTypes = eventsContent
@@ -301,7 +209,6 @@ describe("run.api integration", () => {
         "utf-8",
       );
       expect(hostMarker).toContain("program-host:import");
-      expect(hostMarker).toContain(`executor=${output.run.executor}`);
     } finally {
       if (previousDepth === undefined) {
         delete process.env.MILL_RUN_DEPTH;
@@ -341,24 +248,18 @@ describe("run.api integration", () => {
 
     try {
       const output = await runProgramSync({
-        defaults: makeConfig(),
+        ...makeRunOptions(),
         programPath,
         cwd: tempDirectory,
         homeDirectory,
-        pathExists: async () => false,
-        driverName: "codex",
-        executorName: "vm",
         launchWorker: async (launchInput) => {
           await runWorker({
-            defaults: makeConfig(),
+            ...makeRunOptions(),
             runId: launchInput.runId,
             programPath: launchInput.programPath,
             cwd: launchInput.cwd,
             homeDirectory,
             runsDirectory: launchInput.runsDirectory,
-            driverName: launchInput.driverName,
-            executorName: launchInput.executorName,
-            pathExists: async () => false,
           });
         },
       });
@@ -396,22 +297,18 @@ describe("run.api integration", () => {
 
     try {
       const output = await runProgramSync({
-        defaults: makeConfig(),
+        ...makeRunOptions(),
         programPath,
         cwd: tempDirectory,
         env: { HOME: homeDirectory },
-        pathExists: async () => false,
         launchWorker: async (launchInput) => {
           capturedRunsDirectory = launchInput.runsDirectory;
           await runWorker({
-            defaults: makeConfig(),
+            ...makeRunOptions(),
             runId: launchInput.runId,
             programPath: launchInput.programPath,
             cwd: launchInput.cwd,
             runsDirectory: launchInput.runsDirectory,
-            driverName: launchInput.driverName,
-            executorName: launchInput.executorName,
-            pathExists: async () => false,
           });
         },
       });
@@ -436,12 +333,11 @@ describe("run.api integration", () => {
     try {
       await expect(
         submitRun({
-          defaults: makeConfig(),
+          ...makeRunOptions(),
           programPath,
           cwd: tempDirectory,
           homeDirectory,
           env: { MILL_RUN_DEPTH: "1" },
-          pathExists: async () => false,
           launchWorker: async () => {
             throw new Error("launchWorker should not be called when depth guard blocks run");
           },
@@ -451,15 +347,12 @@ describe("run.api integration", () => {
       let launchCalled = false;
 
       const submitted = await submitRun({
-        defaults: {
-          ...makeConfig(),
-          maxRunDepth: 2,
-        },
+        ...makeRunOptions(),
+        maxRunDepth: 2,
         programPath,
         cwd: tempDirectory,
         homeDirectory,
         env: { MILL_RUN_DEPTH: "1" },
-        pathExists: async () => false,
         launchWorker: async () => {
           launchCalled = true;
         },
@@ -476,7 +369,7 @@ describe("run.api integration", () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-cancel-"));
     const runsDirectory = join(tempDirectory, "runs");
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
-    const defaults = makeConfig();
+    const runOptions = makeRunOptions();
 
     const store = makeRunStore({ runsDirectory });
 
@@ -497,8 +390,6 @@ describe("run.api integration", () => {
         store.create({
           runId,
           programPath: "/tmp/program.ts",
-          driver: "default",
-          executor: "direct",
           status: "running",
           timestamp: "2026-02-25T10:00:00.000Z",
         }),
@@ -508,11 +399,10 @@ describe("run.api integration", () => {
       await writeFile(join(runDirectory, "worker.pid"), `${worker.pid}\n`, "utf-8");
 
       const cancelled = await cancelRun({
-        defaults,
+        ...runOptions,
         runId,
         runsDirectory,
         cwd: tempDirectory,
-        pathExists: async () => false,
         processControl: {
           isAlive: (pid) =>
             Effect.try({

@@ -1,25 +1,25 @@
 import { describe, expect, it } from "bun:test";
 import { runWithRuntime } from "./test-runtime";
 import {
-  createClaudeAcpDriverRegistration,
-  createCodexAcpDriverRegistration,
-  createPiAcpDriverRegistration,
+  createClaudeAcpAgentProvider,
+  createCodexAcpAgentProvider,
+  createPiAcpAgentProvider,
 } from "./index";
 
-describe("createClaudeAcpDriverRegistration", () => {
+describe("createClaudeAcpAgentProvider", () => {
   it("provides default models", async () => {
-    const reg = createClaudeAcpDriverRegistration();
+    const reg = createClaudeAcpAgentProvider();
     const models = await runWithRuntime(reg.models);
 
     expect(models).toContain("anthropic/claude-sonnet-4-6");
     expect(models).toContain("anthropic/claude-opus-4-6");
     expect(models).toContain("anthropic/claude-haiku-4-5");
     expect(reg.runtime).toBeDefined();
-    expect(reg.description).toBe("Claude ACP driver");
+    expect(reg.description).toBe("Claude ACP provider");
   });
 
   it("allows custom model override", async () => {
-    const reg = createClaudeAcpDriverRegistration({
+    const reg = createClaudeAcpAgentProvider({
       models: ["custom/model-a", "custom/model-b"],
     });
     const models = await runWithRuntime(reg.models);
@@ -28,18 +28,18 @@ describe("createClaudeAcpDriverRegistration", () => {
   });
 });
 
-describe("createCodexAcpDriverRegistration", () => {
+describe("createCodexAcpAgentProvider", () => {
   it("provides default models", async () => {
-    const reg = createCodexAcpDriverRegistration();
+    const reg = createCodexAcpAgentProvider();
     const models = await runWithRuntime(reg.models);
 
     expect(models).toContain("openai-codex/gpt-5.3-codex");
     expect(reg.runtime).toBeDefined();
-    expect(reg.description).toBe("Codex ACP driver");
+    expect(reg.description).toBe("Codex ACP provider");
   });
 
   it("allows custom model override", async () => {
-    const reg = createCodexAcpDriverRegistration({
+    const reg = createCodexAcpAgentProvider({
       models: ["custom/codex-model"],
     });
     const models = await runWithRuntime(reg.models);
@@ -48,18 +48,18 @@ describe("createCodexAcpDriverRegistration", () => {
   });
 });
 
-describe("createPiAcpDriverRegistration", () => {
+describe("createPiAcpAgentProvider", () => {
   it("returns empty models when no home directory is provided", async () => {
-    const reg = createPiAcpDriverRegistration();
+    const reg = createPiAcpAgentProvider();
     const models = await runWithRuntime(reg.models);
 
     expect(models).toEqual([]);
     expect(reg.runtime).toBeDefined();
-    expect(reg.description).toBe("Pi ACP driver");
+    expect(reg.description).toBe("Pi ACP provider");
   });
 
   it("allows custom model override", async () => {
-    const reg = createPiAcpDriverRegistration({
+    const reg = createPiAcpAgentProvider({
       models: ["pi/custom-model"],
     });
     const models = await runWithRuntime(reg.models);

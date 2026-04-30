@@ -3,7 +3,7 @@ import type { MillEvent } from "./event.schema";
 
 export interface IoStreamEvent {
   readonly runId: string;
-  readonly source: "driver" | "program";
+  readonly source: "agent" | "program";
   readonly stream: "stdout" | "stderr";
   readonly line: string;
   readonly timestamp: string;

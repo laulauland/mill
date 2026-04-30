@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import { Effect } from "effect";
 import { runEffect } from "./test-runtime";
-import { makeAcpDriver } from "./acp-driver.effect";
+import { makeAcpAgentRuntime } from "./acp-driver.effect";
 
 const FAKE_ACP_AGENT_SCRIPT = `
 const readline = require("readline");
@@ -198,15 +198,15 @@ rl.on("line", (line) => {
 });
 `;
 
-describe("makeAcpDriver", () => {
+describe("makeAcpAgentRuntime", () => {
   it("creates a session, selects ACP model config, and collects turn output", async () => {
-    const driver = makeAcpDriver("test-acp", {
+    const runtime = makeAcpAgentRuntime("test-acp", {
       command: "bun",
       args: ["-e", FAKE_ACP_AGENT_SCRIPT],
     });
 
     const session = await runEffect(
-      driver.createSession({
+      runtime.createSession({
         runId: "run_test",
         runDirectory: "/tmp/run_test",
         taskId: "task_test",
@@ -235,14 +235,14 @@ describe("makeAcpDriver", () => {
     const logPath = join(tempDirectory, "events.ndjson");
 
     try {
-      const driver = makeAcpDriver("test-acp", {
+      const runtime = makeAcpAgentRuntime("test-acp", {
         command: "bun",
         args: ["-e", MULTI_TURN_ACP_AGENT_SCRIPT],
         env: { MILL_TEST_LOG: logPath },
       });
 
       const session = await runEffect(
-        driver.createSession({
+        runtime.createSession({
           runId: "run_multi",
           runDirectory: tempDirectory,
           taskId: "task_multi",
@@ -284,14 +284,14 @@ describe("makeAcpDriver", () => {
     const logPath = join(tempDirectory, "events.ndjson");
 
     try {
-      const driver = makeAcpDriver("test-acp", {
+      const runtime = makeAcpAgentRuntime("test-acp", {
         command: "bun",
         args: ["-e", MULTI_TURN_ACP_AGENT_SCRIPT],
         env: { MILL_TEST_LOG: logPath },
       });
 
       const session = await runEffect(
-        driver.createSession({
+        runtime.createSession({
           runId: "run_cancel_turn",
           runDirectory: tempDirectory,
           taskId: "task_cancel_turn",
@@ -327,13 +327,13 @@ describe("makeAcpDriver", () => {
   }, 15000);
 
   it("handles refusal stop reason", async () => {
-    const driver = makeAcpDriver("test-acp", {
+    const runtime = makeAcpAgentRuntime("test-acp", {
       command: "bun",
       args: ["-e", makeVariantAgentScript("refusal")],
     });
 
     const session = await runEffect(
-      driver.createSession({
+      runtime.createSession({
         runId: "run_refusal",
         runDirectory: "/tmp/run_refusal",
         taskId: "task_refusal",
@@ -351,13 +351,13 @@ describe("makeAcpDriver", () => {
   }, 15000);
 
   it("handles cancelled stop reason", async () => {
-    const driver = makeAcpDriver("test-acp", {
+    const runtime = makeAcpAgentRuntime("test-acp", {
       command: "bun",
       args: ["-e", makeVariantAgentScript("cancelled")],
     });
 
     const session = await runEffect(
-      driver.createSession({
+      runtime.createSession({
         runId: "run_cancelled",
         runDirectory: "/tmp/run_cancelled",
         taskId: "task_cancelled",
@@ -375,11 +375,11 @@ describe("makeAcpDriver", () => {
   }, 15000);
 
   it("resolveSession returns correct pointer", async () => {
-    const driver = makeAcpDriver("claude");
+    const runtime = makeAcpAgentRuntime("claude");
 
-    const pointer = await runEffect(driver.resolveSession!({ sessionRef: "session-abc" }));
+    const pointer = await runEffect(runtime.resolveSession!({ sessionRef: "session-abc" }));
 
-    expect(pointer.driver).toBe("claude");
+    expect(pointer.provider).toBe("claude");
     expect(pointer.sessionRef).toBe("session-abc");
     expect(pointer.pointer).toContain("acp://claude/session/");
   });

@@ -7,13 +7,13 @@ import { Effect, Stream } from "effect";
 import { decodeMillEventJsonSync, type MillEvent } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
 import { runWithBunServices } from "./test-runtime";
-import type { DriverRuntime } from "./types";
+import type { AgentRuntime } from "./types";
 import { makeMillEngine } from "./engine.effect";
 import { makeRunStore } from "./run-store.effect";
 import { codex } from "./task.api";
 
-const testDriver: DriverRuntime = {
-  name: "test-driver",
+const testRuntime: AgentRuntime = {
+  name: "test-provider",
   createSession: (input) =>
     Effect.succeed({
       sessionRef: `session/${input.role}`,
@@ -26,11 +26,11 @@ const testDriver: DriverRuntime = {
             },
           ],
           result: {
-            text: `driver:${turn.prompt}`,
+            text: `agent:${turn.prompt}`,
             sessionRef: `session/${input.role}`,
             role: input.role,
             model: input.model,
-            driver: "test-driver",
+            driver: "test-provider",
             exitCode: 0,
           },
         }),
@@ -56,9 +56,7 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: testDriver,
+      agentRuntimes: { default: testRuntime, codex: testRuntime },
       extensions: [],
     });
 
@@ -83,9 +81,7 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: testDriver,
+      agentRuntimes: { default: testRuntime, codex: testRuntime },
       extensions: [],
     });
 
@@ -179,9 +175,7 @@ describe("MillEngine sync lifecycle", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: testDriver,
+      agentRuntimes: { default: testRuntime, codex: testRuntime },
       extensions: [],
     });
 
@@ -190,7 +184,6 @@ describe("MillEngine sync lifecycle", () => {
         store.create({
           runId,
           programPath: "/tmp/program.ts",
-          driver: "default",
           timestamp: "2026-02-23T20:00:00.000Z",
         }),
       );
@@ -274,9 +267,7 @@ describe("MillEngine sync lifecycle", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: testDriver,
+      agentRuntimes: { default: testRuntime, codex: testRuntime },
       extensions: [],
     });
 
@@ -285,7 +276,6 @@ describe("MillEngine sync lifecycle", () => {
         store.create({
           runId,
           programPath: "/tmp/program.ts",
-          driver: "default",
           timestamp: "2026-02-23T20:00:00.000Z",
         }),
       );
@@ -320,9 +310,7 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: testDriver,
+      agentRuntimes: { default: testRuntime, codex: testRuntime },
       extensions: [],
     });
 
@@ -378,8 +366,8 @@ describe("MillEngine sync lifecycle", () => {
     const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-watch-"));
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
-    const driverWithRaw: DriverRuntime = {
-      name: "test-driver-raw",
+    const driverWithRaw: AgentRuntime = {
+      name: "test-agent-runtime",
       createSession: (input) =>
         Effect.succeed({
           sessionRef: `session/${input.role}`,
@@ -396,11 +384,11 @@ describe("MillEngine sync lifecycle", () => {
                 },
               ],
               result: {
-                text: `driver:${turn.prompt}`,
+                text: `agent:${turn.prompt}`,
                 sessionRef: `session/${input.role}`,
                 role: input.role,
                 model: input.model,
-                driver: "test-driver-raw",
+                driver: "test-agent-runtime",
                 exitCode: 0,
               },
             }),
@@ -411,9 +399,7 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: driverWithRaw,
+      agentRuntimes: { default: driverWithRaw, codex: driverWithRaw },
       extensions: [],
     });
 
@@ -469,7 +455,7 @@ describe("MillEngine sync lifecycle", () => {
       expect(tier1Events.some((event) => event.type === "run:start")).toBe(true);
       expect(tier1Events.some((event) => event.type === "run:complete")).toBe(true);
       expect(ioEvents).toHaveLength(2);
-      expect(ioEvents[0]?.source).toBe("driver");
+      expect(ioEvents[0]?.source).toBe("agent");
       expect(ioEvents[0]?.stream).toBe("stdout");
       expect(ioEvents[0]?.line).toContain("raw:scout");
 
@@ -487,9 +473,7 @@ describe("MillEngine sync lifecycle", () => {
     const store = makeRunStore({ runsDirectory });
     const engine = makeMillEngine({
       runsDirectory,
-      driverName: "default",
-      executorName: "direct",
-      driver: testDriver,
+      agentRuntimes: { default: testRuntime, codex: testRuntime },
       extensions: [],
     });
 
@@ -498,8 +482,6 @@ describe("MillEngine sync lifecycle", () => {
         store.create({
           runId,
           programPath: "/tmp/program.ts",
-          driver: "default",
-          executor: "direct",
           status: "running",
           timestamp: "2026-02-23T20:00:00.000Z",
         }),

@@ -142,7 +142,7 @@ describe("TaskActor", () => {
     });
   });
 
-  it("marks interrupt steering without claiming driver-level interrupt", () => {
+  it("marks interrupt steering without claiming runtime-level interrupt", () => {
     const actor = createTaskActor(
       { ...input, steering: "interrupt" },
       {
@@ -158,7 +158,7 @@ describe("TaskActor", () => {
 
     expect(actor.getSnapshot()).toMatchObject({
       status: "interrupting",
-      error: "Task interrupt requested; driver-level interrupt is not available yet.",
+      error: "Task interrupt requested; runtime-level interrupt is not available yet.",
       queue: [
         {
           type: "message",

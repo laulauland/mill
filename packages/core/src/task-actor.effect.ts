@@ -261,7 +261,7 @@ export const makeTaskActorRuntime = (
           publish({
             ...snapshot,
             status: isTaskBusy(snapshot.status) ? "interrupting" : snapshot.status,
-            error: "Task interrupt requested; driver-level interrupt is not available yet.",
+            error: "Task interrupt requested; runtime-level interrupt is not available yet.",
             queue: [...snapshot.queue, item],
           });
           return;

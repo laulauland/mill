@@ -166,8 +166,8 @@ export interface AgentSession {
   readonly close: () => Effect.Effect<void, unknown>;
 }
 
-export interface DriverSessionPointer {
-  readonly driver: string;
+export interface AgentSessionPointer {
+  readonly provider: string;
   readonly sessionRef: string;
   readonly pointer: string;
 }
@@ -177,26 +177,11 @@ export interface AgentRuntime {
   readonly createSession: (input: AgentSessionInput) => Effect.Effect<AgentSession, unknown>;
   readonly resolveSession?: (input: {
     readonly sessionRef: string;
-  }) => Effect.Effect<DriverSessionPointer, unknown>;
-}
-
-export type DriverRuntime = AgentRuntime;
-
-export interface ExecutorRunInput {
-  readonly runId: string;
-  readonly programPath: string;
-  readonly execute: Effect.Effect<unknown, unknown>;
-}
-
-export interface ExecutorRuntime {
-  readonly name: string;
-  readonly runProgram: (input: ExecutorRunInput) => Effect.Effect<unknown, unknown>;
+  }) => Effect.Effect<AgentSessionPointer, unknown>;
 }
 
 export interface ExtensionContext {
   readonly runId: string;
-  readonly driverName: string;
-  readonly executorName: string;
 }
 
 export interface ExtensionRegistration {
@@ -217,98 +202,8 @@ export interface Mill {
   runActor(): RunActor;
 }
 
-export interface DriverProcessConfig {
+export interface AgentProcessConfig {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env?: Readonly<Record<string, string>>;
-}
-
-export interface DriverRegistration {
-  readonly description: string;
-  readonly modelFormat: string;
-  readonly process: DriverProcessConfig;
-  readonly models: Effect.Effect<ReadonlyArray<string>, never>;
-  readonly runtime?: DriverRuntime;
-}
-
-export interface ExecutorRegistration {
-  readonly description: string;
-  readonly runtime: ExecutorRuntime;
-}
-
-export interface MillConfig {
-  readonly defaultDriver: string;
-  readonly defaultExecutor: string;
-  readonly maxRunDepth?: number;
-  readonly drivers: Readonly<Record<string, DriverRegistration>>;
-  readonly executors: Readonly<Record<string, ExecutorRegistration>>;
-  readonly extensions: ReadonlyArray<ExtensionRegistration>;
-  readonly authoring: {
-    readonly instructions: string;
-  };
-}
-
-export interface DiscoveryPayload {
-  readonly discoveryVersion: number;
-  readonly programApi: {
-    readonly taskRequired: ReadonlyArray<string>;
-    readonly taskOptional: ReadonlyArray<string>;
-    readonly resultFields: ReadonlyArray<string>;
-  };
-  readonly drivers: Readonly<
-    Record<
-      string,
-      {
-        readonly description: string;
-        readonly modelFormat: string;
-        readonly models: ReadonlyArray<string>;
-      }
-    >
-  >;
-  readonly executors: Readonly<
-    Record<
-      string,
-      {
-        readonly description: string;
-      }
-    >
-  >;
-  readonly authoring: {
-    readonly instructions: string;
-  };
-  readonly async: {
-    readonly submit: string;
-    readonly status: string;
-    readonly wait: string;
-    readonly watch: string;
-  };
-}
-
-export type ConfigSource = "cwd" | "upward" | "home" | "defaults";
-
-export interface ConfigFileOverrides {
-  readonly defaultDriver?: string;
-  readonly defaultExecutor?: string;
-  readonly maxRunDepth?: number;
-  readonly drivers?: Readonly<Record<string, DriverRegistration>>;
-  readonly executors?: Readonly<Record<string, ExecutorRegistration>>;
-  readonly extensions?: ReadonlyArray<ExtensionRegistration>;
-  readonly authoring?: {
-    readonly instructions?: string;
-  };
-}
-
-export interface ResolvedConfig {
-  readonly source: ConfigSource;
-  readonly configPath?: string;
-  readonly config: MillConfig;
-}
-
-export interface ResolveConfigOptions {
-  readonly defaults: MillConfig;
-  readonly cwd?: string;
-  readonly homeDirectory?: string;
-  readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigModule?: (path: string) => Promise<unknown>;
 }

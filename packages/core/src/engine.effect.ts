@@ -21,7 +21,7 @@ import { type TaskOptions, type TaskResult as TaskStorageResult } from "./task.s
 import type {
   AgentRuntimeEvent,
   AgentTurnOutput,
-  DriverRuntime,
+  AgentRuntime,
   ExtensionContext,
   ExtensionRegistration,
   TaskInput,
@@ -144,9 +144,7 @@ export interface MillEngine {
 
 export interface MakeMillEngineInput {
   readonly runsDirectory: string;
-  readonly driverName: string;
-  readonly executorName: string;
-  readonly driver: DriverRuntime;
+  readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
 }
 
@@ -618,8 +616,6 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         return yield* runStore.create({
           runId: submitInput.runId,
           programPath: submitInput.programPath,
-          driver: input.driverName,
-          executor: input.executorName,
           timestamp: submittedAt,
           status: "pending",
           metadata: submitInput.metadata,
@@ -642,8 +638,6 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           activeRun = yield* runStore.create({
             runId: runInput.runId,
             programPath: runInput.programPath,
-            driver: input.driverName,
-            executor: input.executorName,
             timestamp: startedAt,
             status: "running",
             metadata: runInput.metadata,
@@ -704,11 +698,9 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         );
         const extensionContext: ExtensionContext = {
           runId: runInput.runId,
-          driverName: input.driverName,
-          executorName: input.executorName,
         };
 
-        const publishDriverRawLines = (
+        const publishAgentRawLines = (
           taskId: TaskId,
           rawLines: ReadonlyArray<string> | undefined,
         ): Effect.Effect<void> =>
@@ -718,7 +710,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
               yield* publishIoEvent({
                 runId: runInput.runId,
-                source: "driver",
+                source: "agent",
                 stream: "stdout",
                 line: rawLine,
                 timestamp,
@@ -727,13 +719,13 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             }
           });
 
-        const appendDriverEvents = (
+        const appendAgentEvents = (
           taskId: TaskId,
-          driverEvents: ReadonlyArray<AgentRuntimeEvent>,
+          agentEvents: ReadonlyArray<AgentRuntimeEvent>,
         ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
           Effect.gen(function* () {
-            for (const driverEvent of driverEvents) {
-              if (driverEvent.type === "milestone") {
+            for (const agentEvent of agentEvents) {
+              if (agentEvent.type === "milestone") {
                 const milestoneEvent: Omit<
                   TaskMilestoneEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
@@ -741,7 +733,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   type: "task:milestone",
                   payload: {
                     taskId,
-                    message: driverEvent.message,
+                    message: agentEvent.message,
                   },
                 };
 
@@ -759,7 +751,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 );
               }
 
-              if (driverEvent.type === "tool_call") {
+              if (agentEvent.type === "tool_call") {
                 const toolCallEvent: Omit<
                   TaskToolCallEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
@@ -767,7 +759,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   type: "task:tool_call",
                   payload: {
                     taskId,
-                    toolName: driverEvent.toolName,
+                    toolName: agentEvent.toolName,
                   },
                 };
 
@@ -785,7 +777,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 );
               }
 
-              if (driverEvent.type === "message_chunk") {
+              if (agentEvent.type === "message_chunk") {
                 const messageChunkEvent: Omit<
                   TaskMessageChunkEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
@@ -793,7 +785,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   type: "task:message_chunk",
                   payload: {
                     taskId,
-                    text: driverEvent.text,
+                    text: agentEvent.text,
                   },
                 };
 
@@ -811,7 +803,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 );
               }
 
-              if (driverEvent.type === "thought_chunk") {
+              if (agentEvent.type === "thought_chunk") {
                 const thoughtChunkEvent: Omit<
                   TaskThoughtChunkEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
@@ -819,7 +811,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   type: "task:thought_chunk",
                   payload: {
                     taskId,
-                    text: driverEvent.text,
+                    text: agentEvent.text,
                   },
                 };
 
@@ -837,7 +829,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 );
               }
 
-              if (driverEvent.type === "plan") {
+              if (agentEvent.type === "plan") {
                 const planEvent: Omit<
                   TaskPlanEvent,
                   "schemaVersion" | "runId" | "sequence" | "timestamp"
@@ -845,7 +837,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   type: "task:plan",
                   payload: {
                     taskId,
-                    steps: driverEvent.steps,
+                    steps: agentEvent.steps,
                   },
                 };
 
@@ -950,14 +942,29 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             yield* Effect.logDebug("mill.engine:task-session-start", {
               runId: runInput.runId,
               taskId,
-              driver: input.driver.name,
+              driver: storageInput.driver,
               role: storageInput.role,
               model: storageInput.model,
             });
 
-            const driverOutputExit = yield* Effect.exit(
+            const agentTurnExit = yield* Effect.exit(
               Effect.gen(function* () {
-                const session = yield* input.driver.createSession({
+                const runtime = input.agentRuntimes[storageInput.driver];
+
+                if (runtime === undefined) {
+                  return yield* Effect.fail(
+                    new ProgramExecutionError({
+                      runId: runInput.runId,
+                      message: `Unknown agent provider '${storageInput.driver}'. Available providers: ${Object.keys(
+                        input.agentRuntimes,
+                      )
+                        .sort((left, right) => left.localeCompare(right))
+                        .join(", ")}`,
+                    }),
+                  );
+                }
+
+                const session = yield* runtime.createSession({
                   runId: runInput.runId,
                   runDirectory: joinPath(input.runsDirectory, runInput.runId),
                   taskId,
@@ -974,19 +981,19 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   (error) =>
                     new ProgramExecutionError({
                       runId: runInput.runId,
-                      message: `Driver ${input.driver.name} task session failed: ${toMessage(error)}`,
+                      message: `Agent provider ${storageInput.driver} task session failed: ${toMessage(error)}`,
                     }),
                 ),
               ),
             );
 
-            if (Exit.isFailure(driverOutputExit)) {
-              const failureMessage = Cause.pretty(driverOutputExit.cause);
+            if (Exit.isFailure(agentTurnExit)) {
+              const failureMessage = Cause.pretty(agentTurnExit.cause);
 
               yield* Effect.logDebug("mill.engine:task-session-failed", {
                 runId: runInput.runId,
                 taskId,
-                driver: input.driver.name,
+                driver: storageInput.driver,
                 message: failureMessage,
               });
 
@@ -1009,10 +1016,10 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               );
             }
 
-            yield* publishDriverRawLines(taskId, driverOutputExit.value.raw);
-            yield* appendDriverEvents(taskId, driverOutputExit.value.events);
+            yield* publishAgentRawLines(taskId, agentTurnExit.value.raw);
+            yield* appendAgentEvents(taskId, agentTurnExit.value.events);
 
-            const taskResult = taskResultFromTaskTurnOutput(driverOutputExit.value);
+            const taskResult = taskResultFromTaskTurnOutput(agentTurnExit.value);
             const storageResult = storageTaskResultFromTaskResult(taskResult);
             const taskCompleteEvent: Omit<
               TaskCompleteEvent,

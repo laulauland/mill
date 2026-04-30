@@ -1,33 +1,41 @@
 import { Effect } from "effect";
-import type { DriverProcessConfig, DriverRegistration } from "@mill/core";
-import { makeAcpDriver } from "./acp-driver.effect";
+import type { AgentRuntime, AgentProcessConfig } from "@mill/core";
+import { makeAcpAgentRuntime } from "./acp-driver.effect";
 import { readPiSettingsFile } from "./pi-settings.adapter";
 import { parsePiSettingsModels } from "./pi-settings.codec";
 
-export type AcpDriverConfig = {
+export interface AcpProviderConfig {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env?: Readonly<Record<string, string>>;
   readonly models: Effect.Effect<ReadonlyArray<string>, never>;
   readonly description: string;
   readonly modelFormat: string;
-};
+}
 
-export type CreateAcpDriverRegistrationInput = {
-  readonly process?: DriverProcessConfig;
+export interface CreateAcpProviderInput {
+  readonly process?: AgentProcessConfig;
   readonly models?: ReadonlyArray<string>;
   readonly homeDirectory?: string;
-};
+}
+
+export interface AcpAgentProvider {
+  readonly description: string;
+  readonly modelFormat: string;
+  readonly process: AgentProcessConfig;
+  readonly models: Effect.Effect<ReadonlyArray<string>, never>;
+  readonly runtime: AgentRuntime;
+}
 
 const normalizeModelCatalog = (models: ReadonlyArray<string>): ReadonlyArray<string> =>
   Array.from(new Set(models.map((model) => model.trim()).filter((model) => model.length > 0)));
 
-const createAcpDriverRegistration = (
-  config: AcpDriverConfig,
+const createAcpAgentProvider = (
+  config: AcpProviderConfig,
   name: string,
-  runtimeProcess?: DriverProcessConfig,
-): DriverRegistration => {
-  const processConfig: DriverProcessConfig = {
+  runtimeProcess?: AgentProcessConfig,
+): AcpAgentProvider => {
+  const processConfig: AgentProcessConfig = {
     command: config.command,
     args: config.args,
     env: config.env,
@@ -38,7 +46,7 @@ const createAcpDriverRegistration = (
     modelFormat: config.modelFormat,
     process: processConfig,
     models: Effect.map(config.models, normalizeModelCatalog),
-    runtime: makeAcpDriver(name, runtimeProcess),
+    runtime: makeAcpAgentRuntime(name, runtimeProcess),
   };
 };
 
@@ -50,16 +58,14 @@ const DEFAULT_CLAUDE_MODELS = [
   "anthropic/claude-haiku-4-5",
 ] as const;
 
-export const createClaudeAcpDriverRegistration = (
-  input?: CreateAcpDriverRegistrationInput,
-): DriverRegistration =>
-  createAcpDriverRegistration(
+export const createClaudeAcpAgentProvider = (input?: CreateAcpProviderInput): AcpAgentProvider =>
+  createAcpAgentProvider(
     {
       command: input?.process?.command ?? "claude",
       args: input?.process?.args ?? [],
       env: input?.process?.env,
       models: Effect.succeed(input?.models ?? DEFAULT_CLAUDE_MODELS),
-      description: "Claude ACP driver",
+      description: "Claude ACP provider",
       modelFormat: "provider/model-id",
     },
     "claude",
@@ -70,16 +76,14 @@ export const createClaudeAcpDriverRegistration = (
 
 const DEFAULT_CODEX_MODELS = ["openai-codex/gpt-5.3-codex"] as const;
 
-export const createCodexAcpDriverRegistration = (
-  input?: CreateAcpDriverRegistrationInput,
-): DriverRegistration =>
-  createAcpDriverRegistration(
+export const createCodexAcpAgentProvider = (input?: CreateAcpProviderInput): AcpAgentProvider =>
+  createAcpAgentProvider(
     {
       command: input?.process?.command ?? "codex-acp",
       args: input?.process?.args ?? [],
       env: input?.process?.env,
       models: Effect.succeed(input?.models ?? DEFAULT_CODEX_MODELS),
-      description: "Codex ACP driver",
+      description: "Codex ACP provider",
       modelFormat: "provider/model-id",
     },
     "codex",
@@ -100,10 +104,8 @@ const readPiEnabledModels = (
   );
 };
 
-export const createPiAcpDriverRegistration = (
-  input?: CreateAcpDriverRegistrationInput,
-): DriverRegistration =>
-  createAcpDriverRegistration(
+export const createPiAcpAgentProvider = (input?: CreateAcpProviderInput): AcpAgentProvider =>
+  createAcpAgentProvider(
     {
       command: input?.process?.command ?? "pi",
       args: input?.process?.args ?? ["acp"],
@@ -112,7 +114,7 @@ export const createPiAcpDriverRegistration = (
         input?.models === undefined
           ? readPiEnabledModels(input?.homeDirectory)
           : Effect.succeed(input.models),
-      description: "Pi ACP driver",
+      description: "Pi ACP provider",
       modelFormat: "provider/model-id",
     },
     "pi",

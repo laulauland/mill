@@ -15,20 +15,17 @@ import { Cause, Config, Context, Data, Effect, Exit, Layer, Option, Scope } from
 import { ChildProcess } from "effect/unstable/process";
 import {
   createMillRuntime,
-  defineConfig,
-  processDriver,
-  resolveConfigEffect,
-  type DriverProcessConfig,
+  type AgentRuntime,
+  type AgentProcessConfig,
   type LaunchWorkerInput,
   ProcessControlError,
   type ProcessControl,
   type ProcessSignal,
-  type ResolvedConfig,
 } from "@mill/core";
 import {
-  createClaudeAcpDriverRegistration,
-  createCodexAcpDriverRegistration,
-  createPiAcpDriverRegistration,
+  createClaudeAcpAgentProvider,
+  createCodexAcpAgentProvider,
+  createPiAcpAgentProvider,
 } from "@mill/driver-acp";
 import { parseJson } from "./json.codec";
 
@@ -130,14 +127,6 @@ const createStdioIo = (stdio: Stdio.Stdio): CliIo => ({
   stderr: (line) => Effect.runPromise(writeLine(stdio.stderr(), line)),
 });
 
-const createDirectExecutor = () => ({
-  description: "Local direct executor",
-  runtime: {
-    name: "direct",
-    runProgram: (input: { readonly execute: Effect.Effect<unknown, unknown> }) => input.execute,
-  },
-});
-
 const normalizeOptionalText = (value: string | undefined): string | undefined => {
   if (value === undefined) {
     return undefined;
@@ -202,7 +191,7 @@ const readAcpProcessOverride = (
   env: Readonly<Record<string, string | undefined>>,
   prefix: "MILL_PI_ACP" | "MILL_CLAUDE_ACP" | "MILL_CODEX_ACP",
   executablePath: string | undefined,
-): DriverProcessConfig | undefined => {
+): AgentProcessConfig | undefined => {
   const command = normalizeOptionalText(env[`${prefix}_COMMAND`] ?? env.MILL_ACP_COMMAND);
 
   if (command === undefined) {
@@ -218,50 +207,24 @@ const readAcpProcessOverride = (
     command: normalizeAcpCommand(command, executablePath),
     args,
     env: processEnv,
-  } satisfies DriverProcessConfig;
+  } satisfies AgentProcessConfig;
 };
 
-const createDefaultConfig = (
+const createDefaultAgentRuntimes = (
   env: Readonly<Record<string, string | undefined>>,
   executablePath: string | undefined,
-) =>
-  defineConfig({
-    defaultDriver: "",
-    defaultExecutor: "direct",
-    maxRunDepth: 1,
-    drivers: {
-      pi: processDriver(
-        createPiAcpDriverRegistration({
-          process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
-          homeDirectory: normalizeOptionalText(env.HOME),
-        }),
-      ),
-      claude: processDriver(
-        createClaudeAcpDriverRegistration({
-          process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
-        }),
-      ),
-      codex: processDriver(
-        createCodexAcpDriverRegistration({
-          process: readAcpProcessOverride(env, "MILL_CODEX_ACP", executablePath),
-        }),
-      ),
-    },
-    executors: {
-      direct: createDirectExecutor(),
-    },
-    extensions: [],
-    authoring: {
-      instructions:
-        "Use agent for provider/model, system for WHO, and prompt for WHAT. Prefer cheaper models for search and stronger models for synthesis.",
-    },
-  });
-
-const resolveDefaults = (options: RunCliOptions) =>
-  createDefaultConfig(options.env ?? {}, options.executablePath);
-
-const requireDefaults = (options: RunCliOptions): ReturnType<typeof createDefaultConfig> =>
-  resolveDefaults(options);
+): Readonly<Record<string, AgentRuntime>> => ({
+  pi: createPiAcpAgentProvider({
+    process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
+    homeDirectory: normalizeOptionalText(env.HOME),
+  }).runtime,
+  claude: createClaudeAcpAgentProvider({
+    process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
+  }).runtime,
+  codex: createCodexAcpAgentProvider({
+    process: readAcpProcessOverride(env, "MILL_CODEX_ACP", executablePath),
+  }).runtime,
+});
 
 const runWithBunServices = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices>,
@@ -369,22 +332,6 @@ const normalizePath = (path: string): string => {
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
 
-const dirname = (path: string): string => {
-  const normalized = normalizePath(path);
-
-  if (normalized === "/") {
-    return "/";
-  }
-
-  const index = normalized.lastIndexOf("/");
-
-  if (index <= 0) {
-    return "/";
-  }
-
-  return normalized.slice(0, index);
-};
-
 const workerPidPath = (runsDirectory: string, runId: string): string =>
   joinPath(joinPath(runsDirectory, runId), "worker.pid");
 
@@ -436,10 +383,6 @@ const buildWorkerCommandArguments = (
     input.programPath,
     "--runs-dir",
     input.runsDirectory,
-    "--driver",
-    input.driverName,
-    "--executor",
-    input.executorName,
   ];
 
   if (options.isBunRuntime && options.hasSourceEntrypoint) {
@@ -555,156 +498,21 @@ const formatUnknownError = (error: unknown): string => {
   return String(error);
 };
 
-type ActiveDriverSource = "flag" | "config" | "harness";
-
-interface ActiveDriverResolution {
-  readonly name: string;
-  readonly source: ActiveDriverSource;
-  readonly resolvedConfig: ResolvedConfig;
-}
-
-const normalizeNonEmptyText = (value: string | undefined): string | undefined => {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-};
-
-const inferHarnessDriver = (
-  env: Readonly<Record<string, string | undefined>>,
-): string | undefined => {
-  if (env.CLAUDECODE === "1") {
-    return "claude";
-  }
-
-  if (
-    normalizeNonEmptyText(env.CODEX_THREAD_ID) !== undefined ||
-    normalizeNonEmptyText(env.CODEX_SANDBOX) !== undefined ||
-    normalizeNonEmptyText(env.CODEX_SANDBOX_NETWORK_DISABLED) !== undefined
-  ) {
-    return "codex";
-  }
-
-  return undefined;
-};
-
-const sourceLabel = (source: ActiveDriverSource): string => {
-  if (source === "flag") {
-    return "--driver";
-  }
-
-  if (source === "config") {
-    return "mill.config.ts defaultDriver";
-  }
-
-  return "harness inference";
-};
-
-const resolveActiveDriverSelection = (
-  requestedDriverName: string | undefined,
-  resolvedConfig: ResolvedConfig,
-  env: Readonly<Record<string, string | undefined>>,
-): Effect.Effect<Omit<ActiveDriverResolution, "resolvedConfig">, CliResolutionError> =>
-  Effect.gen(function* () {
-    const requested = normalizeNonEmptyText(requestedDriverName);
-    const configured = normalizeNonEmptyText(resolvedConfig.config.defaultDriver);
-    const inferred = inferHarnessDriver(env);
-
-    const source: ActiveDriverSource | undefined =
-      requested !== undefined
-        ? "flag"
-        : configured !== undefined
-          ? "config"
-          : inferred !== undefined
-            ? "harness"
-            : undefined;
-    const selected = requested ?? configured ?? inferred;
-    const available = Object.keys(resolvedConfig.config.drivers).sort((left, right) =>
-      left.localeCompare(right),
-    );
-
-    if (selected === undefined || source === undefined) {
-      return yield* Effect.fail(
-        new CliResolutionError({
-          message:
-            "Unable to resolve active driver. Provide --driver <name>, set defaultDriver in mill.config.ts, or run from a supported harness (CLAUDECODE=1 => claude, CODEX_THREAD_ID/CODEX_SANDBOX/CODEX_SANDBOX_NETWORK_DISABLED => codex).",
-        }),
-      );
-    }
-
-    if (!available.includes(selected)) {
-      const renderedAvailable = available.length > 0 ? available.join(", ") : "(none)";
-
-      return yield* Effect.fail(
-        new CliResolutionError({
-          message: `Resolved active driver '${selected}' from ${sourceLabel(source)} is unavailable. Available drivers: ${renderedAvailable}.`,
-        }),
-      );
-    }
-
-    return {
-      name: selected,
-      source,
-    };
-  });
-
-const resolveConfigForCli = (options: RunCliOptions) =>
-  resolveConfigEffect({
-    defaults: requireDefaults(options),
-    cwd: options.cwd,
-    homeDirectory: options.homeDirectory,
-    env: options.env,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
-  });
-
-const resolveActiveDriverEffect = (
-  options: RunCliOptions,
-  requestedDriverName: string | undefined,
-): Effect.Effect<ActiveDriverResolution, unknown, BunServices.BunServices> =>
-  Effect.gen(function* () {
-    const resolvedConfig = yield* resolveConfigForCli(options);
-    const selection = yield* resolveActiveDriverSelection(
-      requestedDriverName,
-      resolvedConfig,
-      options.env ?? {},
-    );
-
-    return {
-      ...selection,
-      resolvedConfig,
-    };
-  });
-
-const resolveActiveDriver = (
-  options: RunCliOptions,
-  requestedDriverName: string | undefined,
-): Promise<ActiveDriverResolution> =>
-  runWithBunServices(resolveActiveDriverEffect(options, requestedDriverName));
-
 const createCliRuntime = (
   options: RunCliOptions,
-  activeDriver: ActiveDriverResolution,
   input: {
     readonly runsDirectory?: string;
-    readonly executorName?: string;
     readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
   } = {},
 ) =>
   createMillRuntime({
-    defaults: activeDriver.resolvedConfig.config,
     cwd: options.cwd,
     homeDirectory: options.homeDirectory,
     env: options.env,
     executablePath: options.executablePath,
     entrypointPath: options.entrypointPath,
     runsDirectory: input.runsDirectory ?? options.runsDirectory,
-    driverName: activeDriver.name,
-    executorName: input.executorName,
-    pathExists: options.pathExists,
-    loadConfigModule: options.loadConfigModule,
+    agentRuntimes: createDefaultAgentRuntimes(options.env ?? {}, options.executablePath),
     launchWorker: input.launchWorker,
     processControl: options.processControl,
   });
@@ -714,8 +522,6 @@ interface RunCommandInput {
   readonly json: boolean;
   readonly sync: boolean;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
-  readonly executor: Option.Option<string>;
   readonly metaJson: Option.Option<string>;
 }
 
@@ -743,11 +549,8 @@ const runCommand = async (
     metadata = decodedMetadata.value;
   }
 
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
-    executorName: fromOption(command.executor),
     launchWorker:
       options.launchWorker ??
       ((input) =>
@@ -811,8 +614,6 @@ interface WorkerCommandInput {
   readonly runId: string;
   readonly program: string;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
-  readonly executor: Option.Option<string>;
   readonly json: boolean;
 }
 
@@ -821,10 +622,8 @@ const workerCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
-    executorName: fromOption(command.executor),
   });
 
   const output = await runtime.worker({
@@ -840,54 +639,10 @@ const workerCommand = async (
   return 0;
 };
 
-const INIT_CONFIG_TEMPLATE = [
-  "export default {",
-  "  // Optional: override driver/executor defaults.",
-  "  // maxRunDepth: 1, // recursion guard for nested `mill run`",
-  "  authoring: {",
-  '    instructions: "Use agent for provider/model, system for WHO (role/method), prompt for WHAT (explicit task + scope + validation). Prefer codex for synthesis, cerebras for fast retrieval.",',
-  "  },",
-  "};",
-].join("\n");
-
-interface InitCommandInput {
-  readonly global: boolean;
-}
-
-const initCommand = async (
-  command: InitCommandInput,
-  options: RunCliOptions,
-  io: CliIo,
-): Promise<number> => {
-  const cwd = options.cwd ?? ".";
-  const homeDirectory = options.homeDirectory ?? normalizeOptionalText(options.env?.HOME);
-
-  if (command.global && (homeDirectory === undefined || homeDirectory.length === 0)) {
-    await io.stderr("Unable to resolve home directory for --global init.");
-    return 1;
-  }
-
-  const configPath = command.global
-    ? joinPath(homeDirectory as string, ".mill/config.ts")
-    : `${cwd}/mill.config.ts`;
-
-  await runWithBunServices(
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      yield* fileSystem.makeDirectory(dirname(configPath), { recursive: true });
-      yield* fileSystem.writeFileString(configPath, `${INIT_CONFIG_TEMPLATE}\n`);
-    }),
-  );
-
-  await io.stdout(`Created ${configPath}`);
-  return 0;
-};
-
 interface StatusCommandInput {
   readonly runId: string;
   readonly json: boolean;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
 }
 
 const statusCommand = async (
@@ -895,8 +650,7 @@ const statusCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
   });
 
@@ -916,7 +670,6 @@ interface WaitCommandInput {
   readonly timeout: number;
   readonly json: boolean;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
 }
 
 const waitCommand = async (
@@ -930,8 +683,7 @@ const waitCommand = async (
   }
 
   const timeoutSeconds = command.timeout;
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
   });
 
@@ -998,7 +750,7 @@ const waitCommand = async (
 };
 
 const WATCH_CHANNELS = ["events", "io", "all"] as const;
-const WATCH_SOURCES = ["driver", "program"] as const;
+const WATCH_SOURCES = ["agent", "program"] as const;
 
 type WatchChannel = (typeof WATCH_CHANNELS)[number];
 type WatchSource = (typeof WATCH_SOURCES)[number];
@@ -1011,7 +763,6 @@ interface WatchCommandInput {
   readonly task: Option.Option<string>;
   readonly json: boolean;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
 }
 
 const watchCommand = async (
@@ -1019,8 +770,7 @@ const watchCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
   });
   const watchInput = {
@@ -1048,7 +798,6 @@ interface CancelCommandInput {
   readonly runId: string;
   readonly json: boolean;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
 }
 
 const cancelCommand = async (
@@ -1056,8 +805,7 @@ const cancelCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
   });
 
@@ -1079,7 +827,6 @@ interface LsCommandInput {
   readonly json: boolean;
   readonly status: Option.Option<RunStatus>;
   readonly runsDir: Option.Option<string>;
-  readonly driver: Option.Option<string>;
 }
 
 const lsCommand = async (
@@ -1087,8 +834,7 @@ const lsCommand = async (
   options: RunCliOptions,
   io: CliIo,
 ): Promise<number> => {
-  const activeDriver = await resolveActiveDriver(options, fromOption(command.driver));
-  const runtime = createCliRuntime(options, activeDriver, {
+  const runtime = createCliRuntime(options, {
     runsDirectory: fromOption(command.runsDir),
   });
 
@@ -1118,8 +864,6 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       json: Options.boolean("json"),
       sync: Options.boolean("sync"),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
-      executor: optionalTextOption("executor"),
       metaJson: optionalTextOption("meta-json"),
     },
     (command) => toCliEffect(runCommand(command, options, io)),
@@ -1131,8 +875,6 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       runId: Options.string("run-id"),
       program: Options.string("program"),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
-      executor: optionalTextOption("executor"),
       json: Options.boolean("json"),
     },
     (command) => toCliEffect(workerCommand(command, options, io)),
@@ -1144,7 +886,6 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       runId: Args.string("runId"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(statusCommand(command, options, io)),
   ).pipe(CliCommand.withDescription("Read the current run status."));
@@ -1156,7 +897,6 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       timeout: Options.float("timeout"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(waitCommand(command, options, io)),
   ).pipe(CliCommand.withDescription("Wait for a run to reach a terminal state."));
@@ -1171,7 +911,6 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       task: optionalTextOption("task"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(watchCommand(command, options, io)),
   ).pipe(
@@ -1186,7 +925,6 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       runId: Args.string("runId"),
       json: Options.boolean("json"),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(cancelCommand(command, options, io)),
   ).pipe(CliCommand.withDescription("Cancel a run."));
@@ -1197,26 +935,13 @@ const createCli = (options: RunCliOptions, io: CliIo) => {
       json: Options.boolean("json"),
       status: Options.choice("status", RUN_STATUSES).pipe(Options.optional),
       runsDir: optionalTextOption("runs-dir"),
-      driver: optionalTextOption("driver"),
     },
     (command) => toCliEffect(lsCommand(command, options, io)),
   ).pipe(CliCommand.withDescription("List runs."));
 
-  const init = CliCommand.make(
-    "init",
-    {
-      global: Options.boolean("global"),
-    },
-    (command) => toCliEffect(initCommand(command, options, io)),
-  ).pipe(
-    CliCommand.withDescription(
-      "Create a starter config (local mill.config.ts or ~/.mill/config.ts with --global).",
-    ),
-  );
-
   return CliCommand.make("mill").pipe(
     CliCommand.withDescription("Mill orchestration runtime."),
-    CliCommand.withSubcommands([run, status, wait, watch, cancel, ls, init, worker]),
+    CliCommand.withSubcommands([run, status, wait, watch, cancel, ls, worker]),
   );
 };
 
@@ -1226,18 +951,16 @@ const STATIC_AUTHORING_HELP_LINES = [
   "  prompt = WHAT to do now (specific files, concrete task)",
 ] as const;
 
-interface DriverModelCatalogEntry {
-  readonly driverName: string;
+interface ProviderModelCatalogEntry {
+  readonly providerName: string;
   readonly modelFormat: string;
   readonly models: ReadonlyArray<string>;
 }
 
-type ResolvedAuthoringHelp =
-  | { readonly source: "static" }
-  | { readonly source: "config"; readonly instructions: string };
+type ResolvedAuthoringHelp = { readonly source: "static" };
 
 type ResolvedModelCatalogHelp =
-  | { readonly source: "resolved"; readonly entries: ReadonlyArray<DriverModelCatalogEntry> }
+  | { readonly source: "resolved"; readonly entries: ReadonlyArray<ProviderModelCatalogEntry> }
   | { readonly source: "unavailable"; readonly message: string };
 
 interface ResolvedHelpContext {
@@ -1245,10 +968,8 @@ interface ResolvedHelpContext {
   readonly modelCatalog: ResolvedModelCatalogHelp;
 }
 
-const renderAuthoringHelp = (authoringHelp: ResolvedAuthoringHelp): string =>
-  authoringHelp.source === "config"
-    ? `Authoring:\n  ${authoringHelp.instructions}`
-    : `Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`;
+const renderAuthoringHelp = (_authoringHelp: ResolvedAuthoringHelp): string =>
+  `Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`;
 
 const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string => {
   if (modelCatalog.source === "unavailable") {
@@ -1256,17 +977,17 @@ const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string 
   }
 
   if (modelCatalog.entries.length === 0) {
-    return "Models:\n  (no drivers configured)";
+    return "Models:\n  (no providers configured)";
   }
 
   return [
     "Models:",
     ...modelCatalog.entries.map((entry) => {
       if (entry.models.length === 0) {
-        return `  ${entry.driverName} (${entry.modelFormat}): (catalog empty)`;
+        return `  ${entry.providerName} (${entry.modelFormat}): (catalog empty)`;
       }
 
-      return `  ${entry.driverName} (${entry.modelFormat}): ${entry.models.join(", ")}`;
+      return `  ${entry.providerName} (${entry.modelFormat}): ${entry.models.join(", ")}`;
     }),
   ].join("\n");
 };
@@ -1283,9 +1004,8 @@ Commands:
   watch [--run <runId>]         Watch events/io streams (use --channel events|io|all)
   cancel <runId>                Cancel a running execution
   ls                            List runs
-  init [--global]               Create starter config (local or ~/.mill/config.ts)
 
-Global options: --json, --driver <name>, --runs-dir <path>
+Global options: --json, --runs-dir <path>
 
 ${renderModelCatalogHelp(helpContext.modelCatalog)}
 
@@ -1319,16 +1039,7 @@ Run mill <command> --help for details.`;
 
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
-const COMMAND_NAMES = new Set([
-  "run",
-  "status",
-  "wait",
-  "watch",
-  "cancel",
-  "ls",
-  "init",
-  "_worker",
-]);
+const COMMAND_NAMES = new Set(["run", "status", "wait", "watch", "cancel", "ls", "_worker"]);
 
 const isHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   if (argv.length === 0) return true;
@@ -1346,91 +1057,44 @@ const isCommandHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   return argv.slice(1).some((argument) => HELP_FLAGS.has(argument));
 };
 
-const extractDriverOverride = (argv: ReadonlyArray<string>): string | undefined => {
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-
-    if (argument === "--driver") {
-      const next = argv[index + 1];
-      if (next !== undefined && next.length > 0 && !next.startsWith("--")) {
-        return next;
-      }
-      continue;
-    }
-
-    if (argument?.startsWith("--driver=") === true) {
-      const value = argument.slice("--driver=".length);
-      if (value.length > 0) {
-        return value;
-      }
-    }
-  }
-
-  return undefined;
-};
-
 const resolveHelpContextForHelpEffect = (
   options: RunCliOptions,
-  selectedDriverName?: string,
 ): Effect.Effect<ResolvedHelpContext, never, BunServices.BunServices> =>
   Effect.gen(function* () {
-    const resolvedConfig = yield* resolveConfigForCli(options);
+    const env = options.env ?? {};
+    const executablePath = options.executablePath;
+    const registrations = {
+      codex: createCodexAcpAgentProvider({
+        process: readAcpProcessOverride(env, "MILL_CODEX_ACP", executablePath),
+      }),
+      claude: createClaudeAcpAgentProvider({
+        process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
+      }),
+      pi: createPiAcpAgentProvider({
+        process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
+        homeDirectory: normalizeOptionalText(env.HOME),
+      }),
+    };
 
-    const instructions = resolvedConfig.config.authoring.instructions;
-    const hasAuthoringOverride =
-      resolvedConfig.source !== "defaults" &&
-      instructions !== requireDefaults(options).authoring.instructions;
-    const authoring: ResolvedAuthoringHelp = hasAuthoringOverride
-      ? {
-          source: "config",
-          instructions,
-        }
-      : {
-          source: "static",
-        };
-
-    const activeDriver = yield* resolveActiveDriverSelection(
-      selectedDriverName,
-      resolvedConfig,
-      options.env ?? {},
-    );
-    const registration = resolvedConfig.config.drivers[activeDriver.name];
-
-    if (registration === undefined) {
-      return yield* Effect.fail(
-        new CliResolutionError({
-          message: `Resolved active driver '${activeDriver.name}' from ${sourceLabel(activeDriver.source)} is unavailable.`,
-        }),
-      );
-    }
-
-    const models = yield* Effect.map(registration.models, (catalog) =>
-      Array.from(new Set(catalog)),
+    const entries = yield* Effect.forEach(
+      Object.entries(registrations),
+      ([providerName, registration]) =>
+        Effect.map(registration.models, (models) => ({
+          providerName: providerName,
+          modelFormat: registration.modelFormat,
+          models: Array.from(new Set(models)),
+        })),
     );
 
     return {
-      authoring,
-      modelCatalog: {
-        source: "resolved",
-        entries: [
-          {
-            driverName: activeDriver.name,
-            modelFormat: registration.modelFormat,
-            models,
-          },
-        ],
-      },
+      authoring: { source: "static" },
+      modelCatalog: { source: "resolved", entries },
     } satisfies ResolvedHelpContext;
   }).pipe(
     Effect.catch((error) =>
       Effect.succeed({
-        authoring: {
-          source: "static",
-        },
-        modelCatalog: {
-          source: "unavailable",
-          message: formatUnknownError(error),
-        },
+        authoring: { source: "static" },
+        modelCatalog: { source: "unavailable", message: formatUnknownError(error) },
       } satisfies ResolvedHelpContext),
     ),
   );
@@ -1444,7 +1108,7 @@ const createCliHelpFormatter = (): CliOutput.Formatter => {
       const formatted = defaultFormatter.formatHelpDoc(doc);
 
       if (doc.usage === "mill run [flags] <program.ts>") {
-        return `$ run [--json] [--sync] [--runs-dir string] [--driver string] [--executor string] [--meta-json string] <program.ts>\n\n${formatted}`;
+        return `$ run [--json] [--sync] [--runs-dir string] [--meta-json string] <program.ts>\n\n${formatted}`;
       }
 
       return formatted;
@@ -1463,10 +1127,7 @@ export const runCliEffect = (
     const cliVersion = resolveCliVersion(resolvedOptions.env ?? {});
 
     if (isHelpRequest(argv)) {
-      const helpContext = yield* resolveHelpContextForHelpEffect(
-        resolvedOptions,
-        extractDriverOverride(argv),
-      );
+      const helpContext = yield* resolveHelpContextForHelpEffect(resolvedOptions);
       yield* Effect.promise(() =>
         Promise.resolve(io.stdout(buildHelpText(helpContext, cliVersion))),
       );
@@ -1475,7 +1136,7 @@ export const runCliEffect = (
 
     const commandHelpRequest = isCommandHelpRequest(argv);
     const helpContext = commandHelpRequest
-      ? yield* resolveHelpContextForHelpEffect(resolvedOptions, extractDriverOverride(argv))
+      ? yield* resolveHelpContextForHelpEffect(resolvedOptions)
       : undefined;
 
     const command = createCli(resolvedOptions, io);
@@ -1507,17 +1168,9 @@ export const runCliEffect = (
     );
 
     if (commandHelpRequest && exitCode === 0 && helpContext !== undefined) {
-      if (helpContext.authoring.source === "config") {
-        yield* Effect.promise(() =>
-          Promise.resolve(
-            io.stdout(`Authoring (from config): ${helpContext.authoring.instructions}`),
-          ),
-        );
-      } else {
-        yield* Effect.promise(() =>
-          Promise.resolve(io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`)),
-        );
-      }
+      yield* Effect.promise(() =>
+        Promise.resolve(io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`)),
+      );
 
       yield* Effect.promise(() =>
         Promise.resolve(io.stdout(renderModelCatalogHelp(helpContext.modelCatalog))),

@@ -20,7 +20,6 @@ describe("RunStore", () => {
         store.create({
           runId,
           programPath: "/tmp/program.ts",
-          driver: "default",
           timestamp: "2026-02-23T20:00:00.000Z",
         }),
       );
@@ -84,7 +83,6 @@ describe("RunStore", () => {
         store.create({
           runId,
           programPath: "/tmp/program.ts",
-          driver: "default",
           timestamp: "2026-02-23T20:00:00.000Z",
         }),
       );

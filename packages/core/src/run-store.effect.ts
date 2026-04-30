@@ -21,8 +21,6 @@ export class PersistenceError extends Data.TaggedError("PersistenceError")<{
 export interface CreateRunInput {
   readonly runId: RunId;
   readonly programPath: string;
-  readonly driver: string;
-  readonly executor?: string;
   readonly timestamp: string;
   readonly status?: RunRecord["status"];
   readonly metadata?: Readonly<Record<string, string>>;
@@ -110,8 +108,6 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
         id: createInput.runId,
         status: createInput.status ?? "running",
         programPath: createInput.programPath,
-        driver: createInput.driver,
-        executor: createInput.executor ?? "direct",
         createdAt: createInput.timestamp,
         updatedAt: createInput.timestamp,
         metadata: createInput.metadata,

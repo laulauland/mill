@@ -2,14 +2,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Cause, Data, Effect, Exit, Fiber, Stream } from "effect";
 import { makeMillEngine, ProgramExecutionError, WaitTimeoutError } from "./engine.effect";
-import { makeDriverRegistry } from "./driver-registry.effect";
-import { makeExecutorRegistry } from "./executor-registry.effect";
 import { type MillEvent } from "./event.schema";
 import { decodeRunIdSync, type RunRecord, type RunSyncOutput } from "./run.schema";
 import { runDetachedWorker } from "./worker.effect";
 import { executeProgramInProcessHost } from "./program-host.effect";
 import { publishIoEvent, type IoStreamEvent } from "./observer-hub.effect";
-import { resolveConfigEffect } from "./config-loader.api";
 import {
   appendTextFile,
   ensureDirectory,
@@ -20,8 +17,7 @@ import {
   removePath,
   writeTextFile,
 } from "./run-platform.adapter";
-import type { ExecutorRuntime, ExtensionRegistration, ResolveConfigOptions } from "./types";
-
+import type { AgentRuntime, ExtensionRegistration } from "./types";
 export type { RunRecord, RunSyncOutput } from "./run.schema";
 
 export type ProcessSignal = "SIGTERM" | "SIGKILL";
@@ -41,10 +37,14 @@ export interface ProcessControl {
   ) => Effect.Effect<boolean, ProcessControlError>;
 }
 
-interface BaseRunInput extends ResolveConfigOptions {
-  readonly driverName?: string;
-  readonly executorName?: string;
+interface BaseRunInput {
+  readonly cwd?: string;
+  readonly homeDirectory?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly runsDirectory?: string;
+  readonly maxRunDepth?: number;
+  readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
+  readonly extensions?: ReadonlyArray<ExtensionRegistration>;
   readonly executablePath?: string;
   readonly processControl?: ProcessControl;
 }
@@ -59,21 +59,20 @@ export interface RunProgramSyncInput extends SubmitRunInput {
   readonly waitTimeoutSeconds?: number;
 }
 
-interface GetRunStatusInput extends Omit<ResolveConfigOptions, "pathExists" | "loadConfigModule"> {
+interface GetRunStatusInput extends BaseRunInput {
   readonly runId: string;
-  readonly driverName?: string;
-  readonly executorName?: string;
-  readonly runsDirectory?: string;
-  readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigModule?: (path: string) => Promise<unknown>;
 }
 
-export interface WaitForRunInput extends GetRunStatusInput {
+export interface WaitForRunInput {
+  readonly runId: string;
   readonly timeoutSeconds: number;
+  readonly homeDirectory?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly runsDirectory?: string;
 }
 
 export type WatchChannel = "events" | "io" | "all";
-export type WatchSource = "driver" | "program";
+export type WatchSource = "agent" | "program";
 
 export type WatchOutput =
   | {
@@ -91,17 +90,12 @@ export type WatchOutput =
       readonly taskId?: string;
     };
 
-export interface WatchRunInput extends Omit<
-  GetRunStatusInput,
-  "runId" | "pathExists" | "loadConfigModule"
-> {
+export interface WatchRunInput extends Omit<GetRunStatusInput, "runId"> {
   readonly runId?: string;
   readonly channel?: WatchChannel;
   readonly source?: WatchSource;
   readonly taskId?: string;
   readonly sinceTimeIso?: string;
-  readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigModule?: (path: string) => Promise<unknown>;
   readonly onEvent: (line: string) => void;
 }
 
@@ -124,18 +118,12 @@ export interface LaunchWorkerInput {
   readonly runId: string;
   readonly programPath: string;
   readonly runsDirectory: string;
-  readonly driverName: string;
-  readonly executorName: string;
   readonly cwd: string;
   readonly runDepth: number;
 }
 
 interface EngineContext {
   readonly engine: ReturnType<typeof makeMillEngine>;
-  readonly selectedDriverName: string;
-  readonly selectedExecutorName: string;
-  readonly selectedExecutorRuntime: ExecutorRuntime;
-  readonly selectedExtensions: ReadonlyArray<ExtensionRegistration>;
   readonly runsDirectory: string;
   readonly maxRunDepth: number;
 }
@@ -502,37 +490,38 @@ const writeSubmissionArtifacts = (
     yield* fileSystem.writeFileString(workerLogPath, "");
   });
 
-const makeEngineForConfigEffect = (input: BaseRunInput): Effect.Effect<EngineContext, unknown> =>
+const makeEngineForInputEffect = (input: BaseRunInput): Effect.Effect<EngineContext, unknown> =>
   Effect.gen(function* () {
-    const resolvedConfig = yield* resolveConfigEffect(input);
-    const driverRegistry = makeDriverRegistry({
-      defaultDriver: resolvedConfig.config.defaultDriver,
-      drivers: resolvedConfig.config.drivers,
-    });
-    const executorRegistry = makeExecutorRegistry({
-      defaultExecutor: resolvedConfig.config.defaultExecutor,
-      executors: resolvedConfig.config.executors,
-    });
-    const selectedDriver = yield* driverRegistry.resolve(input.driverName);
-    const selectedExecutor = yield* executorRegistry.resolve(input.executorName);
     const runsDirectory = yield* resolveRunsDirectoryEffect(
       input.homeDirectory ?? input.env?.HOME,
       input.runsDirectory,
     );
 
     return {
-      selectedDriverName: selectedDriver.name,
-      selectedExecutorName: selectedExecutor.name,
-      selectedExecutorRuntime: selectedExecutor.runtime,
-      selectedExtensions: resolvedConfig.config.extensions,
       runsDirectory,
-      maxRunDepth: resolveMaxRunDepth(resolvedConfig.config.maxRunDepth),
+      maxRunDepth: resolveMaxRunDepth(input.maxRunDepth),
       engine: makeMillEngine({
         runsDirectory,
-        driverName: selectedDriver.name,
-        executorName: selectedExecutor.name,
-        driver: selectedDriver.runtime,
-        extensions: resolvedConfig.config.extensions,
+        agentRuntimes: input.agentRuntimes,
+        extensions: input.extensions ?? [],
+      }),
+    };
+  });
+
+const makeWaitEngineEffect = (
+  input: WaitForRunInput,
+): Effect.Effect<Pick<EngineContext, "engine">, unknown> =>
+  Effect.gen(function* () {
+    const runsDirectory = yield* resolveRunsDirectoryEffect(
+      input.homeDirectory ?? input.env?.HOME,
+      input.runsDirectory,
+    );
+
+    return {
+      engine: makeMillEngine({
+        runsDirectory,
+        agentRuntimes: {},
+        extensions: [],
       }),
     };
   });
@@ -597,7 +586,7 @@ export const submitRunEffect = (
     const cwd = input.cwd ?? ".";
     const programPath = resolveProgramPath(cwd, input.programPath);
     const programSource = yield* readProgramSource(programPath);
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
     const generatedRunId = yield* randomUuid();
     const runId = decodeRunIdSync(`run_${generatedRunId}`);
 
@@ -630,8 +619,6 @@ export const submitRunEffect = (
           runId: submittedRun.id,
           programPath: copiedProgramPath,
           runsDirectory: engineContext.runsDirectory,
-          driverName: engineContext.selectedDriverName,
-          executorName: engineContext.selectedExecutorName,
           cwd,
           runDepth: nextRunDepth,
         }),
@@ -657,20 +644,14 @@ export const runProgramSyncEffect = (
     const timeoutSeconds = input.waitTimeoutSeconds ?? DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS;
 
     const terminalRun = yield* waitForRunEffect({
-      defaults: input.defaults,
       runId: submittedRun.id,
       timeoutSeconds,
-      cwd: input.cwd,
       homeDirectory: input.homeDirectory,
       env: input.env,
       runsDirectory: input.runsDirectory,
-      driverName: input.driverName,
-      executorName: input.executorName,
-      pathExists: input.pathExists,
-      loadConfigModule: input.loadConfigModule,
     });
 
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
     const result = yield* engineContext.engine.result(decodeRunIdSync(submittedRun.id));
 
     if (result === undefined) {
@@ -695,7 +676,7 @@ const runWorkerEffect = (
     const cwd = input.cwd ?? ".";
     const programPath = resolveProgramPath(cwd, input.programPath);
     const programSource = yield* readProgramSource(programPath);
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
     const runDirectory = runDirectoryFor(engineContext.runsDirectory, input.runId);
     const workerPidPath = workerPidPathFor(runDirectory);
     const runDepth = input.runDepth ?? resolveCurrentRunDepth(input.env);
@@ -713,36 +694,31 @@ const runWorkerEffect = (
         runsDirectory: engineContext.runsDirectory,
         executeProgram: (task) =>
           Effect.mapError(
-            engineContext.selectedExecutorRuntime.runProgram({
+            executeProgramInProcessHost({
               runId: input.runId,
+              runDirectory: joinPath(engineContext.runsDirectory, input.runId),
+              workingDirectory: cwd,
               programPath,
-              execute: executeProgramInProcessHost({
-                runId: input.runId,
-                runDirectory: joinPath(engineContext.runsDirectory, input.runId),
-                workingDirectory: cwd,
-                programPath,
-                programSource,
-                executorName: engineContext.selectedExecutorName,
-                executablePath: input.executablePath,
-                extensions: engineContext.selectedExtensions,
-                env: {
-                  ...input.env,
-                  [RUN_DEPTH_ENV]: String(runDepth),
-                },
-                task,
-                onIo: ({ stream, line }) =>
-                  Effect.flatMap(
-                    Effect.sync(() => new Date().toISOString()),
-                    (timestamp) =>
-                      publishIoEvent({
-                        runId: input.runId,
-                        source: "program",
-                        stream,
-                        line,
-                        timestamp,
-                      }),
-                  ),
-              }),
+              programSource,
+              executablePath: input.executablePath,
+              extensions: input.extensions ?? [],
+              env: {
+                ...input.env,
+                [RUN_DEPTH_ENV]: String(runDepth),
+              },
+              task,
+              onIo: ({ stream, line }) =>
+                Effect.flatMap(
+                  Effect.sync(() => new Date().toISOString()),
+                  (timestamp) =>
+                    publishIoEvent({
+                      runId: input.runId,
+                      source: "program",
+                      stream,
+                      line,
+                      timestamp,
+                    }),
+                ),
             }),
             (error) =>
               new ProgramExecutionError({
@@ -762,7 +738,7 @@ const getRunStatusEffect = (
   input: GetRunStatusInput,
 ): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
   Effect.gen(function* () {
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
     return yield* engineContext.engine.status(decodeRunIdSync(input.runId));
   });
 
@@ -789,7 +765,7 @@ const waitForRunEffect = (
   input: WaitForRunInput,
 ): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
   Effect.gen(function* () {
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeWaitEngineEffect(input);
     const waitOutcome = yield* Effect.exit(
       engineContext.engine.wait(
         decodeRunIdSync(input.runId),
@@ -853,7 +829,7 @@ const watchRunEffect = (
       );
     }
 
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
 
     if (input.runId === undefined) {
       return yield* Effect.scoped(
@@ -945,7 +921,7 @@ const cancelRunEffect = (
   BunServices.BunServices
 > =>
   Effect.gen(function* () {
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
     const cancelled = yield* engineContext.engine.cancel(
       decodeRunIdSync(input.runId),
       input.reason,
@@ -976,7 +952,7 @@ const listRunsEffect = (
   input: ListRunsInput,
 ): Effect.Effect<ReadonlyArray<RunRecord>, unknown, BunServices.BunServices> =>
   Effect.gen(function* () {
-    const engineContext = yield* makeEngineForConfigEffect(input);
+    const engineContext = yield* makeEngineForInputEffect(input);
     return yield* engineContext.engine.list(input.status);
   });
 

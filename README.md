@@ -22,14 +22,7 @@ bun build --compile packages/cli/src/mill.ts --outfile mill --define "__MILL_VER
 mv mill ~/.local/bin/  # or anywhere on your PATH
 ```
 
-Then scaffold a config:
-
-```bash
-mill init              # creates ./mill.config.ts in current project
-mill init --global     # creates ~/.mill/config.ts (shared default)
-```
-
-The config sets your default driver, model preferences, and authoring guidance. See [Configuration](#configuration) for details.
+Then run mill programs directly with the CLI.
 
 ## Quick example
 
@@ -101,7 +94,7 @@ task.send({
 });
 ```
 
-Current state: core task actors model `queue`, `interrupt`, and `reject` policies in snapshots. Program-host tasks mirror that actor-shaped behavior for authored programs. The ACP driver has session-level multi-turn and cancel support through its internal `spawn-agent` integration, but fully durable end-to-end steering is still incremental.
+Current state: core task actors model `queue`, `interrupt`, and `reject` policies in snapshots. Program-host tasks mirror that actor-shaped behavior for authored programs. The ACP runtime has session-level multi-turn and cancel support through its internal `spawn-agent` integration, but fully durable end-to-end steering is still incremental.
 
 ## Agents and provider factories
 
@@ -115,26 +108,25 @@ claude("anthropic/claude-opus-4-6");
 pi("your-pi-model-id");
 ```
 
-The provider selects the driver and model. `role` is the human-readable task role, `system` describes how the agent should behave, and `prompt` describes the work.
+The provider selects the task agent backend and model. `role` is the human-readable task role, `system` describes how the agent should behave, and `prompt` describes the work.
 
 ## CLI
 
 ```
-mill run <program.ts> [--sync] [--json] [--driver <name>]
+mill run <program.ts> [--sync] [--json]
 mill status <runId>                    show run state
 mill wait <runId> --timeout            block until complete/failed/cancelled
 mill watch [--run <runId>]             watch streams (default: events)
   --channel events|io|all              choose stream channel
-  --source driver|program              io source filter (io/all only)
+  --source agent|program              io source filter (io/all only)
   --task <taskId>                      io task filter (io/all only)
 mill cancel <runId>                    mark cancelled + kill worker process tree
 mill ls [--status <filter>]            list runs
-mill init [--global]                   generate starter config (local or ~/.mill/config.ts)
 ```
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
 
-`mill --help` and `mill <command> --help` include a **Models** section for the selected driver (`defaultDriver` from resolved config, or `--driver` override on command help). The list is sourced from that driver's registration metadata, so driver registration informs the CLI/main agent about available models. Live model discovery is not part of normal help yet.
+`mill --help` and `mill <command> --help` include a **Models** section for built-in ACP agent providers. Live model discovery is not part of normal help yet.
 
 ## Use with Claude Code
 
@@ -162,50 +154,38 @@ This registers a `subagent` tool in pi. When the agent needs to delegate work, i
 Yes — that's the point. The orchestrator can use any language to express a plan. TypeScript is optional; it's just easy to read and lets mill hook into task actors to offer structured output, event logs, and session replay.
 
 **How is this different from Claude Code tasks?**
-Claude Code tasks are scoped to Claude Code. Mill programs are portable across drivers — the same program can run Claude, Codex, or pi task agents. The program is also a readable artifact you confirm before execution, not an internal dispatch.
+Claude Code tasks are scoped to Claude Code. Mill programs are portable across providers — the same program can run Claude, Codex, or pi task agents. The program is also a readable artifact you confirm before execution, not an internal dispatch.
 
 **Do I have to write the programs myself?**
 No. The orchestrator writes them. You review and confirm.
 
-## Configuration
-
-`mill.config.ts` gives the orchestrator precise instructions — model preferences per task type, driver selection, authoring conventions. The orchestrator reads the config and makes choices accordingly.
-
-```bash
-mill init                # creates ./mill.config.ts
-mill init --global       # creates ~/.mill/config.ts
-```
-
-Resolved in order: `./mill.config.ts` → walk up to repo root → `~/.mill/config.ts` → built-in defaults.
-
-Recursion guard:
+## Recursion guard
 
 - `maxRunDepth` (default `1`) limits nested `mill run` invocations by depth.
 - Mill tracks depth with `MILL_RUN_DEPTH` in worker/program child environments.
 - If a nested invocation exceeds `maxRunDepth`, `mill run` is rejected before submission.
 
-## Drivers
+## Built-in agent providers
 
-Drivers translate task execution into whatever protocol the agent needs. Mill ships a unified ACP driver package that bundles Claude, Codex, and pi registrations. The ACP implementation delegates protocol/session work to `spawn-agent`, which is an internal dependency of `@mill/driver-acp`, not a public mill API.
+Mill ships built-in ACP-backed Claude, Codex, and pi providers. The ACP implementation delegates protocol/session work to `spawn-agent`, which is an internal dependency, not a public mill API.
 
-| Package            | Purpose                                                 |
-| ------------------ | ------------------------------------------------------- |
-| `@mill/core`       | Engine, lifecycle, task actor API, config               |
-| `@mill/cli`        | CLI commands                                            |
-| `@mill/driver-acp` | Unified ACP-based Claude / Codex / pi driver registries |
-| `pi-mill`          | Pi extension for mill as execution backend              |
+| Package      | Purpose                                    |
+| ------------ | ------------------------------------------ |
+| `@mill/core` | Engine, lifecycle, and task actor API      |
+| `@mill/cli`  | CLI commands and built-in agent providers  |
+| `pi-mill`    | Pi extension for mill as execution backend |
 
-Model catalog source by built-in driver registration:
+Model catalog source for built-in providers:
 
-- `pi` (`@mill/driver-acp`): reads `~/.pi/agent/settings.json` (`enabledModels`) by default, unless overridden in config.
-- `claude` (`@mill/driver-acp`): built-in default catalog (`sonnet`, `opus`, `haiku`) unless overridden in config.
-- `codex` (`@mill/driver-acp`): built-in default catalog (`openai-codex/gpt-5.3-codex`) unless overridden in config.
+- `pi`: reads `~/.pi/agent/settings.json` (`enabledModels`) by default.
+- `claude`: built-in default catalog (`sonnet`, `opus`, `haiku`).
+- `codex`: built-in default catalog (`openai-codex/gpt-5.3-codex`).
 
 ## Internals
 
-Built on Effect v4 / effect-smol. Public boundaries expose Promise ergonomics through actor `.done` and runtime facade methods. Engine, drivers, persistence, task actor internals, and schemas are Effect-first.
+Built on Effect v4 / effect-smol. Public boundaries expose Promise ergonomics through actor `.done` and runtime facade methods. Engine, persistence, task actor internals, and schemas are Effect-first.
 
-Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON task-native event log, results, and task/driver session pointers. New persisted orchestration events use `task:*` vocabulary.
+Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON task-native event log, results, and task session pointers. New persisted orchestration events use `task:*` vocabulary.
 
 ## Development
 

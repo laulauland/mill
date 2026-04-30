@@ -1,11 +1,11 @@
 import { Effect } from "effect";
-import type { AgentSessionInput, DriverProcessConfig, DriverRuntime } from "@mill/core";
+import type { AgentRuntime, AgentSessionInput, AgentProcessConfig } from "@mill/core";
 import { createAcpSession } from "./acp-client.effect";
 
-export const makeAcpDriver = (
+export const makeAcpAgentRuntime = (
   name: string,
-  processConfig?: DriverProcessConfig,
-): DriverRuntime => ({
+  processConfig?: AgentProcessConfig,
+): AgentRuntime => ({
   name,
   createSession: (input: AgentSessionInput) =>
     Effect.map(createAcpSession(name, processConfig, input), (session) => ({
@@ -21,7 +21,7 @@ export const makeAcpDriver = (
     })),
   resolveSession: ({ sessionRef }) =>
     Effect.succeed({
-      driver: name,
+      provider: name,
       sessionRef,
       pointer: `acp://${name}/session/${encodeURIComponent(sessionRef)}`,
     }),
