@@ -1,27 +1,24 @@
 #!/usr/bin/env bun
 
-import { Effect } from "effect";
-import { ProcessControlError } from "@mill/core";
-import { runCli } from "./index";
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Effect, Exit, Layer, Runtime } from "effect";
+import { bunCliPlatformLayer, runCliMainEffect } from "./index";
 
-const bootstrapArgv = process.argv;
-const code = await runCli(bootstrapArgv.slice(2), {
-  cwd: process.cwd(),
-  env: process.env,
-  argv: bootstrapArgv,
-  executablePath: process.execPath,
-  pid: process.pid,
-  processControl: {
-    isAlive: (pid) =>
-      Effect.try({
-        try: () => process.kill(pid, 0),
-        catch: (cause) => new ProcessControlError({ operation: "isAlive", pid, cause }),
-      }).pipe(Effect.as(true)),
-    sendSignal: (pid, signal) =>
-      Effect.try({
-        try: () => process.kill(pid, signal),
-        catch: (cause) => new ProcessControlError({ operation: "sendSignal", pid, signal, cause }),
-      }).pipe(Effect.as(true)),
+const entrypointPath = decodeURIComponent(new URL(import.meta.url).pathname);
+const main = runCliMainEffect({ entrypointPath }).pipe(
+  Effect.provide(
+    Layer.mergeAll(BunServices.layer, bunCliPlatformLayer.pipe(Layer.provide(BunServices.layer))),
+  ),
+);
+
+BunRuntime.runMain(main, {
+  teardown: (exit, onExit) => {
+    if (Exit.isSuccess(exit)) {
+      onExit(exit.value);
+      return;
+    }
+
+    Runtime.defaultTeardown(exit, onExit);
   },
 });
-process.exit(code);

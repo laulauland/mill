@@ -6,9 +6,12 @@ import {
   Flag as Options,
 } from "effect/unstable/cli";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Schema from "effect/Schema";
-import { Cause, Data, Effect, Exit, Option, Scope } from "effect";
+import * as Stdio from "effect/Stdio";
+import * as Stream from "effect/Stream";
+import { Cause, Config, Context, Data, Effect, Exit, Layer, Option, Scope } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 import {
   createMillRuntime,
@@ -17,7 +20,9 @@ import {
   resolveConfigEffect,
   type DriverProcessConfig,
   type LaunchWorkerInput,
+  ProcessControlError,
   type ProcessControl,
+  type ProcessSignal,
   type ResolvedConfig,
 } from "@mill/core";
 import {
@@ -28,9 +33,17 @@ import {
 import { parseJson } from "./json.codec";
 
 interface CliIo {
-  readonly stdout: (line: string) => void;
-  readonly stderr: (line: string) => void;
+  readonly stdout: (line: string) => void | Promise<void>;
+  readonly stderr: (line: string) => void | Promise<void>;
 }
+
+interface CliPlatform {
+  readonly cwd: Effect.Effect<string>;
+  readonly executablePath: Effect.Effect<string>;
+  readonly pid: Effect.Effect<number | undefined>;
+}
+
+const CliPlatform = Context.Service<CliPlatform>("mill/CliPlatform");
 
 interface RunCliOptions {
   readonly cwd?: string;
@@ -43,6 +56,7 @@ interface RunCliOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly argv?: ReadonlyArray<string>;
   readonly executablePath?: string;
+  readonly entrypointPath?: string;
   readonly pid?: number;
   readonly processControl?: ProcessControl;
 }
@@ -51,6 +65,31 @@ interface CliExit {
   readonly _tag: "CliExit";
   readonly code: number;
 }
+
+const CLI_ENVIRONMENT_VARIABLES = [
+  "CLAUDECODE",
+  "CODEX_SANDBOX",
+  "CODEX_SANDBOX_NETWORK_DISABLED",
+  "CODEX_THREAD_ID",
+  "HOME",
+  "MILL_ACP_ARGS_JSON",
+  "MILL_ACP_COMMAND",
+  "MILL_ACP_ENV_JSON",
+  "MILL_CLAUDE_ACP_ARGS_JSON",
+  "MILL_CLAUDE_ACP_COMMAND",
+  "MILL_CLAUDE_ACP_ENV_JSON",
+  "MILL_CODEX_ACP_ARGS_JSON",
+  "MILL_CODEX_ACP_COMMAND",
+  "MILL_CODEX_ACP_ENV_JSON",
+  "MILL_PI_ACP_ARGS_JSON",
+  "MILL_PI_ACP_COMMAND",
+  "MILL_PI_ACP_ENV_JSON",
+  "MILL_RUN_DEPTH",
+  "MILL_VERSION",
+  "PATH",
+  "PWD",
+  "npm_package_version",
+] as const;
 
 class CliResolutionError extends Data.TaggedError("CliResolutionError")<{
   readonly message: string;
@@ -80,14 +119,16 @@ const resolveCliVersion = (env: Readonly<Record<string, string | undefined>>): s
   return "0.0.0";
 };
 
-const defaultIo: CliIo = {
-  stdout: (line) => {
-    console.log(line);
-  },
-  stderr: (line) => {
-    console.error(line);
-  },
-};
+const writeLine = (
+  sink: ReturnType<Stdio.Stdio["stdout"]>,
+  line: string,
+): Effect.Effect<void, unknown> =>
+  Stream.fromIterable([`${line}\n`]).pipe(Stream.run(sink), Effect.asVoid);
+
+const createStdioIo = (stdio: Stdio.Stdio): CliIo => ({
+  stdout: (line) => Effect.runPromise(writeLine(stdio.stdout(), line)),
+  stderr: (line) => Effect.runPromise(writeLine(stdio.stderr(), line)),
+});
 
 const createDirectExecutor = () => ({
   description: "Local direct executor",
@@ -154,13 +195,13 @@ const parseStringRecordJson = (
   return Object.fromEntries(entries);
 };
 
-const normalizeAcpCommand = (command: string, executablePath: string): string =>
-  command === "bun" ? executablePath : command;
+const normalizeAcpCommand = (command: string, executablePath: string | undefined): string =>
+  command === "bun" && executablePath !== undefined ? executablePath : command;
 
 const readAcpProcessOverride = (
   env: Readonly<Record<string, string | undefined>>,
   prefix: "MILL_PI_ACP" | "MILL_CLAUDE_ACP" | "MILL_CODEX_ACP",
-  executablePath: string,
+  executablePath: string | undefined,
 ): DriverProcessConfig | undefined => {
   const command = normalizeOptionalText(env[`${prefix}_COMMAND`] ?? env.MILL_ACP_COMMAND);
 
@@ -182,7 +223,7 @@ const readAcpProcessOverride = (
 
 const createDefaultConfig = (
   env: Readonly<Record<string, string | undefined>>,
-  executablePath: string,
+  executablePath: string | undefined,
 ) =>
   defineConfig({
     defaultDriver: "",
@@ -216,20 +257,93 @@ const createDefaultConfig = (
     },
   });
 
-const resolveDefaults = (options: RunCliOptions) => {
-  if (options.executablePath === undefined) {
-    return undefined;
-  }
-
-  return createDefaultConfig(options.env ?? {}, options.executablePath);
-};
+const resolveDefaults = (options: RunCliOptions) =>
+  createDefaultConfig(options.env ?? {}, options.executablePath);
 
 const requireDefaults = (options: RunCliOptions): ReturnType<typeof createDefaultConfig> =>
-  resolveDefaults(options) ?? createDefaultConfig(options.env ?? {}, "bun");
+  resolveDefaults(options);
 
 const runWithBunServices = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices>,
 ): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
+
+const readOptionalConfigString = (
+  name: (typeof CLI_ENVIRONMENT_VARIABLES)[number],
+): Effect.Effect<string | undefined> =>
+  Effect.gen(function* () {
+    const value = yield* Config.string(name).pipe(Config.option);
+    return Option.isSome(value) ? value.value : undefined;
+  });
+
+const readCliEnvironment = (): Effect.Effect<Readonly<Record<string, string | undefined>>> =>
+  Effect.map(
+    Effect.forEach(CLI_ENVIRONMENT_VARIABLES, (name) =>
+      Effect.map(readOptionalConfigString(name), (value) => [name, value] as const),
+    ),
+    (entries) => Object.fromEntries(entries),
+  );
+
+const readCliBootstrap = (): Effect.Effect<
+  {
+    readonly argv: ReadonlyArray<string>;
+    readonly cwd: string;
+    readonly env: Readonly<Record<string, string | undefined>>;
+    readonly executablePath: string;
+    readonly pid: number | undefined;
+  },
+  never,
+  Stdio.Stdio | CliPlatform
+> =>
+  Effect.gen(function* () {
+    const stdio = yield* Stdio.Stdio;
+    const platform = yield* CliPlatform;
+    const argv = yield* stdio.args;
+    const env = yield* readCliEnvironment();
+    const cwd = yield* platform.cwd;
+    const executablePath = yield* platform.executablePath;
+    const pid = yield* platform.pid;
+    return { argv, cwd, env, executablePath, pid };
+  });
+
+// Effect v4 does not expose a portable signal primitive in the platform services used here.
+// This is an explicit platform fallback: invoke the system `kill` binary with an
+// argument vector only (no shell string/eval) to perform POSIX signal operations.
+const runSignalCommand = (
+  args: ReadonlyArray<string>,
+  error: ProcessControlError,
+): Effect.Effect<boolean, ProcessControlError, BunServices.BunServices> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* ChildProcess.make("kill", args, {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      const exitCode = yield* handle.exitCode;
+      if (Number(exitCode) !== 0) {
+        return yield* Effect.fail(error);
+      }
+      return true;
+    }),
+  ).pipe(Effect.mapError(() => error));
+
+const createEffectProcessControl = (): ProcessControl => ({
+  isAlive: (pid) =>
+    runSignalCommand(
+      ["-0", String(pid)],
+      new ProcessControlError({ operation: "isAlive", pid, cause: "kill -0 returned non-zero" }),
+    ),
+  sendSignal: (pid, signal: ProcessSignal) =>
+    runSignalCommand(
+      [`-${signal}`, String(pid)],
+      new ProcessControlError({
+        operation: "sendSignal",
+        pid,
+        signal,
+        cause: `kill -${signal} returned non-zero`,
+      }),
+    ),
+});
 
 const pathIsAccessible = (
   fileSystem: FileSystem.FileSystem,
@@ -311,6 +425,7 @@ const buildWorkerCommandArguments = (
     readonly isBunRuntime: boolean;
     readonly hasSourceEntrypoint: boolean;
     readonly scriptEntrypoint: string | undefined;
+    readonly currentEntrypoint: string | undefined;
   },
 ): ReadonlyArray<string> => {
   const workerArguments = [
@@ -331,8 +446,12 @@ const buildWorkerCommandArguments = (
     return ["run", millBinPath, ...workerArguments];
   }
 
-  return options.scriptEntrypoint !== undefined
-    ? [options.scriptEntrypoint, ...workerArguments]
+  if (options.scriptEntrypoint !== undefined) {
+    return [options.scriptEntrypoint, ...workerArguments];
+  }
+
+  return options.currentEntrypoint !== undefined
+    ? [options.currentEntrypoint, ...workerArguments]
     : workerArguments;
 };
 
@@ -342,6 +461,7 @@ const launchDetachedWorker = async (
     readonly env: Readonly<Record<string, string | undefined>>;
     readonly argv: ReadonlyArray<string>;
     readonly executablePath: string;
+    readonly entrypointPath?: string;
     readonly extendEnv: boolean;
   },
 ): Promise<void> => {
@@ -368,6 +488,7 @@ const launchDetachedWorker = async (
           isBunRuntime: isBunExecutablePath(bootstrap.executablePath),
           hasSourceEntrypoint,
           scriptEntrypoint,
+          currentEntrypoint: bootstrap.entrypointPath,
         }),
         {
           cwd: input.cwd,
@@ -381,6 +502,7 @@ const launchDetachedWorker = async (
 
       const detachedScope = yield* Scope.make();
       const processHandle = yield* Scope.provide(workerCommand.asEffect(), detachedScope);
+      yield* processHandle.unref;
       const pidPath = workerPidPath(input.runsDirectory, input.runId);
       const runDirectory = pidPath.slice(0, pidPath.lastIndexOf("/"));
 
@@ -577,6 +699,7 @@ const createCliRuntime = (
     homeDirectory: options.homeDirectory,
     env: options.env,
     executablePath: options.executablePath,
+    entrypointPath: options.entrypointPath,
     runsDirectory: input.runsDirectory ?? options.runsDirectory,
     driverName: activeDriver.name,
     executorName: input.executorName,
@@ -613,7 +736,7 @@ const runCommand = async (
     );
 
     if (Exit.isFailure(decodedMetadata)) {
-      io.stderr(`Invalid --meta-json payload: ${Cause.pretty(decodedMetadata.cause)}`);
+      await io.stderr(`Invalid --meta-json payload: ${Cause.pretty(decodedMetadata.cause)}`);
       return 1;
     }
 
@@ -631,7 +754,8 @@ const runCommand = async (
         launchDetachedWorker(input, {
           env: options.env ?? {},
           argv: options.argv ?? [],
-          executablePath: options.executablePath ?? "bun",
+          executablePath: options.executablePath ?? options.argv?.[0] ?? "mill",
+          entrypointPath: options.entrypointPath,
           extendEnv: options.executablePath === undefined,
         })),
   });
@@ -648,28 +772,28 @@ const runCommand = async (
     const syncOutput = output;
 
     if (!("run" in syncOutput)) {
-      io.stderr("Synchronous run completed without a result envelope.");
+      await io.stderr("Synchronous run completed without a result envelope.");
       return 1;
     }
 
     if (command.json) {
-      io.stdout(JSON.stringify(syncOutput));
+      await io.stdout(JSON.stringify(syncOutput));
       return 0;
     }
 
-    io.stdout(`run ${syncOutput.run.id} -> ${syncOutput.run.status}`);
+    await io.stdout(`run ${syncOutput.run.id} -> ${syncOutput.run.status}`);
     return 0;
   }
 
   const submittedRun = output;
 
   if ("run" in submittedRun) {
-    io.stderr("Asynchronous run unexpectedly returned a sync result envelope.");
+    await io.stderr("Asynchronous run unexpectedly returned a sync result envelope.");
     return 1;
   }
 
   if (command.json) {
-    io.stdout(
+    await io.stdout(
       JSON.stringify({
         runId: submittedRun.id,
         status: submittedRun.status,
@@ -679,7 +803,7 @@ const runCommand = async (
     return 0;
   }
 
-  io.stdout(`run ${submittedRun.id} submitted status=${submittedRun.status}`);
+  await io.stdout(`run ${submittedRun.id} submitted status=${submittedRun.status}`);
   return 0;
 };
 
@@ -710,7 +834,7 @@ const workerCommand = async (
   });
 
   if (command.json) {
-    io.stdout(JSON.stringify(output));
+    await io.stdout(JSON.stringify(output));
   }
 
   return 0;
@@ -739,7 +863,7 @@ const initCommand = async (
   const homeDirectory = options.homeDirectory ?? normalizeOptionalText(options.env?.HOME);
 
   if (command.global && (homeDirectory === undefined || homeDirectory.length === 0)) {
-    io.stderr("Unable to resolve home directory for --global init.");
+    await io.stderr("Unable to resolve home directory for --global init.");
     return 1;
   }
 
@@ -755,7 +879,7 @@ const initCommand = async (
     }),
   );
 
-  io.stdout(`Created ${configPath}`);
+  await io.stdout(`Created ${configPath}`);
   return 0;
 };
 
@@ -779,11 +903,11 @@ const statusCommand = async (
   const output = await runtime.runRef(command.runId).getSnapshot();
 
   if (command.json) {
-    io.stdout(JSON.stringify(output));
+    await io.stdout(JSON.stringify(output));
     return 0;
   }
 
-  io.stdout(`run ${output.id} status=${output.status}`);
+  await io.stdout(`run ${output.id} status=${output.status}`);
   return 0;
 };
 
@@ -801,7 +925,7 @@ const waitCommand = async (
   io: CliIo,
 ): Promise<number> => {
   if (!Number.isFinite(command.timeout) || command.timeout <= 0) {
-    io.stderr("--timeout must be a positive number.");
+    await io.stderr("--timeout must be a positive number.");
     return 1;
   }
 
@@ -817,11 +941,11 @@ const waitCommand = async (
 
   if (waitResult.status === "fulfilled") {
     if (command.json) {
-      io.stdout(JSON.stringify(waitResult.value));
+      await io.stdout(JSON.stringify(waitResult.value));
       return 0;
     }
 
-    io.stdout(`run ${waitResult.value.id} status=${waitResult.value.status}`);
+    await io.stdout(`run ${waitResult.value.id} status=${waitResult.value.status}`);
     return 0;
   }
 
@@ -834,7 +958,7 @@ const waitCommand = async (
     const message = `Timeout waiting for run ${command.runId} after ${timeoutSeconds}s.`;
 
     if (command.json) {
-      io.stdout(
+      await io.stdout(
         JSON.stringify({
           ok: false,
           error: {
@@ -848,14 +972,14 @@ const waitCommand = async (
       return 2;
     }
 
-    io.stderr(message);
+    await io.stderr(message);
     return 2;
   }
 
   const fallbackMessage = waitError.message ?? String(waitResult.reason);
 
   if (command.json) {
-    io.stdout(
+    await io.stdout(
       JSON.stringify({
         ok: false,
         error: {
@@ -869,7 +993,7 @@ const waitCommand = async (
     return 1;
   }
 
-  io.stderr(fallbackMessage);
+  await io.stderr(fallbackMessage);
   return 1;
 };
 
@@ -905,7 +1029,7 @@ const watchCommand = async (
     taskId: fromOption(command.task),
     sinceTimeIso: fromOption(command.sinceTime),
     onEvent: (line: string) => {
-      io.stdout(line);
+      void io.stdout(line);
     },
   } as const;
 
@@ -940,11 +1064,11 @@ const cancelCommand = async (
   const cancelled = await runtime.runRef(command.runId).cancel();
 
   if (command.json) {
-    io.stdout(JSON.stringify(cancelled));
+    await io.stdout(JSON.stringify(cancelled));
     return 0;
   }
 
-  io.stdout(`run ${cancelled.runId} status=${cancelled.status}`);
+  await io.stdout(`run ${cancelled.runId} status=${cancelled.status}`);
   return 0;
 };
 
@@ -973,16 +1097,16 @@ const lsCommand = async (
   });
 
   if (command.json) {
-    io.stdout(JSON.stringify(runs));
+    await io.stdout(JSON.stringify(runs));
     return 0;
   }
 
   if (runs.length === 0) {
-    io.stdout("No runs found.");
+    await io.stdout("No runs found.");
     return 0;
   }
 
-  io.stdout(runs.map((run) => `${run.id}\t${run.status}\t${run.updatedAt}`).join("\n"));
+  await io.stdout(runs.map((run) => `${run.id}\t${run.status}\t${run.updatedAt}`).join("\n"));
   return 0;
 };
 
@@ -1243,71 +1367,69 @@ const extractDriverOverride = (argv: ReadonlyArray<string>): string | undefined 
   return undefined;
 };
 
-const resolveHelpContextForHelp = (
+const resolveHelpContextForHelpEffect = (
   options: RunCliOptions,
   selectedDriverName?: string,
-): Promise<ResolvedHelpContext> =>
-  runWithBunServices(
-    Effect.gen(function* () {
-      const resolvedConfig = yield* resolveConfigForCli(options);
+): Effect.Effect<ResolvedHelpContext, never, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const resolvedConfig = yield* resolveConfigForCli(options);
 
-      const instructions = resolvedConfig.config.authoring.instructions;
-      const hasAuthoringOverride =
-        resolvedConfig.source !== "defaults" &&
-        instructions !== requireDefaults(options).authoring.instructions;
-      const authoring: ResolvedAuthoringHelp = hasAuthoringOverride
-        ? {
-            source: "config",
-            instructions,
-          }
-        : {
-            source: "static",
-          };
+    const instructions = resolvedConfig.config.authoring.instructions;
+    const hasAuthoringOverride =
+      resolvedConfig.source !== "defaults" &&
+      instructions !== requireDefaults(options).authoring.instructions;
+    const authoring: ResolvedAuthoringHelp = hasAuthoringOverride
+      ? {
+          source: "config",
+          instructions,
+        }
+      : {
+          source: "static",
+        };
 
-      const activeDriver = yield* resolveActiveDriverSelection(
-        selectedDriverName,
-        resolvedConfig,
-        options.env ?? {},
+    const activeDriver = yield* resolveActiveDriverSelection(
+      selectedDriverName,
+      resolvedConfig,
+      options.env ?? {},
+    );
+    const registration = resolvedConfig.config.drivers[activeDriver.name];
+
+    if (registration === undefined) {
+      return yield* Effect.fail(
+        new CliResolutionError({
+          message: `Resolved active driver '${activeDriver.name}' from ${sourceLabel(activeDriver.source)} is unavailable.`,
+        }),
       );
-      const registration = resolvedConfig.config.drivers[activeDriver.name];
+    }
 
-      if (registration === undefined) {
-        return yield* Effect.fail(
-          new CliResolutionError({
-            message: `Resolved active driver '${activeDriver.name}' from ${sourceLabel(activeDriver.source)} is unavailable.`,
-          }),
-        );
-      }
+    const models = yield* Effect.map(registration.models, (catalog) =>
+      Array.from(new Set(catalog)),
+    );
 
-      const models = yield* Effect.map(registration.models, (catalog) =>
-        Array.from(new Set(catalog)),
-      );
-
-      return {
-        authoring,
-        modelCatalog: {
-          source: "resolved",
-          entries: [
-            {
-              driverName: activeDriver.name,
-              modelFormat: registration.modelFormat,
-              models,
-            },
-          ],
+    return {
+      authoring,
+      modelCatalog: {
+        source: "resolved",
+        entries: [
+          {
+            driverName: activeDriver.name,
+            modelFormat: registration.modelFormat,
+            models,
+          },
+        ],
+      },
+    } satisfies ResolvedHelpContext;
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.succeed({
+        authoring: {
+          source: "static",
         },
-      } satisfies ResolvedHelpContext;
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.succeed({
-          authoring: {
-            source: "static",
-          },
-          modelCatalog: {
-            source: "unavailable",
-            message: formatUnknownError(error),
-          },
-        } satisfies ResolvedHelpContext),
-      ),
+        modelCatalog: {
+          source: "unavailable",
+          message: formatUnknownError(error),
+        },
+      } satisfies ResolvedHelpContext),
     ),
   );
 
@@ -1328,68 +1450,123 @@ const createCliHelpFormatter = (): CliOutput.Formatter => {
   };
 };
 
-export const runCli = async (
+export const runCliEffect = (
   argv: ReadonlyArray<string>,
   options?: RunCliOptions,
-): Promise<number> => {
-  const resolvedOptions = options ?? {};
-  const io = resolvedOptions.io ?? defaultIo;
-  const cliVersion = resolveCliVersion(resolvedOptions.env ?? {});
+): Effect.Effect<number, never, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const resolvedOptions = options ?? {};
+    const stdio = yield* Stdio.Stdio;
+    const io = resolvedOptions.io ?? createStdioIo(stdio);
+    const cliVersion = resolveCliVersion(resolvedOptions.env ?? {});
 
-  if (isHelpRequest(argv)) {
-    const helpContext = await resolveHelpContextForHelp(
-      resolvedOptions,
-      extractDriverOverride(argv),
-    );
-    io.stdout(buildHelpText(helpContext, cliVersion));
-    return 0;
-  }
-
-  const commandHelpRequest = isCommandHelpRequest(argv);
-  const helpContext = commandHelpRequest
-    ? await resolveHelpContextForHelp(resolvedOptions, extractDriverOverride(argv))
-    : undefined;
-
-  const command = createCli(resolvedOptions, io);
-  const run = CliCommand.runWith(command, {
-    version: cliVersion,
-  });
-
-  const codeEffect = run(argv).pipe(
-    Effect.as(0),
-    Effect.catchTag("CliExit", (error) => Effect.succeed(error.code)),
-    Effect.catchIf(
-      (error): error is CliError.CliError => CliError.isCliError(error),
-      (error) =>
-        Effect.sync(() => {
-          if (error._tag !== "ShowHelp") {
-            io.stderr(formatUnknownError(error));
-          }
-
-          return error._tag === "ShowHelp" ? (error.errors.length === 0 ? 0 : 1) : 1;
-        }),
-    ),
-    Effect.catch((error) =>
-      Effect.sync(() => {
-        io.stderr(formatUnknownError(error));
-        return 1;
-      }),
-    ),
-  );
-
-  const exitCode = await runWithBunServices(
-    Effect.provide(codeEffect, CliOutput.layer(createCliHelpFormatter())),
-  );
-
-  if (commandHelpRequest && exitCode === 0 && helpContext !== undefined) {
-    if (helpContext.authoring.source === "config") {
-      io.stdout(`Authoring (from config): ${helpContext.authoring.instructions}`);
-    } else {
-      io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`);
+    if (isHelpRequest(argv)) {
+      const helpContext = yield* resolveHelpContextForHelpEffect(
+        resolvedOptions,
+        extractDriverOverride(argv),
+      );
+      yield* Effect.promise(() =>
+        Promise.resolve(io.stdout(buildHelpText(helpContext, cliVersion))),
+      );
+      return 0;
     }
 
-    io.stdout(renderModelCatalogHelp(helpContext.modelCatalog));
-  }
+    const commandHelpRequest = isCommandHelpRequest(argv);
+    const helpContext = commandHelpRequest
+      ? yield* resolveHelpContextForHelpEffect(resolvedOptions, extractDriverOverride(argv))
+      : undefined;
 
-  return exitCode;
-};
+    const command = createCli(resolvedOptions, io);
+    const run = CliCommand.runWith(command, {
+      version: cliVersion,
+    });
+
+    const exitCode = yield* run(argv).pipe(
+      Effect.as(0),
+      Effect.catchTag("CliExit", (error) => Effect.succeed(error.code)),
+      Effect.catchIf(
+        (error): error is CliError.CliError => CliError.isCliError(error),
+        (error) =>
+          Effect.promise(async () => {
+            if (error._tag !== "ShowHelp") {
+              await io.stderr(formatUnknownError(error));
+            }
+
+            return error._tag === "ShowHelp" ? (error.errors.length === 0 ? 0 : 1) : 1;
+          }),
+      ),
+      Effect.catch((error) =>
+        Effect.promise(async () => {
+          await io.stderr(formatUnknownError(error));
+          return 1;
+        }),
+      ),
+      Effect.provide(CliOutput.layer(createCliHelpFormatter())),
+    );
+
+    if (commandHelpRequest && exitCode === 0 && helpContext !== undefined) {
+      if (helpContext.authoring.source === "config") {
+        yield* Effect.promise(() =>
+          Promise.resolve(
+            io.stdout(`Authoring (from config): ${helpContext.authoring.instructions}`),
+          ),
+        );
+      } else {
+        yield* Effect.promise(() =>
+          Promise.resolve(io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`)),
+        );
+      }
+
+      yield* Effect.promise(() =>
+        Promise.resolve(io.stdout(renderModelCatalogHelp(helpContext.modelCatalog))),
+      );
+    }
+
+    return exitCode;
+  });
+
+export const runCli = (argv: ReadonlyArray<string>, options?: RunCliOptions): Promise<number> =>
+  runWithBunServices(
+    Effect.provide(
+      Effect.gen(function* () {
+        const platform = yield* CliPlatform;
+        const cwd = options?.cwd ?? (yield* platform.cwd);
+        const executablePath = options?.executablePath ?? (yield* platform.executablePath);
+        return yield* runCliEffect(argv, {
+          ...options,
+          argv: options?.argv ?? argv,
+          cwd,
+          executablePath,
+        });
+      }),
+      bunCliPlatformLayer,
+    ),
+  );
+
+export const bunCliPlatformLayer: Layer.Layer<CliPlatform, never, Path.Path> = Layer.effect(
+  CliPlatform,
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const bun = globalThis.Bun;
+    return {
+      cwd: Effect.sync(() => (bun === undefined ? path.resolve(".") : bun.cwd)),
+      executablePath: Effect.sync(() => bun?.argv[0] ?? "node"),
+      pid: Effect.succeed(undefined),
+    } satisfies CliPlatform;
+  }),
+);
+
+export const runCliMainEffect = (options?: {
+  readonly entrypointPath?: string;
+}): Effect.Effect<number, never, BunServices.BunServices> =>
+  Effect.gen(function* () {
+    const bootstrap = yield* readCliBootstrap();
+    return yield* runCliEffect(bootstrap.argv, {
+      cwd: bootstrap.cwd,
+      env: bootstrap.env,
+      executablePath: bootstrap.executablePath,
+      entrypointPath: options?.entrypointPath,
+      pid: bootstrap.pid,
+      processControl: createEffectProcessControl(),
+    });
+  });
