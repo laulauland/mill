@@ -17,17 +17,23 @@ const makeDriver = (name: string): DriverRegistration => ({
   },
   runtime: {
     name,
-    spawn: () =>
+    createSession: (input) =>
       Effect.succeed({
-        events: [],
-        result: {
-          text: `${name}:ok`,
-          sessionRef: `session/${name}`,
-          agent: "scout",
-          model: `${name}/model`,
-          driver: name,
-          exitCode: 0,
-        },
+        sessionRef: `session/${name}`,
+        startTurn: () =>
+          Effect.succeed({
+            events: [],
+            result: {
+              text: `${name}:ok`,
+              sessionRef: `session/${name}`,
+              role: input.role,
+              model: input.model,
+              driver: name,
+              exitCode: 0,
+            },
+          }),
+        cancelTurn: () => Effect.void,
+        close: () => Effect.void,
       }),
   },
 });

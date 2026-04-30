@@ -24,9 +24,9 @@ import {
 } from "./task.schema";
 import type { SpawnOptions, SpawnResult } from "./spawn.schema";
 import type {
+  AgentRuntimeEvent,
+  AgentTurnOutput,
   DriverRuntime,
-  DriverSpawnEvent,
-  DriverTaskTurnOutput,
   ExtensionContext,
   ExtensionRegistration,
   TaskInput,
@@ -623,7 +623,7 @@ const storageTaskResultFromTaskResult = (result: TaskResult): TaskStorageResult 
   errorMessage: result.errorMessage,
 });
 
-const taskResultFromTaskTurnOutput = (output: DriverTaskTurnOutput): TaskResult => ({
+const taskResultFromTaskTurnOutput = (output: AgentTurnOutput): TaskResult => ({
   text: output.result.text,
   sessionRef: output.result.sessionRef,
   role: output.result.role,
@@ -768,7 +768,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
         const appendDriverEvents = (
           taskId: TaskId,
-          driverEvents: ReadonlyArray<DriverSpawnEvent>,
+          driverEvents: ReadonlyArray<AgentRuntimeEvent>,
         ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
           Effect.gen(function* () {
             for (const driverEvent of driverEvents) {
@@ -994,21 +994,46 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             });
 
             const driverOutputExit = yield* Effect.exit(
-              Effect.mapError(
-                input.driver.spawn({
+              Effect.gen(function* () {
+                const session = yield* input.driver.createSession({
                   runId: runInput.runId,
                   runDirectory: joinPath(input.runsDirectory, runInput.runId),
                   taskId,
-                  agent: spawnInput.agent,
-                  systemPrompt: spawnInput.systemPrompt,
-                  prompt: spawnInput.prompt,
+                  role: spawnInput.agent,
+                  system: spawnInput.systemPrompt,
                   model: spawnInput.model,
-                }),
-                (error) =>
-                  new ProgramExecutionError({
-                    runId: runInput.runId,
-                    message: `Driver ${input.driver.name} failed: ${toMessage(error)}`,
-                  }),
+                });
+
+                const turnOutput = yield* session
+                  .startTurn({ prompt: spawnInput.prompt })
+                  .pipe(Effect.ensuring(session.close()));
+
+                return {
+                  events: turnOutput.events,
+                  raw: turnOutput.raw,
+                  result: {
+                    text: turnOutput.result.text,
+                    sessionRef: turnOutput.result.sessionRef,
+                    agent: turnOutput.result.role,
+                    model: turnOutput.result.model,
+                    driver: turnOutput.result.driver,
+                    exitCode: turnOutput.result.exitCode,
+                    stopReason: turnOutput.result.stopReason,
+                    errorMessage: turnOutput.result.errorMessage,
+                  },
+                } satisfies {
+                  readonly events: ReadonlyArray<AgentRuntimeEvent>;
+                  readonly raw?: ReadonlyArray<string>;
+                  readonly result: SpawnResult;
+                };
+              }).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ProgramExecutionError({
+                      runId: runInput.runId,
+                      message: `Driver ${input.driver.name} failed: ${toMessage(error)}`,
+                    }),
+                ),
               ),
             );
 
@@ -1133,15 +1158,6 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           Effect.gen(function* () {
             const storageInput = taskInputToStorageTaskOptions(taskInput);
 
-            if (input.driver.createTaskSession === undefined) {
-              return yield* Effect.fail(
-                new ProgramExecutionError({
-                  runId: runInput.runId,
-                  message: `Driver ${input.driver.name} does not support task sessions`,
-                }),
-              );
-            }
-
             const nextTaskCounter = yield* Ref.updateAndGet(
               taskCounterRef,
               (counter) => counter + 1,
@@ -1182,12 +1198,12 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
             const driverOutputExit = yield* Effect.exit(
               Effect.gen(function* () {
-                const session = yield* input.driver.createTaskSession!({
+                const session = yield* input.driver.createSession({
                   runId: runInput.runId,
                   runDirectory: joinPath(input.runsDirectory, runInput.runId),
                   taskId,
-                  agent: storageInput.role,
-                  systemPrompt: storageInput.system,
+                  role: storageInput.role,
+                  system: storageInput.system,
                   model: storageInput.model,
                 });
 

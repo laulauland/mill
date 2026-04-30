@@ -1,4 +1,4 @@
-import { Data, Effect, Scope } from "effect";
+import { Data, Effect } from "effect";
 import {
   SpawnAgent,
   type AgentAdapter,
@@ -8,13 +8,11 @@ import {
 } from "spawn-agent";
 import type {
   DriverProcessConfig,
-  DriverSpawnEvent,
-  DriverSpawnInput,
-  DriverSpawnOutput,
-  DriverTaskSession,
-  DriverTaskSessionInput,
-  DriverTaskTurnInput,
-  DriverTaskTurnOutput,
+  AgentRuntimeEvent,
+  AgentSession,
+  AgentSessionInput,
+  AgentTurnInput,
+  AgentTurnOutput,
 } from "@mill/core";
 
 export class AcpClientError extends Data.TaggedError("AcpClientError")<{
@@ -65,7 +63,7 @@ const mapStopReason = (stopReason: string): string | undefined =>
 const planEntriesToSteps = (event: Extract<AgentEvent, { type: "plan" }>): ReadonlyArray<string> =>
   event.entries.map((entry) => entry.content);
 
-const eventToDriverEvents = (event: AgentEvent): ReadonlyArray<DriverSpawnEvent> => {
+const eventToAgentEvents = (event: AgentEvent): ReadonlyArray<AgentRuntimeEvent> => {
   if (event.type === "text-delta") {
     return [{ type: "message_chunk", text: event.text }];
   }
@@ -150,27 +148,27 @@ const findModelPreference = (
 
 const collectPrompt = (
   agent: SpawnAgent,
-  input: DriverTaskSessionInput,
-  turn: DriverTaskTurnInput,
+  input: AgentSessionInput,
+  turn: AgentTurnInput,
   sessionId: string,
   setActiveStream: (stream: AgentStream | undefined) => void,
-): Effect.Effect<DriverTaskTurnOutput, AcpClientError> =>
+): Effect.Effect<AgentTurnOutput, AcpClientError> =>
   Effect.tryPromise({
     try: async () => {
       const configOptions = agent.configOptionsFor(sessionId);
       const modelPreference = findModelPreference(configOptions, input.model);
       const stream = agent.prompt(sessionId, {
         prompt: turn.prompt,
-        systemPrompt: input.systemPrompt,
+        systemPrompt: input.system,
         ...(modelPreference === undefined ? {} : { modelPreference }),
       });
-      const events: Array<DriverSpawnEvent> = [];
+      const events: Array<AgentRuntimeEvent> = [];
 
       setActiveStream(stream);
 
       try {
         for await (const event of stream) {
-          events.push(...eventToDriverEvents(event));
+          events.push(...eventToAgentEvents(event));
         }
 
         const result = await stream.completion;
@@ -181,13 +179,13 @@ const collectPrompt = (
           result: {
             text: result.text,
             sessionRef: sessionId,
-            role: input.agent,
+            role: input.role,
             model: input.model,
             driver: "acp",
             exitCode: mapStopReasonToExitCode(stopReason),
             stopReason: mapStopReason(stopReason),
           },
-        } satisfies DriverTaskTurnOutput;
+        } satisfies AgentTurnOutput;
       } finally {
         setActiveStream(undefined);
       }
@@ -195,11 +193,11 @@ const collectPrompt = (
     catch: toAcpClientError,
   });
 
-export const createAcpTaskSession = (
+export const createAcpSession = (
   name: string,
   processConfig: DriverProcessConfig | undefined,
-  input: DriverTaskSessionInput,
-): Effect.Effect<DriverTaskSession, AcpClientError> =>
+  input: AgentSessionInput,
+): Effect.Effect<AgentSession, AcpClientError> =>
   Effect.gen(function* () {
     const adapter = makeAdapter(name, processConfig);
 
@@ -214,7 +212,7 @@ export const createAcpTaskSession = (
     });
 
     const sessionId = yield* Effect.tryPromise({
-      try: () => agent.createSession({ cwd: input.runDirectory, systemPrompt: input.systemPrompt }),
+      try: () => agent.createSession({ cwd: input.runDirectory, systemPrompt: input.system }),
       catch: async (error) => {
         await agent.close().catch(() => undefined);
         return toAcpClientError(error);
@@ -253,43 +251,5 @@ export const createAcpTaskSession = (
           catch: toAcpClientError,
         }),
       close,
-    } satisfies DriverTaskSession;
-  });
-
-const toTaskSessionInput = (input: DriverSpawnInput): DriverTaskSessionInput => ({
-  runId: input.runId,
-  runDirectory: input.runDirectory,
-  taskId: input.taskId,
-  agent: input.agent,
-  systemPrompt: input.systemPrompt,
-  model: input.model,
-});
-
-export const runAcpSession = (
-  name: string,
-  processConfig: DriverProcessConfig | undefined,
-  input: DriverSpawnInput,
-): Effect.Effect<DriverSpawnOutput, AcpClientError, Scope.Scope> =>
-  Effect.gen(function* () {
-    const session = yield* Effect.acquireRelease(
-      createAcpTaskSession(name, processConfig, toTaskSessionInput(input)),
-      (taskSession) => Effect.orDie(taskSession.close()),
-    );
-
-    const turnOutput = yield* session.startTurn({ prompt: input.prompt });
-
-    return {
-      events: turnOutput.events,
-      raw: turnOutput.raw,
-      result: {
-        text: turnOutput.result.text,
-        sessionRef: turnOutput.result.sessionRef,
-        agent: turnOutput.result.role,
-        model: turnOutput.result.model,
-        driver: turnOutput.result.driver,
-        exitCode: turnOutput.result.exitCode,
-        stopReason: turnOutput.result.stopReason,
-        errorMessage: turnOutput.result.errorMessage,
-      },
-    } satisfies DriverSpawnOutput;
+    } satisfies AgentSession;
   });

@@ -13,22 +13,28 @@ import { runDetachedWorker } from "./worker.effect";
 
 const testDriver: DriverRuntime = {
   name: "test-driver",
-  spawn: (input) =>
+  createSession: (input) =>
     Effect.succeed({
-      events: [
-        {
-          type: "milestone",
-          message: `spawned:${input.agent}`,
-        },
-      ],
-      result: {
-        text: `driver:${input.prompt}`,
-        sessionRef: `session/${input.agent}`,
-        agent: input.agent,
-        model: input.model,
-        driver: "test-driver",
-        exitCode: 0,
-      },
+      sessionRef: `session/${input.role}`,
+      startTurn: (turn) =>
+        Effect.succeed({
+          events: [
+            {
+              type: "milestone",
+              message: `started:${input.role}`,
+            },
+          ],
+          result: {
+            text: `driver:${turn.prompt}`,
+            sessionRef: `session/${input.role}`,
+            role: input.role,
+            model: input.model,
+            driver: "test-driver",
+            exitCode: 0,
+          },
+        }),
+      cancelTurn: () => Effect.void,
+      close: () => Effect.void,
     }),
 };
 

@@ -60,22 +60,28 @@ const makeConfig = (): MillConfig => ({
       },
       runtime: {
         name: "default",
-        spawn: (input) =>
+        createSession: (input) =>
           Effect.succeed({
-            events: [
-              {
-                type: "milestone",
-                message: `default:${input.agent}`,
-              },
-            ],
-            result: {
-              text: `default:${input.prompt}`,
-              sessionRef: `session/default/${input.agent}`,
-              agent: input.agent,
-              model: input.model,
-              driver: "default",
-              exitCode: 0,
-            },
+            sessionRef: `session/default/${input.role}`,
+            startTurn: (turn) =>
+              Effect.succeed({
+                events: [
+                  {
+                    type: "milestone",
+                    message: `default:${input.role}`,
+                  },
+                ],
+                result: {
+                  text: `default:${turn.prompt}`,
+                  sessionRef: `session/default/${input.role}`,
+                  role: input.role,
+                  model: input.model,
+                  driver: "default",
+                  exitCode: 0,
+                },
+              }),
+            cancelTurn: () => Effect.void,
+            close: () => Effect.void,
           }),
       },
     },
@@ -92,38 +98,21 @@ const makeConfig = (): MillConfig => ({
       },
       runtime: {
         name: "codex",
-        spawn: (input) =>
+        createSession: (input) =>
           Effect.succeed({
-            events: [
-              {
-                type: "milestone",
-                message: `codex:${input.agent}`,
-              },
-            ],
-            result: {
-              text: `codex:${input.prompt}`,
-              sessionRef: `session/codex/${input.agent}`,
-              agent: input.agent,
-              model: input.model,
-              driver: "codex",
-              exitCode: 0,
-            },
-          }),
-        createTaskSession: (input) =>
-          Effect.succeed({
-            sessionRef: `task-session/codex/${input.agent}`,
+            sessionRef: `session/codex/${input.role}`,
             startTurn: (turn) =>
               Effect.succeed({
                 events: [
                   {
                     type: "milestone",
-                    message: `codex-task:${input.agent}`,
+                    message: `codex:${input.role}`,
                   },
                 ],
                 result: {
-                  text: `codex-task:${turn.prompt}`,
-                  sessionRef: `task-session/codex/${input.agent}`,
-                  role: input.agent,
+                  text: `codex:${turn.prompt}`,
+                  sessionRef: `session/codex/${input.role}`,
+                  role: input.role,
                   model: input.model,
                   driver: "codex",
                   exitCode: 0,
@@ -230,7 +219,7 @@ describe("run.api integration", () => {
 
       if ("run" in output) {
         expect(output.run.driver).toBe("codex");
-        expect(output.result.programResult).toBe("codex-task:from runtime");
+        expect(output.result.programResult).toBe("codex:from runtime");
       }
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -386,7 +375,7 @@ describe("run.api integration", () => {
       };
 
       expect(parsed).toEqual({
-        text: "codex-task:Say hello from task",
+        text: "codex:Say hello from task",
         driver: "codex",
         status: "complete",
         statuses: ["idle", "running", "complete"],

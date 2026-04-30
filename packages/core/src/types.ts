@@ -136,17 +136,7 @@ export interface SpawnOutput {
   readonly errorMessage?: string;
 }
 
-export interface DriverSpawnInput {
-  readonly runId: string;
-  readonly runDirectory: string;
-  readonly taskId: string;
-  readonly agent: string;
-  readonly systemPrompt: string;
-  readonly prompt: string;
-  readonly model: string;
-}
-
-export type DriverSpawnEvent =
+export type AgentRuntimeEvent =
   | {
       readonly type: "milestone";
       readonly message: string;
@@ -168,34 +158,28 @@ export type DriverSpawnEvent =
       readonly steps: ReadonlyArray<string>;
     };
 
-export interface DriverSpawnOutput {
-  readonly events: ReadonlyArray<DriverSpawnEvent>;
-  readonly raw?: ReadonlyArray<string>;
-  readonly result: SpawnOutput;
-}
-
-export interface DriverTaskTurnOutput {
-  readonly events: ReadonlyArray<DriverSpawnEvent>;
+export interface AgentTurnOutput {
+  readonly events: ReadonlyArray<AgentRuntimeEvent>;
   readonly raw?: ReadonlyArray<string>;
   readonly result: TaskResult;
 }
 
-export interface DriverTaskSessionInput {
+export interface AgentSessionInput {
   readonly runId: string;
   readonly runDirectory: string;
   readonly taskId: string;
-  readonly agent: string;
-  readonly systemPrompt: string;
+  readonly role: string;
+  readonly system: string;
   readonly model: string;
 }
 
-export interface DriverTaskTurnInput {
+export interface AgentTurnInput {
   readonly prompt: string;
 }
 
-export interface DriverTaskSession {
+export interface AgentSession {
   readonly sessionRef: string;
-  readonly startTurn: (input: DriverTaskTurnInput) => Effect.Effect<DriverTaskTurnOutput, unknown>;
+  readonly startTurn: (input: AgentTurnInput) => Effect.Effect<AgentTurnOutput, unknown>;
   readonly cancelTurn: (reason?: string) => Effect.Effect<void, unknown>;
   readonly close: () => Effect.Effect<void, unknown>;
 }
@@ -206,16 +190,15 @@ export interface DriverSessionPointer {
   readonly pointer: string;
 }
 
-export interface DriverRuntime {
+export interface AgentRuntime {
   readonly name: string;
-  readonly spawn: (input: DriverSpawnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
-  readonly createTaskSession?: (
-    input: DriverTaskSessionInput,
-  ) => Effect.Effect<DriverTaskSession, unknown>;
+  readonly createSession: (input: AgentSessionInput) => Effect.Effect<AgentSession, unknown>;
   readonly resolveSession?: (input: {
     readonly sessionRef: string;
   }) => Effect.Effect<DriverSessionPointer, unknown>;
 }
+
+export type DriverRuntime = AgentRuntime;
 
 export interface ExecutorRunInput {
   readonly runId: string;

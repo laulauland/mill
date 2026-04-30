@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
+import { Effect } from "effect";
 import { runEffect } from "./test-runtime";
 import { makeAcpDriver } from "./acp-driver.effect";
 
@@ -198,22 +199,24 @@ rl.on("line", (line) => {
 `;
 
 describe("makeAcpDriver", () => {
-  it("spawns, selects ACP model config, and collects session output", async () => {
+  it("creates a session, selects ACP model config, and collects turn output", async () => {
     const driver = makeAcpDriver("test-acp", {
       command: "bun",
       args: ["-e", FAKE_ACP_AGENT_SCRIPT],
     });
 
-    const output = await runEffect(
-      driver.spawn({
+    const session = await runEffect(
+      driver.createSession({
         runId: "run_test",
         runDirectory: "/tmp/run_test",
-        taskId: "spawn_test",
-        agent: "scout",
-        systemPrompt: "You are concise.",
-        prompt: "Say hello",
+        taskId: "task_test",
+        role: "scout",
+        system: "You are concise.",
         model: "test/model",
       }),
+    );
+    const output = await runEffect(
+      session.startTurn({ prompt: "Say hello" }).pipe(Effect.ensuring(session.close())),
     );
 
     expect(output.result.text).toBe("Hello from fake agent using test/model");
@@ -239,12 +242,12 @@ describe("makeAcpDriver", () => {
       });
 
       const session = await runEffect(
-        driver.createTaskSession!({
+        driver.createSession({
           runId: "run_multi",
           runDirectory: tempDirectory,
           taskId: "task_multi",
-          agent: "scout",
-          systemPrompt: "You are concise.",
+          role: "scout",
+          system: "You are concise.",
           model: "test/model",
         }),
       );
@@ -288,12 +291,12 @@ describe("makeAcpDriver", () => {
       });
 
       const session = await runEffect(
-        driver.createTaskSession!({
+        driver.createSession({
           runId: "run_cancel_turn",
           runDirectory: tempDirectory,
           taskId: "task_cancel_turn",
-          agent: "scout",
-          systemPrompt: "You are concise.",
+          role: "scout",
+          system: "You are concise.",
           model: "test/model",
         }),
       );
@@ -329,16 +332,18 @@ describe("makeAcpDriver", () => {
       args: ["-e", makeVariantAgentScript("refusal")],
     });
 
-    const output = await runEffect(
-      driver.spawn({
+    const session = await runEffect(
+      driver.createSession({
         runId: "run_refusal",
         runDirectory: "/tmp/run_refusal",
-        taskId: "spawn_refusal",
-        agent: "scout",
-        systemPrompt: "You are concise.",
-        prompt: "Say hello",
+        taskId: "task_refusal",
+        role: "scout",
+        system: "You are concise.",
         model: "test/model",
       }),
+    );
+    const output = await runEffect(
+      session.startTurn({ prompt: "Say hello" }).pipe(Effect.ensuring(session.close())),
     );
 
     expect(output.result.exitCode).toBe(1);
@@ -351,16 +356,18 @@ describe("makeAcpDriver", () => {
       args: ["-e", makeVariantAgentScript("cancelled")],
     });
 
-    const output = await runEffect(
-      driver.spawn({
+    const session = await runEffect(
+      driver.createSession({
         runId: "run_cancelled",
         runDirectory: "/tmp/run_cancelled",
-        taskId: "spawn_cancelled",
-        agent: "scout",
-        systemPrompt: "You are concise.",
-        prompt: "Say hello",
+        taskId: "task_cancelled",
+        role: "scout",
+        system: "You are concise.",
         model: "test/model",
       }),
+    );
+    const output = await runEffect(
+      session.startTurn({ prompt: "Say hello" }).pipe(Effect.ensuring(session.close())),
     );
 
     expect(output.result.exitCode).toBe(1);
