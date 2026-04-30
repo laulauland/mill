@@ -244,6 +244,77 @@ describe("run.api integration", () => {
     }
   });
 
+  it("injects actor-shaped mill.task into program host", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-task-api-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const statuses = [];",
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai/gpt-5.3-codex" },',
+        '  prompt: "Say hello from task",',
+        "});",
+        "task.subscribe((snapshot) => statuses.push(snapshot.status));",
+        "const result = await task.start().done;",
+        "return JSON.stringify({",
+        "  text: result.text,",
+        "  driver: result.driver,",
+        "  status: task.getSnapshot().status,",
+        "  statuses,",
+        "});",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const output = await runProgramSync({
+        defaults: makeConfig(),
+        programPath,
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        driverName: "codex",
+        executorName: "vm",
+        launchWorker: async (launchInput) => {
+          await runWorker({
+            defaults: makeConfig(),
+            runId: launchInput.runId,
+            programPath: launchInput.programPath,
+            cwd: launchInput.cwd,
+            homeDirectory,
+            runsDirectory: launchInput.runsDirectory,
+            driverName: launchInput.driverName,
+            executorName: launchInput.executorName,
+            pathExists: async () => false,
+          });
+        },
+      });
+
+      expect(output.run.status).toBe("complete");
+      expect(output.result.spawns).toHaveLength(1);
+      expect(output.result.spawns[0]?.driver).toBe("codex");
+
+      const parsed = JSON.parse(String(output.result.programResult ?? "{}")) as {
+        readonly text?: string;
+        readonly driver?: string;
+        readonly status?: string;
+        readonly statuses?: ReadonlyArray<string>;
+      };
+
+      expect(parsed).toEqual({
+        text: "codex:Say hello from task",
+        driver: "codex",
+        status: "complete",
+        statuses: ["idle", "running", "complete"],
+      });
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("defaults runs directory to $HOME/.mill/runs when homeDirectory is omitted", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-home-default-"));
     const homeDirectory = join(tempDirectory, "home");

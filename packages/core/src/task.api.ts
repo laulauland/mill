@@ -15,9 +15,11 @@ export const pi = (model: string): AgentProvider => ({
   model,
 });
 
+const DefaultTaskSystemPrompt = "You are a helpful coding agent.";
+
 export const taskInputToSpawnInput = (input: TaskInput): SpawnInput => ({
   agent: input.role ?? input.agent.driver,
-  systemPrompt: input.system ?? "",
+  systemPrompt: input.system ?? DefaultTaskSystemPrompt,
   prompt: input.prompt,
   model: input.agent.model,
 });

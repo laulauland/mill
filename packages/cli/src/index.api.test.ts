@@ -298,6 +298,73 @@ describe("runCli", () => {
     }
   });
 
+  it("executes run --sync with actor-shaped mill.task", async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-task-run-"));
+    const homeDirectory = join(tempDirectory, "home");
+    const programPath = join(tempDirectory, "program.ts");
+
+    await writeFile(
+      programPath,
+      [
+        "const statuses = [];",
+        "const task = mill.task({",
+        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  prompt: "Say hello",',
+        "});",
+        "task.subscribe((snapshot) => statuses.push(snapshot.status));",
+        "const result = await task.start().done;",
+        "return JSON.stringify({ text: result.text, status: task.getSnapshot().status, statuses });",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const runStdout: Array<string> = [];
+    const runStderr: Array<string> = [];
+
+    try {
+      const runCode = await runCliForTest(["run", programPath, "--sync", "--json"], {
+        cwd: tempDirectory,
+        homeDirectory,
+        pathExists: async () => false,
+        io: {
+          stdout: (line) => {
+            runStdout.push(line);
+          },
+          stderr: (line) => {
+            runStderr.push(line);
+          },
+        },
+      });
+
+      expect(runCode).toBe(0);
+      expect(runStderr).toHaveLength(0);
+      expect(runStdout).toHaveLength(1);
+
+      const runPayload = Schema.decodeUnknownSync(RunSyncEnvelope)(runStdout[0]);
+      expect(runPayload.run.status).toBe("complete");
+      expect(runPayload.result.status).toBe("complete");
+      expect(runPayload.result.spawns).toHaveLength(1);
+      expect(runPayload.result.spawns[0]?.text).toBe("Hello from fake agent");
+
+      const resultFile = JSON.parse(await readFile(runPayload.run.paths.resultFile, "utf-8")) as {
+        readonly programResult?: string;
+      };
+      const programResult = JSON.parse(resultFile.programResult ?? "{}") as {
+        readonly text?: string;
+        readonly status?: string;
+        readonly statuses?: ReadonlyArray<string>;
+      };
+
+      expect(programResult).toEqual({
+        text: "Hello from fake agent",
+        status: "complete",
+        statuses: ["idle", "running", "complete"],
+      });
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("honors explicit --driver and --executor overrides for run --sync", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-cli-override-run-"));
     const homeDirectory = join(tempDirectory, "home");

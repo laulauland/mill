@@ -40,13 +40,16 @@ describe("task compatibility mapping", () => {
     });
   });
 
-  it("falls back to the provider driver as the legacy agent label", () => {
+  it("falls back to the provider driver as the legacy agent label and default system", () => {
     expect(
       taskInputToSpawnInput({
         agent: claude("anthropic/claude-sonnet-4-5"),
         prompt: "Plan the change.",
-      }).agent,
-    ).toBe("claude");
+      }),
+    ).toMatchObject({
+      agent: "claude",
+      systemPrompt: "You are a helpful coding agent.",
+    });
   });
 
   it("maps legacy spawn output to task result vocabulary", () => {

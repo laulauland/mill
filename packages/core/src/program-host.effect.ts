@@ -7,8 +7,10 @@ import {
   type ProgramHostInboundMessage,
   type ProgramHostResponseMessage,
 } from "./program-host.schema";
+import type { ProgramHostTaskOptions } from "./program-host.schema";
 import type { SpawnOptions, SpawnResult } from "./spawn.schema";
-import type { ExtensionRegistration } from "./types";
+import { spawnOutputToTaskResult, taskInputToSpawnInput } from "./task.api";
+import type { ExtensionRegistration, TaskResult } from "./types";
 
 export class ProgramHostError extends Data.TaggedError("ProgramHostError")<{
   runId: string;
@@ -95,14 +97,36 @@ const buildExtensionSpecs = (extensions: ReadonlyArray<ExtensionRegistration>) =
       methods: Object.keys(extension.api ?? {}),
     }));
 
+const splitProgramImports = (
+  source: string,
+): { readonly imports: ReadonlyArray<string>; readonly body: string } => {
+  const imports: Array<string> = [];
+  const body: Array<string> = [];
+
+  for (const line of source.split("\n")) {
+    if (line.trimStart().startsWith("import ")) {
+      imports.push(line);
+    } else {
+      body.push(line);
+    }
+  }
+
+  return {
+    imports,
+    body: body.join("\n"),
+  };
+};
+
 const createProgramHostSource = (
   input: Pick<ExecuteProgramInProcessHostInput, "executorName" | "programSource" | "extensions">,
 ): string => {
   const extensionSpecs = JSON.stringify(buildExtensionSpecs(input.extensions));
   const protocolPrefix = JSON.stringify(ProgramHostProtocolPrefix);
   const executorName = JSON.stringify(input.executorName);
+  const program = splitProgramImports(input.programSource);
 
   return [
+    ...program.imports,
     `const __millProtocolPrefix = ${protocolPrefix};`,
     `const __millExecutorName = ${executorName};`,
     `const __millExtensionSpecs = ${extensionSpecs};`,
@@ -176,12 +200,108 @@ const createProgramHostSource = (
     "    });",
     "  });",
     "",
+    "const __millTaskSnapshot = (taskId, input, status, extra = {}) => ({",
+    "  id: taskId,",
+    "  runId: undefined,",
+    '  ref: { runId: "program-host", taskId },',
+    "  status,",
+    "  input,",
+    '  text: "",',
+    '  thought: "",',
+    "  queue: [],",
+    "  ...extra,",
+    "});",
+    "",
+    "const __millTaskCancelledResult = (input, taskId, reason) => ({",
+    '  text: "",',
+    "  sessionRef: `task://program-host/${taskId}`,",
+    "  role: input.role ?? input.agent.driver,",
+    "  model: input.agent.model,",
+    "  driver: input.agent.driver,",
+    "  exitCode: 1,",
+    '  stopReason: "cancelled",',
+    '  errorMessage: reason ?? "Task cancelled",',
+    "});",
+    "",
+    "const __millCreateTaskActor = (input) => {",
+    "  __millRequestCounter += 1;",
+    "  const taskId = `task_${__millRequestCounter}`;",
+    "  const listeners = new Set();",
+    '  let snapshot = __millTaskSnapshot(taskId, input, "idle");',
+    "  let started = false;",
+    "  let terminal = false;",
+    "  let resolveDone;",
+    "  let rejectDone;",
+    "  const done = new Promise((resolve, reject) => {",
+    "    resolveDone = resolve;",
+    "    rejectDone = reject;",
+    "  });",
+    "  const publish = (next) => {",
+    "    snapshot = next;",
+    "    for (const listener of listeners) listener(snapshot);",
+    "  };",
+    "  const complete = (result) => {",
+    "    if (terminal) return;",
+    "    terminal = true;",
+    '    publish(__millTaskSnapshot(taskId, input, "complete", {',
+    '      text: String(result?.text ?? ""),',
+    "      sessionRef: result?.sessionRef,",
+    "      result,",
+    "    }));",
+    "    resolveDone(result);",
+    "  };",
+    "  const fail = (error) => {",
+    "    if (terminal) return;",
+    "    terminal = true;",
+    "    const message = error instanceof Error ? error.message : String(error);",
+    '    publish(__millTaskSnapshot(taskId, input, "failed", { error: message }));',
+    "    rejectDone(error);",
+    "  };",
+    "  const actor = {",
+    "    id: taskId,",
+    '    ref: { runId: "program-host", taskId },',
+    "    done,",
+    "    start: () => {",
+    "      if (started || terminal) return actor;",
+    "      started = true;",
+    '      publish(__millTaskSnapshot(taskId, input, "running"));',
+    '      __millCallHost({ requestType: "task", input }).then(complete, fail);',
+    "      return actor;",
+    "    },",
+    '    stop: () => actor.cancel("Task stopped"),',
+    "    cancel: (reason) => {",
+    "      if (terminal) return actor;",
+    "      terminal = true;",
+    "      const result = __millTaskCancelledResult(input, taskId, reason);",
+    '      publish(__millTaskSnapshot(taskId, input, "cancelled", {',
+    "        result,",
+    "        error: result.errorMessage,",
+    "      }));",
+    "      resolveDone(result);",
+    "      return actor;",
+    "    },",
+    "    send: (command) => {",
+    '      if (command?.type === "cancel") return actor.cancel(command.reason);',
+    '      publish({ ...snapshot, error: "Task steering commands are not implemented yet." });',
+    "      return actor;",
+    "    },",
+    "    subscribe: (listener) => {",
+    "      listeners.add(listener);",
+    "      listener(snapshot);",
+    "      return { unsubscribe: () => listeners.delete(listener) };",
+    "    },",
+    "    getSnapshot: () => snapshot,",
+    "  };",
+    "  return actor;",
+    "};",
+    "",
     "const __millApi = {",
     "  spawn: (input) =>",
     "    __millCallHost({",
     '      requestType: "spawn",',
     "      input,",
     "    }),",
+    "  task: (input) => __millCreateTaskActor(input),",
     "};",
     "",
     "for (const extension of __millExtensionSpecs) {",
@@ -203,7 +323,7 @@ const createProgramHostSource = (
     "globalThis.mill = __millApi;",
     "",
     "const __millProgram = async () => {",
-    input.programSource,
+    program.body,
     "};",
     "",
     "const __millRun = async () => {",
@@ -264,6 +384,12 @@ const completeResult = (
 
     return result;
   });
+
+const runProgramTask = (
+  spawn: ExecuteProgramInProcessHostInput["spawn"],
+  input: ProgramHostTaskOptions,
+): Effect.Effect<TaskResult, unknown> =>
+  Effect.map(spawn(taskInputToSpawnInput(input)), spawnOutputToTaskResult);
 
 export const executeProgramInProcessHost = (
   input: ExecuteProgramInProcessHostInput,
@@ -407,6 +533,28 @@ export const executeProgramInProcessHost = (
                 requestId: message.requestId,
                 ok: false,
                 message: summarizeCause(spawnExit.cause),
+              });
+              return;
+            }
+
+            if (message.requestType === "task") {
+              const taskExit = yield* Effect.exit(runProgramTask(input.spawn, message.input));
+
+              if (Exit.isSuccess(taskExit)) {
+                yield* sendResponse(responseQueue, {
+                  kind: "response",
+                  requestId: message.requestId,
+                  ok: true,
+                  value: taskExit.value,
+                });
+                return;
+              }
+
+              yield* sendResponse(responseQueue, {
+                kind: "response",
+                requestId: message.requestId,
+                ok: false,
+                message: summarizeCause(taskExit.cause),
               });
               return;
             }

@@ -5,11 +5,37 @@ export const ProgramHostProtocolPrefix = "__MILL_HOST__";
 
 const RequestId = Schema.NonEmptyString;
 
+const AgentProvider = Schema.Struct({
+  driver: Schema.NonEmptyString,
+  model: Schema.NonEmptyString,
+  displayName: Schema.optional(Schema.String),
+});
+
+const SteeringPolicy = Schema.Literal("queue", "interrupt", "reject");
+
+export const ProgramHostTaskOptions = Schema.Struct({
+  agent: AgentProvider,
+  prompt: Schema.NonEmptyString,
+  system: Schema.optional(Schema.NonEmptyString),
+  role: Schema.optional(Schema.NonEmptyString),
+  steering: Schema.optional(SteeringPolicy),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+});
+
+export type ProgramHostTaskOptions = Schema.Schema.Type<typeof ProgramHostTaskOptions>;
+
 export const ProgramHostSpawnRequestMessage = Schema.Struct({
   kind: Schema.Literal("request"),
   requestId: RequestId,
   requestType: Schema.Literal("spawn"),
   input: SpawnOptions,
+});
+
+export const ProgramHostTaskRequestMessage = Schema.Struct({
+  kind: Schema.Literal("request"),
+  requestId: RequestId,
+  requestType: Schema.Literal("task"),
+  input: ProgramHostTaskOptions,
 });
 
 export const ProgramHostExtensionRequestMessage = Schema.Struct({
@@ -35,6 +61,7 @@ export const ProgramHostFailureResultMessage = Schema.Struct({
 
 export const ProgramHostInboundMessage = Schema.Union([
   ProgramHostSpawnRequestMessage,
+  ProgramHostTaskRequestMessage,
   ProgramHostExtensionRequestMessage,
   ProgramHostSuccessResultMessage,
   ProgramHostFailureResultMessage,
