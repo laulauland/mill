@@ -1,6 +1,6 @@
-# mill v0 Toolchain, Invariants, Non-goals, and Order (Sections 19–23)
+# mill v0 Toolchain, Invariants, Non-goals, and Order
 
-_Source: `SPEC.md` (verbatim split for cedar-style docs tree)._
+_Source: `SPEC.md`, toolchain/reference split._
 
 ## 19) Constraint toolchain (cedar-style)
 
@@ -13,6 +13,7 @@ This is mandatory for mill repo setup.
 - `oxfmt` (format)
 - `tsgo` (`@typescript/native-preview`) for typecheck
 - `bun test` for tests
+- Effect v4 / effect-smol package line for runtime internals
 
 ### 19.2 Required files
 
@@ -49,13 +50,6 @@ scripts/
   check-exports.ts
 ```
 
-`sgconfig.yml` pattern (cedar-style):
-
-```yml
-ruleDirs:
-  - .ast-grep/rules
-```
-
 ### 19.3 Required scripts
 
 ```json
@@ -67,9 +61,6 @@ ruleDirs:
     "lint:fix": "oxlint . --fix",
     "lint:ast-grep:test": "ast-grep test --config .ast-grep/sgconfig.yml --skip-snapshot-tests",
     "lint:ast-grep": "bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety",
-    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import)'",
-    "lint:boundary": "ast-grep scan --config .ast-grep/sgconfig.yml src --error --filter 'no-(interface-outside-public|promise-outside-public|interface-for-domain-models|effect-runpromise|runtime-runpromise-outside-boundary|public-import-internal)'",
-    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random)'",
     "lint:exports": "bun run scripts/check-exports.ts",
     "format": "oxfmt . --write",
     "format:check": "oxfmt . --check",
@@ -78,77 +69,53 @@ ruleDirs:
 }
 ```
 
-### 19.4 Baseline lint/format config
+### 19.4 Guardrail intent
 
-`.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "env": { "builtin": true },
-  "categories": { "correctness": "error" },
-  "ignorePatterns": ["node_modules", ".jj", "dist"]
-}
-```
-
-`.oxfmtrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["node_modules", ".jj", "dist", "SPEC.md"]
-}
-```
-
-### 19.5 Guardrail intent
-
-- ban direct Bun globals (`Bun.spawn`, `Bun.file`, etc.) in core runtime
-- ban direct `node:` imports in app modules
-- ban untyped throw/catch/promise patterns
+- ban direct Bun globals in core runtime
+- ban direct `node:` imports in app modules unless explicitly allowlisted at public/CLI boundaries
+- ban untyped throw/catch/promise patterns in internals
 - enforce Effect-centric architecture and composability
 - enforce boundary policy:
-  - `no-interface-for-domain-models`: domain entities must come from `Schema`
-  - `no-interface-outside-public`: interfaces are allowed only in `*.api.ts`, `*.d.ts`, and explicit flat public entry allowlists (`src/index.ts`, `src/types.ts`)
-  - `no-promise-outside-public`: Promise-returning contracts are allowed only at user boundary files (`*.api.ts` plus approved flat public entry files)
-  - `no-effect-runpromise`: ban `Effect.runPromiseExit`; boundary adapters must use `Effect.runPromise`
-  - `no-runtime-runpromise-outside-boundary`: only `Effect.runPromise` may bridge, and only in boundary adapters
-  - `no-public-import-internal`: public API modules cannot import private internals directly
+  - domain entities must come from `Schema`
+  - interfaces are allowed only in public boundary files or method-only internal capability contracts
+  - Promise-returning contracts are allowed only at public boundary files
+  - `Effect.runPromise` is the only permitted Effect→Promise bridge
+  - public API modules cannot import private internals directly
 - enforce parsing/process/runtime safety:
-  - `no-json-parse-outside-codec`: restrict `JSON.parse` to decode modules and require Schema decode
-  - `no-shell-string-command`: disallow shell-eval process invocation patterns
-  - `no-process-env-outside-config`: restrict env reads to config/bootstrap
-  - `no-date-now-outside-clock`: force injected clock usage
-  - `no-math-random-outside-random`: force injected random service usage
+  - restrict `JSON.parse` to decode modules and require Schema decode
+  - disallow shell-eval process invocation patterns
+  - restrict env reads to config/bootstrap
+  - force injected clock/random services in internals
 
-Practical exception policy:
-
-- internal service capability interfaces (method-only, Effect return types) are allowed in `*.service.ts` / `*.effect.ts` through explicit ast-grep rule allow patterns
-- any interface with data fields outside approved public entry files is a lint error
-- codec/schema files are allowlisted for parsing operations; all downstream modules consume decoded typed values
-
-### 19.6 Required contract tests
+### 19.5 Required contract tests
 
 - `--json` mode contract tests:
   - stdout contains valid JSON/JSONL only
   - human-readable diagnostics are emitted to stderr only
 - lifecycle contract tests:
   - exactly one terminal event per run
-  - exactly one terminal event per spawn
+  - exactly one terminal outcome per task-backed driver call
   - no terminal -> non-terminal transitions
   - duplicate terminal emissions are ignored or rejected deterministically
+- task actor contract tests:
+  - `mill.task({ agent: codex(...) }).start().done` works in program host
+  - snapshots represent current reduced state
+  - steering policies produce honest queue/interrupt/reject snapshots
 
 ## 20) Invariants
 
 1. Every run has append-only tier-1 event log.
-2. Every spawn completion includes `sessionRef`.
-3. Engine persists orchestration state only (not full transcript).
-4. Public user APIs are Promise-based façades; internal APIs remain Effect-typed.
+2. Every task result includes `sessionRef` when backed by an agent session.
+3. Engine persists orchestration state only, not full vendor transcripts.
+4. Public user APIs are Promise-based façades; internal APIs remain Effect v4-typed.
 5. `--json` mode writes machine payloads to `stdout` only; human diagnostics go to `stderr`.
-6. Each run/spawn emits exactly one terminal event and never transitions afterward.
+6. Each run/task reaches one terminal outcome and never transitions afterward.
 7. All persisted tier-1 events include `schemaVersion` and decode via Schema unions.
 8. `Effect.runPromise` is the only permitted Effect→Promise bridge.
 9. Runtime/domain internals do not read `process.env`, `Date.now()`, or `Math.random()` directly.
 10. `mill run` returns immediately by default.
+11. Public docs use task vocabulary; historical `spawn` names are storage/internal details until fully migrated.
+12. `spawn-agent` remains internal to `@mill/driver-acp`.
 
 ## 21) v0 non-goals
 
@@ -156,35 +123,48 @@ Practical exception policy:
 - built-in template subcommands
 - advanced workflow DSLs beyond plain TS
 - driver hot-swapping policies inside program logic
+- exposing `spawn-agent` as mill public API
+- automatic live model discovery in normal CLI help
 
 ## 22) Implementation order
 
 1. Core domain schemas + error model
 2. RunStore + event append persistence
-3. Generic process driver + one codec (pi or claude)
-4. Engine submit/status/wait/watch/cancel
-5. Worker process + detached `run`
-6. `watch` channel finalization + cancellation bridge
-7. Extension hooks
-8. Guardrail toolchain + rules/tests
+3. Effect v4 baseline and guardrails
+4. Task vocabulary and provider factories
+5. Task actor handles, snapshots, and Promise boundary via `.done`
+6. Program-host injected `mill.task(...)`
+7. Steering snapshot policies
+8. ACP task sessions through internal `spawn-agent`
+9. CLI runtime facade over actor-compatible APIs
+10. Documentation and examples
 
 ## 23) Canonical program example
 
 ```ts
-const scan = await mill.spawn({
-  agent: "scout",
-  systemPrompt: "You are a code risk analyst. Prioritize highest-impact findings.",
-  prompt: "Review src/auth and summarize top security and reliability risks.",
-  model: "openai/gpt-5.3-codex",
-});
+import { claude, codex } from "@mill/core";
 
-const synth = await mill.spawn({
-  agent: "synth",
-  systemPrompt: "You turn findings into an execution-ready plan.",
-  prompt: `Create a step-by-step remediation plan from this analysis:\n\n${scan.text}`,
-});
+const scan = mill
+  .task({
+    agent: codex("openai-codex/gpt-5.3-codex"),
+    role: "scout",
+    system: "You are a code risk analyst. Prioritize highest-impact findings.",
+    prompt: "Review src/auth and summarize top security and reliability risks.",
+  })
+  .start();
 
-console.log(synth.text);
+const scanResult = await scan.done;
+
+const synth = mill
+  .task({
+    agent: claude("anthropic/claude-opus-4-6"),
+    role: "synth",
+    system: "You turn findings into an execution-ready plan.",
+    prompt: `Create a step-by-step remediation plan from this analysis:\n\n${scanResult.text}`,
+  })
+  .start();
+
+return await synth.done;
 ```
 
-This remains plain TypeScript orchestration with `await` / `Promise.all` and no DSL.
+This remains plain TypeScript orchestration with `await` / `Promise.all` and no DSL. The actors make state, snapshots, and future steering explicit.

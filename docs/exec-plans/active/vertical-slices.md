@@ -72,7 +72,7 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 **Acceptance criteria**
 
 1. **Test intent:** unit (schema/decode/store), integration (engine↔driver), e2e (`run --sync`).
-2. `mill run <program.ts> --sync --json` executes a program with injected `mill.spawn` and returns structured result.
+2. `mill run <program.ts> --sync --json` executes a program with injected `mill.task` actor API and returns structured result.
 3. Run directory includes `run.json`, `events.ndjson` (append-only), and `result.json` per SPEC §5.3.
 4. Persisted events decode through Schema discriminated union and include `schemaVersion`, `runId`, sequence, timestamp.
 5. `spawn:complete` payload includes non-empty `sessionRef` (SPEC invariant #2).

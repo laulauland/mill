@@ -4,60 +4,68 @@ _Source: `SPEC.md`, updated to reflect current CLI behavior._
 
 ## 1) Product definition
 
-`mill` is a runtime for executing TypeScript orchestration programs that spawn and coordinate AI agents.
+`mill` is a runtime for executing TypeScript orchestration programs that create and coordinate AI agent task actors.
 
-A mill program is regular TS (sequential with `await`, parallel with `Promise.all`), with one injected global API:
+A mill program is regular TS (sequential with `await`, parallel with `Promise.all`) with one injected global API:
 
-- `mill.spawn(...)` (core)
+- `mill.task(...)` for creating a task actor
 - extension-contributed APIs (optional)
+
+A task actor is started with `.start()`, exposes current state through snapshots, and resolves its final result through `.done`.
+
+```ts
+import { codex } from "@mill/core";
+
+const task = mill
+  .task({
+    agent: codex("openai-codex/gpt-5.3-codex"),
+    system: "You inspect code.",
+    prompt: "Review src/auth.",
+  })
+  .start();
+
+return await task.done;
+```
 
 `mill` stores orchestration state and structured run events. Agent conversations remain owned by each agent tool; mill keeps `sessionRef` pointers.
 
 ## 2) Hard constraints
 
-1. **Effect is the only execution system**
+1. **Effect v4 / effect-smol is the internal execution baseline**
    - No `async/await` in core runtime modules.
-   - No raw `Promise` construction.
-   - No `try/catch` control flow (except inside Effect wrappers where required by external APIs).
+   - No raw `Promise` construction outside public boundaries.
+   - No `try/catch` control flow except inside Effect wrappers required by external APIs.
 2. **Process execution through Effect platform abstractions**
-   - Drivers use Effect `Command` / process services.
-   - On Bun, these are provided by `@effect/platform-bun` (Bun-backed runtime under the hood).
+   - Drivers use Effect platform command/process services.
+   - On Bun, these are provided by `@effect/platform-bun`.
 3. **Minimal CLI surface**
    - No `spec` or `template` subcommands in v0.
 4. **Async-by-default runs**
    - `mill run <program.ts>` returns `runId` immediately unless `--sync` is passed.
 5. **Drivers are generic infra adapters**
    - No vendor-specific driver concepts in core contracts.
-   - Vendor specifics belong in codecs and config.
+   - Vendor specifics belong in drivers and config.
 6. **Boundary clarity is mandatory**
    - `*.api.ts` plus flat public entry files (`src/index.ts`, `src/types.ts`, `src/test-runtime.ts`, CLI `src/mill.ts`): user-facing Promise + interface contracts.
    - `*.effect.ts`, `*.schema.ts`, `*.codec.ts`: internal Effect contracts + Schema/codec implementation modules.
-   - Internal interfaces are capability-only (method signatures), never domain shape definitions.
-   - The boundary must be visible in filenames and enforced via ast-grep.
 7. **Promise bridge is explicit and singular**
    - Only `Effect.runPromise` is allowed as the Effect→Promise bridge.
    - It is allowed only at public boundary adapters (`*.api.ts`, approved flat entry files, CLI entry adapters).
-   - `Effect.runPromiseExit` and other non-boundary Promise bridges are disallowed.
 8. **No shell-string command execution**
-   - Drivers must construct commands as argument vectors (`Command.make(cmd, ...args)`).
-   - Shell-eval patterns (`sh -lc`, `bash -lc`, interpolated command strings) are disallowed.
+   - Drivers construct commands as argument vectors, never shell-eval strings.
 9. **Environment access is centralized**
    - `process.env` reads are allowed only in config/bootstrap loading modules.
-   - Internal runtime logic receives resolved values via services/config objects.
 10. **Time/random are injected**
 
-- `Date.now()` and `Math.random()` are disallowed in runtime/domain internals.
-- Use injected Effect services (`Clock`, `Random`) instead.
+- Runtime/domain internals use injected Effect services rather than ambient time/random.
 
 11. **Internal module boundaries are strict**
 
 - Public modules must not import private implementation files directly.
-- Package exports expose only public API entrypoints.
 
 12. **Terminal state is single-shot**
 
-- Each run/spawn emits exactly one terminal event (`complete` | `failed` | `cancelled`).
-- Terminal states are immutable and idempotent.
+- Each run/task emits exactly one terminal outcome (`complete` | `failed` | `cancelled`).
 
 ## 3) CLI surface (v0)
 
@@ -73,10 +81,10 @@ mill init [--global]
 
 Help + authoring guidance:
 
-- `mill` / `mill --help`: root help text with authoring guidance
-- `mill <command> --help`: command help text + authoring guidance
+- `mill` / `mill --help`: root help text with authoring guidance.
+- `mill <command> --help`: command help text + authoring guidance.
 - If resolved config overrides `authoring.instructions`, help uses that text.
-- Otherwise help falls back to static guidance (`systemPrompt` = WHO, `prompt` = WHAT).
+- Otherwise help falls back to static task guidance: choose an `agent` provider, use `system` for behavior, and use `prompt` for the work.
 
 No `discovery` subcommand in v0.
 
@@ -104,7 +112,7 @@ engine events -> watch/tui/automation
 All layers are orthogonal:
 
 - Executor = where program runs
-- Driver = how spawns invoke agents
+- Driver = how task actors invoke agents
 - Extension = hooks + extra API
 - Observer = event consumer
 
@@ -143,8 +151,10 @@ pending -> running -> complete
       logs/
         worker.log
       spawns/
-        <spawnId>.json         # optional derived spawn summary
+        <spawnId>.json         # current storage detail for derived task summaries
 ```
+
+Some persisted event/storage names still use historical `spawn` vocabulary. Public authoring docs use task actors.
 
 ## 6) Config contract (`mill.config.ts`)
 
@@ -157,7 +167,7 @@ export default {
   // defaultExecutor: "direct",
   authoring: {
     instructions:
-      "Use systemPrompt for WHO (role/method), prompt for WHAT (explicit task + scope + validation).",
+      "Create mill.task actors with agent providers. Use system for behavior and prompt for explicit scope + validation.",
   },
 };
 ```
@@ -187,8 +197,9 @@ Behavior:
 1. `mill` and `mill --help` print root help + authoring guidance.
 2. `mill <command> --help` prints command help + authoring guidance.
 3. If resolved config provides a custom `authoring.instructions` override, that text replaces static guidance in help output.
-4. If config does not override authoring instructions, help falls back to static guidance:
-   - `systemPrompt` = WHO the agent is
-   - `prompt` = WHAT to do now
+4. If config does not override authoring instructions, help falls back to static task actor guidance:
+   - `agent` = provider factory such as `codex(model)`, `claude(model)`, or `pi(model)`
+   - `system` = behavior/persona/method
+   - `prompt` = concrete work to do now
 
 There is no dedicated `discovery` subcommand in CLI v0.

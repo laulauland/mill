@@ -1,172 +1,129 @@
-# mill v0 Architecture & Boundaries (Sections 8–18)
+# mill v0 Architecture and Boundaries
 
-_Source: `SPEC.md` (verbatim split for cedar-style docs tree)._
+_Source: `SPEC.md`, Sections 8–18._
 
-## 8) Boundary contracts: public Promise API, internal Effect core
+## Boundary model
 
-Rule of thumb (strict):
+Mill is Effect v4 / effect-smol-first internally and Promise-friendly at public boundaries.
 
-- **User-exposed surface**: Promise-based API + interfaces are allowed.
-- **Everything else**: Effect-first (`Effect`, `Stream`, `Layer`) + Schema-defined domain types.
+- Public boundary files (`*.api.ts`, `src/index.ts`, `src/types.ts`, CLI entry adapters) may expose interfaces and Promise-returning APIs.
+- Internal runtime files (`*.effect.ts`) use `Effect`, `Stream`, `Layer`, `Ref`, and other Effect primitives.
+- Domain persistence files (`*.schema.ts`) define persisted data with `effect/Schema`.
+- Decode/encode files (`*.codec.ts`) own ad-hoc wire parsing.
 
-Concretely:
+Only `Effect.runPromise` may bridge Effect to Promise, and only at public boundaries. Today the main Promise surfaces are task actor `.done` and runtime facade methods. Future Effect-native APIs should be additive.
 
-- Public boundary (`*.api.ts`, approved flat entry files like `src/index.ts` / `src/types.ts`, ambient `*.d.ts`):
-  - can expose `Promise<T>`
-  - can use `interface` for ergonomics
-- Internal/domain/runtime (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`):
-  - no public Promise contracts
-  - domain shapes must be defined by `effect/Schema`
-  - no interface-based domain modelling
+## Public task actor API
 
-Effect contracts used internally:
-
-- effects: `Effect.Effect<A, E, R>`
-- streams: `Stream.Stream<A, E, R>`
-- layers: `Layer.Layer<ROut, E, RIn>`
-- queue/pubsub for event fanout
-- schemas via `effect/Schema`
-
-### 8.1 Domain schemas (representative)
+Authored mill programs use task actors:
 
 ```ts
-import * as Schema from "effect/Schema";
+import { codex } from "@mill/core";
 
-export const RunId = Schema.String.pipe(Schema.brand("RunId"));
-export type RunId = Schema.Schema.Type<typeof RunId>;
+const task = mill
+  .task({
+    agent: codex("openai-codex/gpt-5.3-codex"),
+    system: "You inspect code.",
+    prompt: "Review src/auth.",
+  })
+  .start();
 
-export const SpawnId = Schema.String.pipe(Schema.brand("SpawnId"));
-export type SpawnId = Schema.Schema.Type<typeof SpawnId>;
-
-export const RunStatus = Schema.Literal("pending", "running", "complete", "failed", "cancelled");
-export type RunStatus = Schema.Schema.Type<typeof RunStatus>;
-
-export const SpawnOptions = Schema.Struct({
-  agent: Schema.NonEmptyString,
-  systemPrompt: Schema.NonEmptyString,
-  prompt: Schema.NonEmptyString,
-  model: Schema.NonEmptyString,
-});
-
-export type SpawnOptions = Schema.Schema.Type<typeof SpawnOptions>;
-
-export const SpawnResult = Schema.Struct({
-  text: Schema.String,
-  sessionRef: Schema.NonEmptyString,
-  agent: Schema.NonEmptyString,
-  model: Schema.NonEmptyString,
-  driver: Schema.NonEmptyString,
-  exitCode: Schema.Number,
-  stopReason: Schema.optional(Schema.String),
-  errorMessage: Schema.optional(Schema.String),
-});
-
-export type SpawnResult = Schema.Schema.Type<typeof SpawnResult>;
+return await task.done;
 ```
 
-### 8.2 Error model
-
-All errors are tagged Effect data errors.
+Provider factories are pure data constructors exported by `@mill/core`:
 
 ```ts
-class ConfigError extends Data.TaggedError("ConfigError")<{ message: string }> {}
-class RunNotFoundError extends Data.TaggedError("RunNotFoundError")<{ runId: string }> {}
-class DriverError extends Data.TaggedError("DriverError")<{ driver: string; message: string }> {}
-class ProgramExecutionError extends Data.TaggedError("ProgramExecutionError")<{
-  runId: string;
-  message: string;
-}> {}
-class PersistenceError extends Data.TaggedError("PersistenceError")<{
-  path: string;
-  message: string;
-}> {}
+codex("openai-codex/gpt-5.3-codex");
+claude("anthropic/claude-opus-4-6");
+pi("your-pi-model-id");
 ```
 
-### 8.3 Core services
+`agent` chooses driver/model. `role` is optional human-facing task identity. `system` describes behavior. `prompt` describes the requested work.
 
-Service contracts may use `interface`, but only for **capabilities** (methods), not domain data modelling. Their methods remain Effect-typed.
+## Task actors, snapshots, and events
 
-```ts
-interface RunStore {
-  create(meta: RunMeta): Effect.Effect<void, PersistenceError>;
-  appendEvent(runId: RunId, event: MillEvent): Effect.Effect<void, PersistenceError>;
-  setStatus(runId: RunId, status: RunStatus): Effect.Effect<void, PersistenceError>;
-  setResult(runId: RunId, result: RunResult): Effect.Effect<void, PersistenceError>;
-  getRun(runId: RunId): Effect.Effect<RunRecord, RunNotFoundError | PersistenceError>;
-  listRuns(filter?: RunFilter): Effect.Effect<ReadonlyArray<RunRecord>, PersistenceError>;
-}
+A task actor exposes:
 
-interface Driver {
-  readonly name: string;
-  readonly spawn: (
-    input: DriverSpawnInput,
-  ) => Effect.Effect<DriverSpawnHandle, DriverError, Scope.Scope>;
-}
+- `start()` to begin work
+- `send(command)` for steering intent
+- `cancel(reason?)` / `stop()` for cancellation intent
+- `subscribe(listener)` for snapshot updates
+- `getSnapshot()` for current state
+- `done` for final result
 
-interface DriverSpawnHandle {
-  readonly events: Stream.Stream<DriverEvent, DriverError>;
-  readonly raw: Stream.Stream<Uint8Array, never>;
-  readonly result: Effect.Effect<SpawnResult, DriverError>;
-  readonly cancel: Effect.Effect<void, never>;
-}
+Events are append-only facts persisted in `events.ndjson`. Snapshots are current reduced state derived from actor state/events: status, accumulated text, queued commands, session pointer, terminal result, or error.
 
-interface Executor {
-  readonly name: string;
-  readonly runProgram: (
-    input: ProgramRunInput,
-  ) => Effect.Effect<ProgramRunHandle, ProgramExecutionError, Scope.Scope>;
-}
+Current task statuses are:
 
-interface ProgramRunHandle {
-  readonly events: Stream.Stream<MillEvent, ProgramExecutionError>;
-  readonly result: Effect.Effect<RunResult, ProgramExecutionError>;
-  readonly cancel: Effect.Effect<void, never>;
-}
+```text
+idle -> starting -> running -> waiting -> complete
+                         |        |       -> failed
+                         |        |       -> cancelled
+                         |        -> queued
+                         -> interrupting
 ```
 
-### 8.4 Engine service
+This diagram is descriptive; implementations may skip intermediate statuses when work completes quickly.
 
-```ts
-interface MillEngine {
-  submit(
-    input: SubmitRunInput,
-  ): Effect.Effect<SubmitRunOutput, ConfigError | PersistenceError | ProgramExecutionError>;
-  runSync(
-    input: SubmitRunInput,
-  ): Effect.Effect<RunResult, ConfigError | PersistenceError | ProgramExecutionError>;
-  status(runId: RunId): Effect.Effect<RunRecord, RunNotFoundError | PersistenceError>;
-  wait(
-    runId: RunId,
-    timeout: Duration.DurationInput,
-  ): Effect.Effect<RunRecord, RunNotFoundError | PersistenceError>;
-  watch(runId: RunId): Stream.Stream<MillEvent, RunNotFoundError | PersistenceError>;
-  cancel(runId: RunId): Effect.Effect<void, RunNotFoundError | PersistenceError>;
-  inspect(ref: RunOrSpawnRef): Effect.Effect<InspectResult, RunNotFoundError | PersistenceError>;
-}
+## Steering status
+
+Core actor snapshots model three policies:
+
+- `queue`: record the command for the next turn when the task is busy
+- `interrupt`: move toward interrupting/cancelling the active turn before applying the command
+- `reject`: reject commands that cannot be applied immediately
+
+Current limitations are intentional and documented:
+
+- Program-host task actors expose the actor shape and snapshot transitions for authored programs.
+- `@mill/driver-acp` has session-level multi-turn/cancel support through internal `spawn-agent` integration.
+- Durable end-to-end steering from a running program through the run store into a live ACP session is still incremental.
+
+## Runtime topology
+
+```text
+mill program (TS)
+  -> executor (direct | vm)
+    -> engine (run lifecycle, task API injection, events, persistence)
+      -> driver (generic)
+        -> agent process / remote endpoint
+
+engine events -> watch/tui/automation
 ```
 
-### 8.5 Effect runtime primitives used in mill
+Executor, driver, extension, and observer layers remain orthogonal.
 
-`mill` implementation uses these Effect modules as first-class building blocks:
+## Driver boundary
 
-- `Effect.gen`, `Effect.scoped`, `Effect.acquireRelease`, `Effect.timeout`, `Effect.retry`, `Effect.interrupt`
-- `Fiber` / `FiberSet` for supervised detached run workers
-- `Queue` for per-run ordered event buffering
-- `PubSub` for fanout to multiple live watchers
-- `Stream` for driver output decoding and watch subscriptions
-- `Ref` / `SynchronizedRef` for in-memory run registry snapshots
-- `Layer` + `Context.Tag` for all services (`RunStore`, `DriverRegistry`, `ExecutorRegistry`, `Clock`, etc.)
-- `Effect` for bridging program-facing Promise API (`mill.spawn(): Promise<...>`) to internal Effects via **only** `Effect.runPromise`
+Core does not encode vendor semantics. Drivers translate task execution into agent protocol work.
 
-Target platform services:
+`@mill/driver-acp` is the built-in ACP driver package for Claude, Codex, and pi. It uses `spawn-agent` internally for ACP v1 process/session handling, model config options, cancellation, and multi-turn session support. `spawn-agent` is not part of the public mill API.
 
-- `effect/unstable/process`
-- `effect/FileSystem`
-- `@effect/platform-bun` runtime layer for Bun-backed implementations
+Static model catalogs remain the source for normal CLI help. Live ACP config/model discovery should be explicit if added later, because it creates sessions.
 
-### 8.6 Package baseline (Effect v4 target)
+## CLI and runtime facade
 
-`mill` pins to Effect v4-compatible package line:
+CLI lifecycle commands remain:
+
+```bash
+mill run <program.ts> [--sync] [--json]
+mill status <runId> [--json]
+mill wait <runId> --timeout <seconds> [--json]
+mill watch [--run <runId>] [--channel events|io|all] [--json]
+mill cancel <runId> [--json]
+mill ls [--json]
+```
+
+Internally the CLI should stay a thin wrapper over the runtime facade / actor-compatible boundaries, while preserving terminal UX and JSON contracts.
+
+## Storage/event vocabulary
+
+Public docs use task vocabulary. Some persisted event and storage names still use historical `spawn:*` / `spawnId` vocabulary because the current driver/event pipeline has not been fully renamed. Treat those names as storage details, not the primary public authoring API.
+
+## Effect v4 package baseline
+
+Mill targets the Effect v4 package line:
 
 ```json
 {
@@ -177,326 +134,27 @@ Target platform services:
 }
 ```
 
-(Exact minor versions are implementation-time decisions; API usage must stay within documented stable modules.)
+Patch versions may move together. New internal code must follow Effect v4 module names and API shapes.
 
-### 8.7 File layout + naming (boundary is visible in filenames)
+## File layout
 
 ```text
 src/
   index.ts                   # public package barrel / package entrypoint
   types.ts                   # user-facing interfaces allowed
   *.api.ts                   # Promise-based public adapters
-  *.schema.ts                # Schema-based domain models (no interfaces)
+  *.schema.ts                # Schema-based domain models
   *.effect.ts                # internal Effect programs/services/runtime helpers
   *.codec.ts                 # decode/encode modules
   test-runtime.ts            # test-only boundary helper
   mill.ts                    # CLI executable entrypoint (cli package)
 ```
 
-Naming rules:
-
-- `*.api.ts` => user boundary (Promise + interfaces allowed)
-- `*.schema.ts` => domain data contracts (`Schema` + `Schema.Type` exports)
-- `*.effect.ts` => internal runtime/effectful orchestration code
-
-If a file defines domain entities and is not `*.schema.ts`, it is considered a spec violation.
-
-### 8.8 Quick classification examples
-
-Allowed (public boundary):
-
-```ts
-// src/mill.api.ts
-export interface Mill {
-  spawn(input: SpawnInput): Promise<SpawnOutput>;
-}
-```
-
-Required (internal):
-
-```ts
-// src/engine.effect.ts
-export const submit = (
-  input: SubmitRunInput,
-): Effect.Effect<SubmitRunOutput, SubmitError, RunStore | DriverRegistry> =>
-  Effect.gen(function* () {
-    // ...
-  });
-```
-
-Required (domain):
-
-```ts
-// src/run.schema.ts
-export const RunRecord = Schema.Struct({
-  id: RunId,
-  status: RunStatus,
-  startedAt: Schema.String,
-});
-export type RunRecord = Schema.Schema.Type<typeof RunRecord>;
-```
-
-Disallowed:
-
-```ts
-// src/run.ts
-export interface RunRecord {
-  // lint error
-  id: string;
-  status: string;
-}
-```
-
-### 8.9 Promise bridge and decode boundaries
-
-- Allowed bridge:
-  - `Effect.runPromise` only
-- Disallowed bridges:
-  - `Effect.runPromise`
-  - `Effect.runPromiseExit`
-  - `Effect.runPromiseExit`
-- Bridge location:
-  - boundary adapters only (`*.api.ts`, approved flat entry files, CLI boundary entrypoints)
-
-Decode policy:
-
-- `JSON.parse` is only allowed in codec/schema decoding modules (`*.codec.ts`, `*.schema.ts`).
-- Parsed values must be validated with `Schema.decodeUnknown*` before use.
-- Ad-hoc parsing in engine/runtime/business modules is disallowed.
-
-## 9) Event model
-
-Two tiers:
-
-### Tier 1 (structured, persisted)
-
-Required core events:
-
-- `run:start`
-- `run:status`
-- `run:complete`
-- `run:failed`
-- `run:cancelled`
-- `spawn:start`
-- `spawn:milestone`
-- `spawn:tool_call`
-- `spawn:error`
-- `spawn:complete`
-- `spawn:cancelled`
-
-All tier-1 events must include:
-
-- `schemaVersion` (integer, starts at `1`)
-- `runId`
-- event `type` (discriminant)
-- monotonic sequence number
-- timestamp
-
-Encoding/decoding requirements:
-
-- persisted event payloads are defined as a Schema discriminated union
-- writers encode from typed values
-- readers decode with `Schema.decodeUnknown*`
-- unknown schema versions are surfaced as typed decode errors
-
-Tier 1 is written to `events.ndjson` and is the source for `watch` (events channel), `status`/`wait` terminal checks, and extensions.
-
-### Tier 1 lifecycle invariants
-
-Exactly one terminal event is allowed per run and per spawn:
-
-- run terminal set: `run:complete | run:failed | run:cancelled`
-- spawn terminal set: `spawn:complete | spawn:error | spawn:cancelled`
-
-Transition table:
-
-```text
-run:   pending -> running -> complete|failed|cancelled
-spawn: pending -> running -> complete|error|cancelled
-```
-
-Terminal states have no outgoing transitions.
-`mill wait` resolves on first observed terminal event and treats additional terminal events as invariant violations.
-
-### Tier 2 (io passthrough, ephemeral)
-
-- line-oriented IO from driver/program streams
-- available live via `watch --channel io` (or merged via `watch --channel all`)
-- not persisted by engine
-
-## 10) Driver architecture
-
-### 10.1 Generic driver + codec split
-
-Core does not encode vendor semantics.
-
-- `processDriver(...)` and `httpDriver(...)` are generic factories.
-- `codec` parses native output into `DriverEvent` + `SpawnResult`.
-
-```ts
-interface DriverCodec {
-  readonly decodeEvent: (
-    chunk: Uint8Array,
-  ) => Effect.Effect<ReadonlyArray<DriverEvent>, CodecError>;
-  readonly decodeFinal: (
-    aggregate: ReadonlyArray<Uint8Array>,
-  ) => Effect.Effect<SpawnResult, CodecError>;
-  readonly modelCatalog: Effect.Effect<ReadonlyArray<string>, never>;
-}
-```
-
-### 10.2 Process driver execution (Bun-backed via Effect)
-
-Driver process spawning MUST be implemented with Effect platform command APIs and Bun context layer.
-
-Implementation pattern:
-
-1. Build command (`Command.make(command, ...args)`)
-2. Apply env/cwd/stdin
-3. Start process via platform `Command` executor
-4. Consume stdout/stderr as `Stream`
-5. Parse via codec to structured events
-6. Await exit code and final decode
-
-Command safety requirements:
-
-- commands must be built as arg vectors (`Command.make(cmd, ...args)`)
-- `sh -lc`, `bash -lc`, and interpolated shell command strings are disallowed
-- untrusted/user-provided values must flow as args, never shell source text
-
-The implementation layer includes `@effect/platform-bun` runtime context so process operations are backed by Bun spawn internally while preserving typed Effect semantics.
-
-## 11) Executor architecture
-
-### 11.1 Direct executor (default)
-
-- executes the TS program using Bun in local environment
-- injects `globalThis.mill`
-- enforces scoped lifecycle and cancellation
-
-### 11.2 VM executor (optional)
-
-- same engine contracts
-- runs program in sandboxed runtime (docker/firecracker/gvisor)
-
-Executor has no driver knowledge.
-
-## 12) Program API injected into runtime
-
-This is a **user-facing boundary**, so Promise-returning signatures are intentional.
-
-```ts
-declare global {
-  const mill: {
-    spawn(opts: SpawnOptions): Promise<SpawnResult>;
-    // extension APIs merged in at runtime
-    [key: string]: unknown;
-  };
-}
-```
-
-Runtime validation:
-
-- `systemPrompt` must be non-empty
-- `prompt` must be non-empty
-- `agent` must be non-empty
-
-Behavior:
-
-- each `spawn` allocates `spawnId`
-- engine emits `spawn:start`
-- driver handle streams events
-- engine maps to tier-1 events and persists
-- resolve final `SpawnResult`
-
-## 13) Background worker process
-
-Internal worker command (private API):
-
-```bash
-mill _worker --run-id <id> --program <abs-path> --config <resolved-config> [--driver ...] [--executor ...]
-```
-
-Worker responsibilities:
-
-1. mark run `running`
-2. execute program through engine
-3. append tier-1 events
-4. write final `result.json`
-5. mark terminal status exactly once (idempotent finalize)
-
-CLI `run` command only submits and detaches worker (unless `--sync`).
-
-## 14) Extensions
-
-```ts
-interface Extension {
-  readonly name: string;
-  readonly setup?: (ctx: ExtensionContext) => Effect.Effect<void, ExtensionError, Scope.Scope>;
-  readonly onEvent?: (
-    event: MillEvent,
-    ctx: ExtensionContext,
-  ) => Effect.Effect<void, ExtensionError>;
-  readonly api?: Record<string, (...args: ReadonlyArray<unknown>) => Promise<unknown>>;
-}
-```
-
-Rules:
-
-- Extension failure does not crash engine by default; failure becomes `extension:error` event.
-- `api` contributions are namespaced into injected `mill` object.
-- Extension hooks (`setup`, `onEvent`) stay Effect-native.
-- Extension `api` is user-facing, therefore Promise-based by contract.
-- Promise adapters for extension API must use `Effect.runPromise` as the only bridge.
-
-## 15) Observers
-
-Observers consume tier-1 stream (and optionally tier-2 live io stream):
-
-- `mill watch --channel events`
-- `mill watch --channel io|all`
-- future TUI/web UI
-- automation reading NDJSON
-
-Observers are read-only; they do not mutate engine state.
-
-## 16) Session ownership + pointers
-
-Spawn `sessionRef` values are emitted in `spawn:complete` events and summarized in `result.json`.
-
-Engine never normalizes full transcript ownership.
-
-## 17) Cancellation semantics
-
-`mill cancel <runId>`:
-
-1. mark run as cancelling
-2. interrupt worker fiber
-3. propagate cancel to all live spawn handles (`handle.cancel`)
-4. append `run:cancelled` (only if run is not already terminal)
-5. mark terminal state `cancelled`
-
-Cancellation must be interruption-safe and idempotent.
-If run is already terminal, cancellation is a no-op.
-
-## 18) SDK contract (`@mill/core`)
-
-```ts
-interface CreateEngineInput {
-  readonly config: MillConfig;
-}
-
-declare const createEngine: (
-  input: CreateEngineInput,
-) => Effect.Effect<MillEngine, ConfigError, Scope.Scope>;
-```
-
-CLI is a thin wrapper around SDK service methods.
-
-### 18.1 Package export boundary
-
-`package.json` exports must expose only public entrypoints (`src/index.ts` and other explicit public barrels).
-
-- consumers must not import non-exported implementation files (`*.effect.ts`, `*.schema.ts`, `*.codec.ts`) directly
-- internal modules are considered private implementation detail
-- CI should fail if an internal path is exported
+## Invariants
+
+1. Public examples use `mill.task({ agent: codex(...) })`.
+2. Internal runtime code remains Effect-first.
+3. Promise bridging happens only at approved boundaries.
+4. CLI lifecycle commands remain stable.
+5. Snapshots describe current state; events describe history.
+6. `spawn-agent` stays internal to `@mill/driver-acp`.

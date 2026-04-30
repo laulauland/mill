@@ -1,8 +1,8 @@
 # pi-mill
 
-A [pi](https://pi.dev) extension that adds a `subagent` tool, letting your AI coding agent spawn and orchestrate child agents through [mill](https://github.com/laulauland/mill).
+A [pi](https://pi.dev) extension that adds a `subagent` tool, letting your AI coding agent create and monitor delegated mill task runs.
 
-When the orchestrating agent needs to delegate work — run tasks in parallel, assign specialized roles, or break a problem into sub-tasks — it writes a short TypeScript program using `mill.spawn()`. Each spawn becomes a mill run, which means driver selection, model routing, and session management all come from your mill config rather than being hardcoded.
+When the orchestrating agent needs to delegate work — run tasks in parallel, assign specialized roles, or break a problem into sub-tasks — it writes a short TypeScript program using `mill.task(...)`. Each task program runs through mill, so driver selection, model routing, run storage, and session management come from your mill config rather than being hardcoded in the extension.
 
 ## Install
 
@@ -27,42 +27,65 @@ pi install /path/to/mill/packages/pi-mill
 
 The extension registers a `subagent` tool that accepts two parameters: a `task` label and a `code` string containing TypeScript.
 
-The code runs with a `mill` global (similar to `process` or `console`). The core method is `mill.spawn()`:
+The code runs with a `mill` global (similar to `process` or `console`). The primary method is `mill.task(...)`, which creates a task actor. Start the actor with `.start()` and await `.done` for the final result:
 
 ```ts
-// Sequential — one agent after another
-const analysis = await mill.spawn({
-  agent: "analyzer",
-  systemPrompt: "You analyze codebases for architectural patterns.",
-  prompt: "Analyze the auth module in src/auth/",
-  model: "anthropic/claude-sonnet-4-6",
-});
+import { claude, codex } from "@mill/core";
 
-const fix = await mill.spawn({
-  agent: "fixer",
-  systemPrompt: "You fix code issues.",
-  prompt: `Fix the issues found: ${analysis.text}`,
-  model: "openai-codex/gpt-5.3-codex",
-});
+// Sequential — one task after another
+const analysis = mill
+  .task({
+    agent: claude("anthropic/claude-sonnet-4-6"),
+    role: "analyzer",
+    system: "You analyze codebases for architectural patterns.",
+    prompt: "Analyze the auth module in src/auth/",
+  })
+  .start();
 
-// Parallel — multiple agents at once
-const [tests, docs] = await Promise.all([
-  mill.spawn({
-    agent: "test-writer",
-    systemPrompt: "You write tests.",
-    prompt: "Write tests for src/auth/",
-    model: "anthropic/claude-sonnet-4-6",
-  }),
-  mill.spawn({
-    agent: "documenter",
-    systemPrompt: "You write documentation.",
-    prompt: "Document the auth module.",
-    model: "cerebras/zai-glm-4.7",
-  }),
-]);
+const analysisResult = await analysis.done;
+
+const fix = mill
+  .task({
+    agent: codex("openai-codex/gpt-5.3-codex"),
+    role: "fixer",
+    system: "You fix code issues.",
+    prompt: `Fix the issues found: ${analysisResult.text}`,
+  })
+  .start();
+
+return await fix.done;
 ```
 
-Each `mill.spawn()` submits an async mill run (`mill run --json`) and then follows completion via mill APIs (`wait` + `watch --channel events`). Model selection, driver routing, and execution behavior all come from your mill configuration.
+Parallel work is just multiple task actors:
+
+```ts
+import { claude, pi } from "@mill/core";
+
+const tests = mill
+  .task({
+    agent: claude("anthropic/claude-sonnet-4-6"),
+    role: "test-writer",
+    system: "You write tests.",
+    prompt: "Write tests for src/auth/",
+  })
+  .start();
+
+const docs = mill
+  .task({
+    agent: pi("cerebras/zai-glm-4.7"),
+    role: "documenter",
+    system: "You write documentation.",
+    prompt: "Document the auth module.",
+  })
+  .start();
+
+const [testResult, docsResult] = await Promise.all([tests.done, docs.done]);
+return `${testResult.text}\n\n${docsResult.text}`;
+```
+
+Each submitted program becomes an async mill run (`mill run --json`) and pi-mill follows completion via mill runtime APIs (`wait` + `watch --channel events`). Model selection, driver routing, and execution behavior all come from your mill configuration.
+
+Task actor snapshots expose current reduced state for UIs: `idle`, `starting`, `running`, `waiting`, `queued`, `interrupting`, `complete`, `failed`, or `cancelled`, plus accumulated text, queue, result, or error. Events remain the append-only history in mill's run store.
 
 By default, mill run storage uses mill's global default (`~/.mill/runs`) unless you explicitly pass `--runs-dir` (or set `millRunsDir`).
 
@@ -92,14 +115,14 @@ export const config = {
 };
 ```
 
-| Option        | Description                                                                                                           |
-| ------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `maxDepth`    | Subagent nesting limit. `1` = agents can spawn subagents, but those subagents cannot spawn their own. `0` = disabled. |
-| `millCommand` | Executable name or path for mill. If set to `"mill"` (default), pi-mill prefers a bundled CLI when present.           |
-| `millArgs`    | Extra args prepended to every mill invocation.                                                                        |
-| `millRunsDir` | Override for `--runs-dir`.                                                                                            |
-| `prompt`      | Additional guidance appended to the tool description (model selection hints, project conventions, etc).               |
+| Option        | Description                                                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `maxDepth`    | Subagent nesting limit. `1` = agents can create child mill runs, but those children cannot create their own. `0` = disabled. |
+| `millCommand` | Executable name or path for mill. If set to `"mill"` (default), pi-mill prefers a bundled CLI when present.                  |
+| `millArgs`    | Extra args prepended to every mill invocation.                                                                               |
+| `millRunsDir` | Override for `--runs-dir`.                                                                                                   |
+| `prompt`      | Additional guidance appended to the tool description (model selection hints, project conventions, etc).                      |
 
 ## Context flow
 
-Each subagent receives the parent session path and can use `search_thread` to explore the orchestrator's conversation for context. Results include each subagent's `sessionPath` (session reference, typically a `.jsonl` path for pi driver) for later inspection and context recovery.
+Each subagent receives the parent session path and can use `search_thread` to explore the orchestrator's conversation for context. Results include each subagent's `sessionPath` (session reference, typically provided by the selected ACP agent) for later inspection and context recovery.

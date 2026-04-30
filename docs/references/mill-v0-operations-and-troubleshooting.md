@@ -5,7 +5,7 @@ Operational conventions for diagnosing stuck runs, cancellations, and stale UI s
 ## 1) Source of truth for run state
 
 - **Canonical:** `mill status <runId> --json` and `run.json` under the run directory.
-- **Advisory only:** extension-local mirrors (widget/monitor caches, historical `run.json` snapshots in pi session folders).
+- **Advisory only:** extension-local mirrors (widget/monitor caches, historical run snapshots in pi session folders).
 
 When in doubt, always trust canonical mill state.
 
@@ -14,7 +14,7 @@ When in doubt, always trust canonical mill state.
 `mill cancel <runId>` performs two steps:
 
 1. **Logical cancel**
-   - Appends `run:cancelled` (if needed)
+   - Appends `run:cancelled` if needed
    - Sets run status to `cancelled`
 2. **Physical cancel**
    - Reads `worker.pid`
@@ -22,7 +22,7 @@ When in doubt, always trust canonical mill state.
    - Sends `SIGTERM` to worker + descendants
    - After a short grace period, sends `SIGKILL` to survivors
 
-Cancel behavior is idempotent at run-state level.
+Cancel behavior is idempotent at run-state level. Task-level actor cancellation and ACP session cancellation exist in the core/driver layers, but full durable command propagation is still incremental.
 
 ## 3) On-disk artifacts to inspect
 
@@ -34,21 +34,19 @@ For run `<runId>` in runs dir `<runsDir>`:
 - `<runsDir>/<runId>/worker.pid` (best effort)
 - `<runsDir>/<runId>/logs/worker.log`
 - `<runsDir>/<runId>/logs/cancel.log`
-- `<runsDir>/<runId>/sessions/<spawnId>.jsonl` (pi driver transcripts)
 
-## 4) Session behavior (pi driver)
+Some older/current driver artifacts may still use `spawnId` naming. Treat that as storage vocabulary; public authored programs use task actors.
 
-pi driver uses explicit per-spawn session files:
+## 4) Session behavior (ACP drivers)
 
-- `--session <runDir>/sessions/<spawnId>.jsonl`
-- `sessionRef` in spawn result points to that file path
+The built-in ACP driver package uses `spawn-agent` internally for process/session handling. Task results include a `sessionRef` that points to the backing agent session when available.
 
-This keeps transcripts available for post-hoc debugging and parent-orchestrator context recovery.
+`spawn-agent` is an internal `@mill/driver-acp` implementation detail, not a public mill API.
 
 ## 5) Fast triage checklist for "run stuck in running"
 
 1. `mill watch --run <runId> --channel events --json`
-   - if you only see `spawn:start` and no `spawn:complete`, the child driver call is still in-flight.
+   - if you only see a task/driver start event and no terminal event, the child driver call is still in-flight.
 2. Check process liveness using `worker.pid` + OS process list.
 3. `mill cancel <runId> --json`
 4. Read `logs/cancel.log`
