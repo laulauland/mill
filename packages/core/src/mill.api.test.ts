@@ -30,7 +30,7 @@ describe("createMill", () => {
 
     expect(result.role).toBe("scout");
     expect(result.model).toBe("openai-codex/gpt-5.3-codex");
-    expect(result.driver).toBe("default");
+    expect(result.driver).toBe("codex");
   });
 
   it("creates task actors without starting them", async () => {

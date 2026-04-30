@@ -14,6 +14,7 @@ import type {
   DriverTaskSession,
   DriverTaskSessionInput,
   DriverTaskTurnInput,
+  DriverTaskTurnOutput,
 } from "@mill/core";
 
 export class AcpClientError extends Data.TaggedError("AcpClientError")<{
@@ -153,7 +154,7 @@ const collectPrompt = (
   turn: DriverTaskTurnInput,
   sessionId: string,
   setActiveStream: (stream: AgentStream | undefined) => void,
-): Effect.Effect<DriverSpawnOutput, AcpClientError> =>
+): Effect.Effect<DriverTaskTurnOutput, AcpClientError> =>
   Effect.tryPromise({
     try: async () => {
       const configOptions = agent.configOptionsFor(sessionId);
@@ -180,13 +181,13 @@ const collectPrompt = (
           result: {
             text: result.text,
             sessionRef: sessionId,
-            agent: input.agent,
+            role: input.agent,
             model: input.model,
             driver: "acp",
             exitCode: mapStopReasonToExitCode(stopReason),
             stopReason: mapStopReason(stopReason),
           },
-        } satisfies DriverSpawnOutput;
+        } satisfies DriverTaskTurnOutput;
       } finally {
         setActiveStream(undefined);
       }
@@ -275,5 +276,20 @@ export const runAcpSession = (
       (taskSession) => Effect.orDie(taskSession.close()),
     );
 
-    return yield* session.startTurn({ prompt: input.prompt });
+    const turnOutput = yield* session.startTurn({ prompt: input.prompt });
+
+    return {
+      events: turnOutput.events,
+      raw: turnOutput.raw,
+      result: {
+        text: turnOutput.result.text,
+        sessionRef: turnOutput.result.sessionRef,
+        agent: turnOutput.result.role,
+        model: turnOutput.result.model,
+        driver: turnOutput.result.driver,
+        exitCode: turnOutput.result.exitCode,
+        stopReason: turnOutput.result.stopReason,
+        errorMessage: turnOutput.result.errorMessage,
+      },
+    } satisfies DriverSpawnOutput;
   });

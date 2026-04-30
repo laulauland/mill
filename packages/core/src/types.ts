@@ -174,6 +174,12 @@ export interface DriverSpawnOutput {
   readonly result: SpawnOutput;
 }
 
+export interface DriverTaskTurnOutput {
+  readonly events: ReadonlyArray<DriverSpawnEvent>;
+  readonly raw?: ReadonlyArray<string>;
+  readonly result: TaskResult;
+}
+
 export interface DriverTaskSessionInput {
   readonly runId: string;
   readonly runDirectory: string;
@@ -189,7 +195,7 @@ export interface DriverTaskTurnInput {
 
 export interface DriverTaskSession {
   readonly sessionRef: string;
-  readonly startTurn: (input: DriverTaskTurnInput) => Effect.Effect<DriverSpawnOutput, unknown>;
+  readonly startTurn: (input: DriverTaskTurnInput) => Effect.Effect<DriverTaskTurnOutput, unknown>;
   readonly cancelTurn: (reason?: string) => Effect.Effect<void, unknown>;
   readonly close: () => Effect.Effect<void, unknown>;
 }

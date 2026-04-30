@@ -109,6 +109,29 @@ const makeConfig = (): MillConfig => ({
               exitCode: 0,
             },
           }),
+        createTaskSession: (input) =>
+          Effect.succeed({
+            sessionRef: `task-session/codex/${input.agent}`,
+            startTurn: (turn) =>
+              Effect.succeed({
+                events: [
+                  {
+                    type: "milestone",
+                    message: `codex-task:${input.agent}`,
+                  },
+                ],
+                result: {
+                  text: `codex-task:${turn.prompt}`,
+                  sessionRef: `task-session/codex/${input.agent}`,
+                  role: input.agent,
+                  model: input.model,
+                  driver: "codex",
+                  exitCode: 0,
+                },
+              }),
+            cancelTurn: () => Effect.void,
+            close: () => Effect.void,
+          }),
       },
     },
   },
@@ -207,7 +230,7 @@ describe("run.api integration", () => {
 
       if ("run" in output) {
         expect(output.run.driver).toBe("codex");
-        expect(output.result.programResult).toBe("codex:from runtime");
+        expect(output.result.programResult).toBe("codex-task:from runtime");
       }
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
@@ -363,7 +386,7 @@ describe("run.api integration", () => {
       };
 
       expect(parsed).toEqual({
-        text: "codex:Say hello from task",
+        text: "codex-task:Say hello from task",
         driver: "codex",
         status: "complete",
         statuses: ["idle", "running", "complete"],

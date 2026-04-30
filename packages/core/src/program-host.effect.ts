@@ -9,8 +9,7 @@ import {
 } from "./program-host.schema";
 import type { ProgramHostTaskOptions } from "./program-host.schema";
 import type { SpawnOptions, SpawnResult } from "./spawn.schema";
-import { spawnOutputToTaskResult, taskInputToSpawnInput } from "./task.api";
-import type { ExtensionRegistration, TaskResult } from "./types";
+import type { ExtensionRegistration, TaskInput, TaskResult } from "./types";
 
 export class ProgramHostError extends Data.TaggedError("ProgramHostError")<{
   runId: string;
@@ -27,6 +26,7 @@ export interface ExecuteProgramInProcessHostInput {
   readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly env?: Readonly<Record<string, string>>;
   readonly spawn: (input: SpawnOptions) => Effect.Effect<SpawnResult, unknown>;
+  readonly task: (input: TaskInput) => Effect.Effect<TaskResult, unknown>;
   readonly onIo?: (input: {
     readonly stream: "stdout" | "stderr";
     readonly line: string;
@@ -421,10 +421,9 @@ const completeResult = (
   });
 
 const runProgramTask = (
-  spawn: ExecuteProgramInProcessHostInput["spawn"],
+  task: ExecuteProgramInProcessHostInput["task"],
   input: ProgramHostTaskOptions,
-): Effect.Effect<TaskResult, unknown> =>
-  Effect.map(spawn(taskInputToSpawnInput(input)), spawnOutputToTaskResult);
+): Effect.Effect<TaskResult, unknown> => task(input);
 
 export const executeProgramInProcessHost = (
   input: ExecuteProgramInProcessHostInput,
@@ -573,7 +572,7 @@ export const executeProgramInProcessHost = (
             }
 
             if (message.requestType === "task") {
-              const taskExit = yield* Effect.exit(runProgramTask(input.spawn, message.input));
+              const taskExit = yield* Effect.exit(runProgramTask(input.task, message.input));
 
               if (Exit.isSuccess(taskExit)) {
                 yield* sendResponse(responseQueue, {

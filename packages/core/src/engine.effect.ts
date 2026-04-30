@@ -18,7 +18,15 @@ import {
   type SpawnId,
 } from "./run.schema";
 import { decodeSpawnResult, type SpawnOptions, type SpawnResult } from "./spawn.schema";
-import type { DriverRuntime, ExtensionContext, ExtensionRegistration } from "./types";
+import type {
+  DriverRuntime,
+  DriverSpawnEvent,
+  DriverTaskTurnOutput,
+  ExtensionContext,
+  ExtensionRegistration,
+  TaskInput,
+  TaskResult,
+} from "./types";
 import {
   LifecycleInvariantError,
   applyLifecycleTransition,
@@ -66,6 +74,12 @@ export interface RunSyncInput extends RunSubmitInput {
       input: SpawnOptions,
     ) => Effect.Effect<
       SpawnResult,
+      ProgramExecutionError | PersistenceError | LifecycleInvariantError
+    >,
+    task: (
+      input: TaskInput,
+    ) => Effect.Effect<
+      TaskResult,
       ProgramExecutionError | PersistenceError | LifecycleInvariantError
     >,
   ) => Effect.Effect<unknown, ProgramExecutionError>;
@@ -561,6 +575,37 @@ const spawnResultFromEvents = (
   return completion.payload.result;
 };
 
+const DefaultTaskSystemPrompt = "You are a helpful coding agent.";
+
+const taskInputToStorageSpawnOptions = (taskInput: TaskInput): SpawnOptions => ({
+  agent: taskInput.role ?? taskInput.agent.driver,
+  systemPrompt: taskInput.system ?? DefaultTaskSystemPrompt,
+  prompt: taskInput.prompt,
+  model: taskInput.agent.model,
+});
+
+const spawnResultFromTaskResult = (result: TaskResult): SpawnResult => ({
+  text: result.text,
+  sessionRef: result.sessionRef,
+  agent: result.role,
+  model: result.model,
+  driver: result.driver,
+  exitCode: result.exitCode,
+  stopReason: result.stopReason,
+  errorMessage: result.errorMessage,
+});
+
+const taskResultFromTaskTurnOutput = (output: DriverTaskTurnOutput): TaskResult => ({
+  text: output.result.text,
+  sessionRef: output.result.sessionRef,
+  role: output.result.role,
+  model: output.result.model,
+  driver: output.result.driver,
+  exitCode: output.result.exitCode,
+  stopReason: output.result.stopReason,
+  errorMessage: output.result.errorMessage,
+});
+
 export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
   const runStore = makeRunStore({
     runsDirectory: input.runsDirectory,
@@ -671,6 +716,163 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           driverName: input.driverName,
           executorName: input.executorName,
         };
+
+        const publishDriverRawLines = (
+          spawnId: SpawnId,
+          rawLines: ReadonlyArray<string> | undefined,
+        ): Effect.Effect<void> =>
+          Effect.gen(function* () {
+            for (const rawLine of rawLines ?? []) {
+              const timestamp = yield* toIsoTimestamp;
+
+              yield* publishIoEvent({
+                runId: runInput.runId,
+                source: "driver",
+                stream: "stdout",
+                line: rawLine,
+                timestamp,
+                spawnId,
+              });
+            }
+          });
+
+        const appendDriverEvents = (
+          spawnId: SpawnId,
+          driverEvents: ReadonlyArray<DriverSpawnEvent>,
+        ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+          Effect.gen(function* () {
+            for (const driverEvent of driverEvents) {
+              if (driverEvent.type === "milestone") {
+                const milestoneEvent: Omit<
+                  SpawnMilestoneEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:milestone",
+                  payload: {
+                    spawnId,
+                    message: driverEvent.message,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...milestoneEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "tool_call") {
+                const toolCallEvent: Omit<
+                  SpawnToolCallEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:tool_call",
+                  payload: {
+                    spawnId,
+                    toolName: driverEvent.toolName,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...toolCallEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "message_chunk") {
+                const messageChunkEvent: Omit<
+                  SpawnMessageChunkEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:message_chunk",
+                  payload: {
+                    spawnId,
+                    text: driverEvent.text,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...messageChunkEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "thought_chunk") {
+                const thoughtChunkEvent: Omit<
+                  SpawnThoughtChunkEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:thought_chunk",
+                  payload: {
+                    spawnId,
+                    text: driverEvent.text,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...thoughtChunkEvent,
+                  }),
+                );
+              }
+
+              if (driverEvent.type === "plan") {
+                const planEvent: Omit<
+                  SpawnPlanEvent,
+                  "schemaVersion" | "runId" | "sequence" | "timestamp"
+                > = {
+                  type: "spawn:plan",
+                  payload: {
+                    spawnId,
+                    steps: driverEvent.steps,
+                  },
+                };
+
+                yield* appendTier1EventWithHooks(
+                  input.extensions,
+                  extensionContext,
+                  lifecycleStateRef,
+                  sequenceRef,
+                  runStore,
+                  runInput.runId,
+                  (sequence, timestamp) => ({
+                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                    ...planEvent,
+                  }),
+                );
+              }
+            }
+          });
 
         if (existingEvents.length === 0) {
           yield* runExtensionSetupHooks(
@@ -816,150 +1018,8 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               events: driverOutputExit.value.events.length,
             });
 
-            for (const rawLine of driverOutputExit.value.raw ?? []) {
-              const timestamp = yield* toIsoTimestamp;
-
-              yield* publishIoEvent({
-                runId: runInput.runId,
-                source: "driver",
-                stream: "stdout",
-                line: rawLine,
-                timestamp,
-                spawnId,
-              });
-            }
-
-            for (const driverEvent of driverOutputExit.value.events) {
-              if (driverEvent.type === "milestone") {
-                const milestoneEvent: Omit<
-                  SpawnMilestoneEvent,
-                  "schemaVersion" | "runId" | "sequence" | "timestamp"
-                > = {
-                  type: "spawn:milestone",
-                  payload: {
-                    spawnId,
-                    message: driverEvent.message,
-                  },
-                };
-
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
-                  lifecycleStateRef,
-                  sequenceRef,
-                  runStore,
-                  runInput.runId,
-                  (sequence, timestamp) => ({
-                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                    ...milestoneEvent,
-                  }),
-                );
-              }
-
-              if (driverEvent.type === "tool_call") {
-                const toolCallEvent: Omit<
-                  SpawnToolCallEvent,
-                  "schemaVersion" | "runId" | "sequence" | "timestamp"
-                > = {
-                  type: "spawn:tool_call",
-                  payload: {
-                    spawnId,
-                    toolName: driverEvent.toolName,
-                  },
-                };
-
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
-                  lifecycleStateRef,
-                  sequenceRef,
-                  runStore,
-                  runInput.runId,
-                  (sequence, timestamp) => ({
-                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                    ...toolCallEvent,
-                  }),
-                );
-              }
-
-              if (driverEvent.type === "message_chunk") {
-                const messageChunkEvent: Omit<
-                  SpawnMessageChunkEvent,
-                  "schemaVersion" | "runId" | "sequence" | "timestamp"
-                > = {
-                  type: "spawn:message_chunk",
-                  payload: {
-                    spawnId,
-                    text: driverEvent.text,
-                  },
-                };
-
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
-                  lifecycleStateRef,
-                  sequenceRef,
-                  runStore,
-                  runInput.runId,
-                  (sequence, timestamp) => ({
-                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                    ...messageChunkEvent,
-                  }),
-                );
-              }
-
-              if (driverEvent.type === "thought_chunk") {
-                const thoughtChunkEvent: Omit<
-                  SpawnThoughtChunkEvent,
-                  "schemaVersion" | "runId" | "sequence" | "timestamp"
-                > = {
-                  type: "spawn:thought_chunk",
-                  payload: {
-                    spawnId,
-                    text: driverEvent.text,
-                  },
-                };
-
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
-                  lifecycleStateRef,
-                  sequenceRef,
-                  runStore,
-                  runInput.runId,
-                  (sequence, timestamp) => ({
-                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                    ...thoughtChunkEvent,
-                  }),
-                );
-              }
-
-              if (driverEvent.type === "plan") {
-                const planEvent: Omit<
-                  SpawnPlanEvent,
-                  "schemaVersion" | "runId" | "sequence" | "timestamp"
-                > = {
-                  type: "spawn:plan",
-                  payload: {
-                    spawnId,
-                    steps: driverEvent.steps,
-                  },
-                };
-
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
-                  lifecycleStateRef,
-                  sequenceRef,
-                  runStore,
-                  runInput.runId,
-                  (sequence, timestamp) => ({
-                    ...makeEventEnvelope(runInput.runId, sequence, timestamp),
-                    ...planEvent,
-                  }),
-                );
-              }
-            }
+            yield* publishDriverRawLines(spawnId, driverOutputExit.value.raw);
+            yield* appendDriverEvents(spawnId, driverOutputExit.value.events);
 
             const spawnResultExit = yield* Effect.exit(
               Effect.mapError(
@@ -1033,7 +1093,160 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             return spawnResult;
           });
 
-        const executionExit = yield* Effect.exit(runInput.executeProgram(spawn));
+        const task = (
+          taskInput: TaskInput,
+        ): Effect.Effect<
+          TaskResult,
+          ProgramExecutionError | PersistenceError | LifecycleInvariantError
+        > =>
+          Effect.gen(function* () {
+            const storageInput = taskInputToStorageSpawnOptions(taskInput);
+
+            if (input.driver.createTaskSession === undefined) {
+              return yield* Effect.fail(
+                new ProgramExecutionError({
+                  runId: runInput.runId,
+                  message: `Driver ${input.driver.name} does not support task sessions`,
+                }),
+              );
+            }
+
+            const nextSpawnCounter = yield* Ref.updateAndGet(
+              spawnCounterRef,
+              (counter) => counter + 1,
+            );
+            const spawnId = decodeSpawnIdSync(`spawn_${nextSpawnCounter}`);
+
+            const spawnStartEvent: Omit<
+              SpawnStartEvent,
+              "schemaVersion" | "runId" | "sequence" | "timestamp"
+            > = {
+              type: "spawn:start",
+              payload: {
+                spawnId,
+                input: storageInput,
+              },
+            };
+
+            yield* appendTier1EventWithHooks(
+              input.extensions,
+              extensionContext,
+              lifecycleStateRef,
+              sequenceRef,
+              runStore,
+              runInput.runId,
+              (sequence, timestamp) => ({
+                ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                ...spawnStartEvent,
+              }),
+            );
+
+            yield* Effect.logDebug("mill.engine:task-session-start", {
+              runId: runInput.runId,
+              spawnId,
+              driver: input.driver.name,
+              agent: storageInput.agent,
+              model: storageInput.model,
+            });
+
+            const driverOutputExit = yield* Effect.exit(
+              Effect.gen(function* () {
+                const session = yield* input.driver.createTaskSession!({
+                  runId: runInput.runId,
+                  runDirectory: joinPath(input.runsDirectory, runInput.runId),
+                  taskId: spawnId,
+                  agent: storageInput.agent,
+                  systemPrompt: storageInput.systemPrompt,
+                  model: storageInput.model,
+                });
+
+                return yield* session
+                  .startTurn({ prompt: storageInput.prompt })
+                  .pipe(Effect.ensuring(session.close()));
+              }).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ProgramExecutionError({
+                      runId: runInput.runId,
+                      message: `Driver ${input.driver.name} task session failed: ${toMessage(error)}`,
+                    }),
+                ),
+              ),
+            );
+
+            if (Exit.isFailure(driverOutputExit)) {
+              const failureMessage = Cause.pretty(driverOutputExit.cause);
+
+              yield* Effect.logDebug("mill.engine:task-session-failed", {
+                runId: runInput.runId,
+                spawnId,
+                driver: input.driver.name,
+                message: failureMessage,
+              });
+
+              yield* appendSpawnErrorEvent(
+                input.extensions,
+                extensionContext,
+                lifecycleStateRef,
+                sequenceRef,
+                runStore,
+                runInput.runId,
+                spawnId,
+                failureMessage,
+              );
+
+              return yield* Effect.fail(
+                new ProgramExecutionError({
+                  runId: runInput.runId,
+                  message: failureMessage,
+                }),
+              );
+            }
+
+            yield* publishDriverRawLines(spawnId, driverOutputExit.value.raw);
+            yield* appendDriverEvents(spawnId, driverOutputExit.value.events);
+
+            const taskResult = taskResultFromTaskTurnOutput(driverOutputExit.value);
+            const storageResult = spawnResultFromTaskResult(taskResult);
+            const spawnCompleteEvent: Omit<
+              SpawnCompleteEvent,
+              "schemaVersion" | "runId" | "sequence" | "timestamp"
+            > = {
+              type: "spawn:complete",
+              payload: {
+                spawnId,
+                result: storageResult,
+              },
+            };
+
+            yield* appendTier1EventWithHooks(
+              input.extensions,
+              extensionContext,
+              lifecycleStateRef,
+              sequenceRef,
+              runStore,
+              runInput.runId,
+              (sequence, timestamp) => ({
+                ...makeEventEnvelope(runInput.runId, sequence, timestamp),
+                ...spawnCompleteEvent,
+              }),
+            );
+
+            yield* Ref.update(spawnResultsRef, (items) => [...items, storageResult]);
+
+            yield* Effect.logDebug("mill.engine:task-complete", {
+              runId: runInput.runId,
+              spawnId,
+              role: taskResult.role,
+              model: taskResult.model,
+              sessionRef: taskResult.sessionRef,
+              exitCode: taskResult.exitCode,
+            });
+
+            return taskResult;
+          });
+
+        const executionExit = yield* Effect.exit(runInput.executeProgram(spawn, task));
         const completedAt = yield* toIsoTimestamp;
         const spawnResults = yield* Ref.get(spawnResultsRef);
         const startedAt = activeRun.createdAt;
