@@ -1,20 +1,12 @@
 import * as FileSystem from "effect/FileSystem";
-import { Cause, Data, Effect, Exit, Fiber, Queue, Ref, Stream } from "effect";
-import { ChildProcess } from "effect/unstable/process";
-import {
-  ProgramHostProtocolPrefix,
-  decodeProgramHostInboundMessage,
-  type ProgramHostInboundMessage,
-  type ProgramHostOutboundMessage,
-  type ProgramHostResponseMessage,
-} from "./program-host.schema";
-import type { ProgramHostTaskCommand } from "./program-host.schema";
-import { makeTaskActorRuntime, type TaskActorRuntime } from "./task-actor.effect";
+import { Data, Effect } from "effect";
+import { makeProgramContext, withProgramContextPromise } from "./program-context.adapter";
+import { createTaskActorFromEffect } from "./task-actor.api";
 import type { ExtensionRegistration, TaskInput, TaskResult } from "./types";
 
 export class ProgramHostError extends Data.TaggedError("ProgramHostError")<{
-  runId: string;
-  message: string;
+  readonly runId: string;
+  readonly message: string;
 }> {}
 
 export interface ExecuteProgramInProcessHostInput {
@@ -34,12 +26,6 @@ export interface ExecuteProgramInProcessHostInput {
   }) => Effect.Effect<void>;
 }
 
-type ProgramHostResultMessage = Extract<ProgramHostInboundMessage, { readonly kind: "result" }>;
-
-type ExtensionApiMethod = (...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, unknown>;
-
-const textEncoder = new TextEncoder();
-
 const normalizePath = (path: string): string => {
   if (path.length <= 1) {
     return path;
@@ -51,800 +37,238 @@ const normalizePath = (path: string): string => {
 const joinPath = (base: string, child: string): string =>
   normalizePath(base) === "/" ? `/${child}` : `${normalizePath(base)}/${child}`;
 
-const basename = (path: string): string => {
+const dirname = (path: string): string => {
   const normalized = normalizePath(path);
   const index = normalized.lastIndexOf("/");
 
-  if (index < 0) {
-    return normalized;
+  if (index <= 0) {
+    return "/";
   }
 
-  return normalized.slice(index + 1);
+  return normalized.slice(0, index);
 };
 
-const isBunExecutable = (path: string): boolean => {
-  const name = basename(path).toLowerCase();
-  return name === "bun" || name.startsWith("bun-") || name.startsWith("bun.");
+const toMessage = (error: unknown): string => {
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+
+  return String(error);
 };
 
-const resolveProgramHostExecutable = (executablePath: string | undefined): string =>
-  executablePath !== undefined && isBunExecutable(executablePath) ? executablePath : "bun";
+const coreSourceDirectory = (): string =>
+  normalizePath(decodeURIComponent(new URL(".", import.meta.url).pathname));
 
-const toMessage = (error: unknown): string => String(error);
+const coreProgramApiPath = (): string => joinPath(coreSourceDirectory(), "program.api.ts");
 
-const buildExtensionApiLookup = (
-  extensions: ReadonlyArray<ExtensionRegistration>,
-): ReadonlyMap<string, Readonly<Record<string, ExtensionApiMethod>>> =>
-  new Map(
-    extensions
-      .filter((extension) => extension.api !== undefined)
-      .map(
-        (extension) =>
-          [extension.name, extension.api as Readonly<Record<string, ExtensionApiMethod>>] as const,
+const importSpecifierFor = (programPath: string, runId: string): string =>
+  `${programPath}?millRun=${encodeURIComponent(runId)}`;
+
+const ensureCoreProgramExportResolution = (input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly runId: string;
+  readonly programPath: string;
+}): Effect.Effect<void, ProgramHostError> =>
+  Effect.gen(function* () {
+    const programDirectory = dirname(input.programPath);
+    const corePackageDirectory = joinPath(programDirectory, "node_modules/@mill/core");
+    const packageJsonPath = joinPath(corePackageDirectory, "package.json");
+    const programShimPath = joinPath(corePackageDirectory, "program.ts");
+
+    const existingPackage = yield* Effect.mapError(
+      input.fileSystem.exists(packageJsonPath),
+      (error) =>
+        new ProgramHostError({
+          runId: input.runId,
+          message: `Unable to inspect ${packageJsonPath}: ${toMessage(error)}`,
+        }),
+    );
+
+    if (existingPackage) {
+      return;
+    }
+
+    yield* Effect.mapError(
+      input.fileSystem.makeDirectory(corePackageDirectory, { recursive: true }),
+      (error) =>
+        new ProgramHostError({
+          runId: input.runId,
+          message: `Unable to create ${corePackageDirectory}: ${toMessage(error)}`,
+        }),
+    );
+
+    yield* Effect.mapError(
+      input.fileSystem.writeFileString(
+        packageJsonPath,
+        JSON.stringify({ type: "module", exports: { "./program": "./program.ts" } }, undefined, 2),
       ),
-  );
+      (error) =>
+        new ProgramHostError({
+          runId: input.runId,
+          message: `Unable to write ${packageJsonPath}: ${toMessage(error)}`,
+        }),
+    );
 
-const buildExtensionSpecs = (extensions: ReadonlyArray<ExtensionRegistration>) =>
-  extensions
-    .filter((extension) => extension.api !== undefined)
-    .map((extension) => ({
-      name: extension.name,
-      methods: Object.keys(extension.api ?? {}),
-    }));
-
-const splitProgramImports = (
-  source: string,
-): { readonly imports: ReadonlyArray<string>; readonly body: string } => {
-  const imports: Array<string> = [];
-  const body: Array<string> = [];
-
-  for (const line of source.split("\n")) {
-    if (line.trimStart().startsWith("import ")) {
-      imports.push(line);
-    } else {
-      body.push(line);
-    }
-  }
-
-  return {
-    imports,
-    body: body.join("\n"),
-  };
-};
-
-// Guardrail exception: this function emits the isolated child runtime protocol edge.
-// The generated JavaScript intentionally uses Promise and try/catch because it runs
-// outside Effect in the spawned Bun process and must translate all failures into
-// explicit parent/child protocol messages before exiting.
-const createProgramHostSource = (
-  input: Pick<ExecuteProgramInProcessHostInput, "executorName" | "programSource" | "extensions">,
-): string => {
-  const extensionSpecs = JSON.stringify(buildExtensionSpecs(input.extensions));
-  const protocolPrefix = JSON.stringify(ProgramHostProtocolPrefix);
-  const executorName = JSON.stringify(input.executorName);
-  const program = splitProgramImports(input.programSource);
-
-  return [
-    ...program.imports,
-    `const __millProtocolPrefix = ${protocolPrefix};`,
-    `const __millExecutorName = ${executorName};`,
-    `const __millExtensionSpecs = ${extensionSpecs};`,
-    "globalThis.__millExecutorName = __millExecutorName;",
-    "",
-    "const __millPending = new Map();",
-    "let __millRequestCounter = 0;",
-    'let __millStdinBuffer = "";',
-    "",
-    "const __millSend = (message) => {",
-    '  process.stdout.write(__millProtocolPrefix + JSON.stringify(message) + "\\n");',
-    "};",
-    "",
-    "const __millTaskControllers = new Map();",
-    "",
-    "const __millPublishTaskSnapshot = (taskId, snapshot) => {",
-    "  const controller = __millTaskControllers.get(taskId);",
-    "  if (controller === undefined) return;",
-    "  if (JSON.stringify(controller.snapshot) === JSON.stringify(snapshot)) return;",
-    "  controller.snapshot = snapshot;",
-    "  for (const listener of controller.listeners) listener(snapshot);",
-    "  if (controller.terminal) return;",
-    '  if (snapshot.status === "complete" && snapshot.result !== undefined) {',
-    "    controller.terminal = true;",
-    "    controller.resolveDone(snapshot.result);",
-    "  }",
-    '  if (snapshot.status === "cancelled" && snapshot.result !== undefined) {',
-    "    controller.terminal = true;",
-    "    controller.resolveDone(snapshot.result);",
-    "  }",
-    '  if (snapshot.status === "failed") {',
-    "    controller.terminal = true;",
-    '    controller.rejectDone(String(snapshot.error ?? "task failed"));',
-    "  }",
-    "};",
-    "",
-    "const __millResolveParentMessage = (message) => {",
-    '  if (message.kind === "response") {',
-    "    const pending = __millPending.get(message.requestId);",
-    "    if (pending === undefined) return;",
-    "    __millPending.delete(message.requestId);",
-    "    if (message.ok === true) {",
-    "      pending.resolve(message.value);",
-    "      return;",
-    "    }",
-    '    pending.reject(String(message.message ?? "program host request failed"));',
-    "    return;",
-    "  }",
-    "",
-    '  if (message.kind === "task:snapshot") {',
-    "    __millPublishTaskSnapshot(message.taskId, message.snapshot);",
-    "    return;",
-    "  }",
-    "",
-    '  if (message.kind === "task:done") {',
-    "    const controller = __millTaskControllers.get(message.taskId);",
-    "    if (controller === undefined || controller.terminal) return;",
-    "    controller.terminal = true;",
-    "    controller.resolveDone(message.result);",
-    "    return;",
-    "  }",
-    "",
-    '  if (message.kind === "task:error") {',
-    "    const controller = __millTaskControllers.get(message.taskId);",
-    "    if (controller === undefined || controller.terminal) return;",
-    "    controller.terminal = true;",
-    '    controller.rejectDone(String(message.message ?? "task failed"));',
-    "  }",
-    "};",
-    "",
-    'process.stdin.setEncoding("utf8");',
-    'process.stdin.on("data", (chunk) => {',
-    "  __millStdinBuffer += chunk;",
-    "",
-    "  while (true) {",
-    '    const newlineIndex = __millStdinBuffer.indexOf("\\n");',
-    "",
-    "    if (newlineIndex < 0) {",
-    "      break;",
-    "    }",
-    "",
-    "    const line = __millStdinBuffer.slice(0, newlineIndex).trim();",
-    "    __millStdinBuffer = __millStdinBuffer.slice(newlineIndex + 1);",
-    "",
-    "    if (line.length === 0) {",
-    "      continue;",
-    "    }",
-    "",
-    "    try {",
-    "      const parsed = JSON.parse(line);",
-    '      if (parsed === null || typeof parsed !== "object" || typeof parsed.kind !== "string") {',
-    '        __millSend({ kind: "result", ok: false, message: "Malformed parent protocol message." });',
-    "        process.exitCode = 1;",
-    "        continue;",
-    "      }",
-    "      __millResolveParentMessage(parsed);",
-    "    } catch (error) {",
-    '      __millSend({ kind: "result", ok: false, message: `Malformed parent protocol JSON: ${String(error)}` });',
-    "      process.exitCode = 1;",
-    "    }",
-    "  }",
-    "});",
-    "",
-    "const __millCallHost = (request) =>",
-    "  new Promise((resolve, reject) => {",
-    "    __millRequestCounter += 1;",
-    "    const requestId = `req_${__millRequestCounter}`;",
-    "",
-    "    __millPending.set(requestId, { resolve, reject });",
-    "    __millSend({",
-    '      kind: "request",',
-    "      requestId,",
-    "      ...request,",
-    "    });",
-    "  });",
-    "",
-    "const __millTaskSnapshot = (taskId, input, status, extra = {}) => ({",
-    "  id: taskId,",
-    "  runId: undefined,",
-    '  ref: { runId: "program-host", taskId },',
-    "  status,",
-    "  input,",
-    '  text: "",',
-    '  thought: "",',
-    "  queue: [],",
-    "  ...extra,",
-    "});",
-    "",
-    "const __millCreateTaskActor = (input) => {",
-    "  __millRequestCounter += 1;",
-    "  const taskId = `task_${__millRequestCounter}`;",
-    "  const listeners = new Set();",
-    '  let snapshot = __millTaskSnapshot(taskId, input, "idle");',
-    "  let started = false;",
-    "  let terminal = false;",
-    "  let resolveDone;",
-    "  let rejectDone;",
-    "  const done = new Promise((resolve, reject) => {",
-    "    resolveDone = resolve;",
-    "    rejectDone = reject;",
-    "  });",
-    "  const controller = { listeners, snapshot, terminal, resolveDone, rejectDone };",
-    "  __millTaskControllers.set(taskId, controller);",
-    "  const publishLocal = (next) => __millPublishTaskSnapshot(taskId, next);",
-    "  void (async () => {",
-    "    try {",
-    '      await __millCallHost({ requestType: "task:create", taskId, input });',
-    "    } catch (error) {",
-    "      terminal = true;",
-    '      publishLocal({ ...snapshot, status: "failed", error: String(error) });',
-    "      rejectDone(error);",
-    "    }",
-    "  })();",
-    "  const actor = {",
-    "    id: taskId,",
-    '    ref: { runId: "program-host", taskId },',
-    "    done,",
-    "    start: () => {",
-    "      if (started || terminal) return actor;",
-    "      started = true;",
-    "      void (async () => {",
-    "        try {",
-    '          await __millCallHost({ requestType: "task:start", taskId });',
-    "        } catch (error) {",
-    "          terminal = true;",
-    '          publishLocal({ ...snapshot, status: "failed", error: String(error) });',
-    "          rejectDone(error);",
-    "        }",
-    "      })();",
-    "      return actor;",
-    "    },",
-    '    stop: () => actor.cancel("Task stopped"),',
-    "    cancel: (reason) => {",
-    "      if (terminal) return actor;",
-    "      void (async () => {",
-    "        try {",
-    '          await __millCallHost({ requestType: "task:cancel", taskId, reason });',
-    "        } catch (error) {",
-    "          terminal = true;",
-    '          publishLocal({ ...snapshot, status: "failed", error: String(error) });',
-    "          rejectDone(error);",
-    "        }",
-    "      })();",
-    "      return actor;",
-    "    },",
-    "    send: (command) => {",
-    "      if (terminal) return actor;",
-    "      void (async () => {",
-    "        try {",
-    '          await __millCallHost({ requestType: "task:send", taskId, command });',
-    "        } catch (error) {",
-    "          terminal = true;",
-    '          publishLocal({ ...snapshot, status: "failed", error: String(error) });',
-    "          rejectDone(error);",
-    "        }",
-    "      })();",
-    "      return actor;",
-    "    },",
-    "    subscribe: (listener) => {",
-    "      listeners.add(listener);",
-    "      listener(controller.snapshot);",
-    "      return { unsubscribe: () => listeners.delete(listener) };",
-    "    },",
-    "    getSnapshot: () => controller.snapshot,",
-    "  };",
-    "  return actor;",
-    "};",
-    "",
-    "const __millApi = {",
-    "  task: (input) => __millCreateTaskActor(input),",
-    "};",
-    "",
-    "for (const extension of __millExtensionSpecs) {",
-    "  const extensionApi = {};",
-    "",
-    "  for (const methodName of extension.methods) {",
-    "    extensionApi[methodName] = (...args) =>",
-    "      __millCallHost({",
-    '        requestType: "extension",',
-    "        extensionName: extension.name,",
-    "        methodName,",
-    "        args,",
-    "      });",
-    "  }",
-    "",
-    "  __millApi[extension.name] = extensionApi;",
-    "}",
-    "",
-    "globalThis.mill = __millApi;",
-    "",
-    "const __millProgram = async () => {",
-    program.body,
-    "};",
-    "",
-    "const __millRun = async () => {",
-    "  try {",
-    "    const value = await __millProgram();",
-    "",
-    "    __millSend({",
-    '      kind: "result",',
-    "      ok: true,",
-    "      value,",
-    "    });",
-    "  } catch (error) {",
-    "    __millSend({",
-    '      kind: "result",',
-    "      ok: false,",
-    "      message: String(error),",
-    "    });",
-    "  } finally {",
-    '    process.stdin.removeAllListeners("data");',
-    "    process.stdin.pause();",
-    '    if (typeof process.stdin.destroy === "function") {',
-    "      process.stdin.destroy();",
-    "    }",
-    "  }",
-    "};",
-    "",
-    "await __millRun();",
-    "",
-  ].join("\n");
-};
-
-const encodeOutbound = (message: ProgramHostOutboundMessage): Uint8Array =>
-  textEncoder.encode(`${JSON.stringify(message)}\n`);
-
-const sendOutbound = (
-  queue: Queue.Queue<Uint8Array>,
-  message: ProgramHostOutboundMessage,
-): Effect.Effect<void> => Effect.asVoid(Queue.offer(queue, encodeOutbound(message)));
-
-const sendResponse = (
-  queue: Queue.Queue<Uint8Array>,
-  response: ProgramHostResponseMessage,
-): Effect.Effect<void> => sendOutbound(queue, response);
-
-const summarizeCause = (cause: Exit.Exit<unknown, unknown>["cause"]): string => Cause.pretty(cause);
-
-const extensionMessage = (stderrLines: ReadonlyArray<string>): string => {
-  if (stderrLines.length === 0) {
-    return "";
-  }
-
-  return `\nstderr:\n${stderrLines.join("\n")}`;
-};
-
-const completeResult = (
-  resultRef: Ref.Ref<ProgramHostResultMessage | undefined>,
-  result: ProgramHostResultMessage,
-): Effect.Effect<void> =>
-  Ref.update(resultRef, (current) => {
-    if (current !== undefined) {
-      return current;
-    }
-
-    return result;
+    yield* Effect.mapError(
+      input.fileSystem.writeFileString(
+        programShimPath,
+        `export * from ${JSON.stringify(coreProgramApiPath())};\n`,
+      ),
+      (error) =>
+        new ProgramHostError({
+          runId: input.runId,
+          message: `Unable to write ${programShimPath}: ${toMessage(error)}`,
+        }),
+    );
   });
 
-interface ProgramHostTaskActorState {
-  readonly actor: TaskActorRuntime;
-}
+const moduleResult = (module: unknown): unknown => {
+  if (typeof module !== "object" || module === null) {
+    return undefined;
+  }
 
-const taskNotFoundMessage = (taskId: string): string => `Unknown task actor ${taskId}`;
+  const record = module as Readonly<Record<string, unknown>>;
+
+  if ("result" in record) {
+    return record.result;
+  }
+
+  if ("default" in record) {
+    return record.default;
+  }
+
+  return undefined;
+};
+
+const inferProgramResult = (
+  module: unknown,
+  completedTasks: ReadonlyArray<TaskResult>,
+): unknown => {
+  const explicit = moduleResult(module);
+
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  if (completedTasks.length === 1) {
+    return completedTasks[0]?.text;
+  }
+
+  return undefined;
+};
 
 export const executeProgramInProcessHost = (
   input: ExecuteProgramInProcessHostInput,
 ): Effect.Effect<unknown, ProgramHostError> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const runDirectory = normalizePath(input.runDirectory);
-      const markerPath = joinPath(runDirectory, "program-host.marker");
-      const hostProgramPath = joinPath(runDirectory, "program-host.ts");
-      const extensionLookup = buildExtensionApiLookup(input.extensions);
-      const protocolResultRef = yield* Ref.make<ProgramHostResultMessage | undefined>(undefined);
-      const stderrLinesRef = yield* Ref.make<ReadonlyArray<string>>([]);
+  Effect.gen(function* () {
+    const services = yield* Effect.context<never>();
+    const fileSystem = yield* FileSystem.FileSystem;
+    const runDirectory = normalizePath(input.runDirectory);
+    const markerPath = joinPath(runDirectory, "program-host.marker");
+    const completedTasks: Array<TaskResult> = [];
 
-      yield* Effect.mapError(
-        fileSystem.makeDirectory(runDirectory, { recursive: true }),
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Unable to ensure run directory ${runDirectory}: ${toMessage(error)}`,
-          }),
-      );
+    yield* Effect.mapError(
+      fileSystem.makeDirectory(runDirectory, { recursive: true }),
+      (error) =>
+        new ProgramHostError({
+          runId: input.runId,
+          message: `Unable to ensure run directory ${runDirectory}: ${toMessage(error)}`,
+        }),
+    );
 
-      yield* Effect.mapError(
-        fileSystem.writeFileString(
-          markerPath,
-          [
-            "process-host:bun",
-            `runId=${input.runId}`,
-            `executor=${input.executorName}`,
-            `programPath=${input.programPath}`,
-          ].join("\n"),
-        ),
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Unable to write program host marker: ${toMessage(error)}`,
-          }),
-      );
+    yield* Effect.mapError(
+      fileSystem.writeFileString(
+        markerPath,
+        [
+          "program-host:import",
+          `runId=${input.runId}`,
+          `executor=${input.executorName}`,
+          `programPath=${input.programPath}`,
+        ].join("\n"),
+      ),
+      (error) =>
+        new ProgramHostError({
+          runId: input.runId,
+          message: `Unable to write program host marker: ${toMessage(error)}`,
+        }),
+    );
 
-      yield* Effect.mapError(
-        fileSystem.writeFileString(hostProgramPath, createProgramHostSource(input)),
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Unable to write program host script: ${toMessage(error)}`,
-          }),
-      );
+    yield* ensureCoreProgramExportResolution({
+      fileSystem,
+      runId: input.runId,
+      programPath: input.programPath,
+    });
 
-      const programHostExecutable = resolveProgramHostExecutable(input.executablePath);
-      const command = ChildProcess.make(programHostExecutable, ["run", hostProgramPath], {
-        cwd: input.workingDirectory,
-        env: input.env,
-        extendEnv: input.env !== undefined && Object.keys(input.env).length > 0,
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-        detached: false,
-      });
+    const context = makeProgramContext({
+      extensions: input.extensions,
+      completedTasks: () => completedTasks,
+      task: (taskInput) =>
+        createTaskActorFromEffect(taskInput, {
+          execute: input.task,
+          runId: input.runId,
+          onComplete: (result) => {
+            completedTasks.push(result);
+          },
+          services,
+        }),
+    });
 
-      yield* Effect.logDebug("mill.program-host:start", {
-        runId: input.runId,
-        hostProgramPath,
-        workingDirectory: input.workingDirectory,
-        executable: programHostExecutable,
-      });
+    yield* Effect.logDebug("mill.program-host:import:start", {
+      runId: input.runId,
+      programPath: input.programPath,
+      workingDirectory: input.workingDirectory,
+    });
 
-      const processHandle = yield* Effect.mapError(
-        command.asEffect(),
-        (error) =>
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Unable to start Bun program host: ${toMessage(error)}`,
-          }),
-      );
-
-      yield* Effect.logDebug("mill.program-host:started", {
-        runId: input.runId,
-        pid: Number(processHandle.pid),
-      });
-
-      const responseQueue = yield* Queue.unbounded<Uint8Array>();
-      const taskActorsRef = yield* Ref.make<ReadonlyMap<string, ProgramHostTaskActorState>>(
-        new Map(),
-      );
-
-      const getTaskActor = (taskId: string): Effect.Effect<TaskActorRuntime, string> =>
-        Effect.gen(function* () {
-          const actors = yield* Ref.get(taskActorsRef);
-          const state = actors.get(taskId);
-
-          if (state === undefined) {
-            return yield* Effect.fail(taskNotFoundMessage(taskId));
-          }
-
-          return state.actor;
-        });
-
-      const stdinFiber = yield* Effect.forkDetach(
-        Stream.run(Stream.fromQueue(responseQueue), processHandle.stdin),
-      );
-
-      const stdoutFiber = yield* Effect.forkDetach(
-        Stream.runForEach(Stream.splitLines(Stream.decodeText(processHandle.stdout)), (line) =>
-          Effect.gen(function* () {
-            if (!line.startsWith(ProgramHostProtocolPrefix)) {
-              if (line.length > 0 && input.onIo !== undefined) {
-                yield* input.onIo({
-                  stream: "stdout",
-                  line,
-                });
-              }
-              return;
-            }
-
-            const protocolPayload = line.slice(ProgramHostProtocolPrefix.length);
-            const decoded = yield* Effect.exit(decodeProgramHostInboundMessage(protocolPayload));
-
-            if (Exit.isFailure(decoded)) {
-              const message = summarizeCause(decoded.cause);
-              yield* completeResult(protocolResultRef, {
-                kind: "result",
-                ok: false,
-                message: `Malformed program host payload: ${message}`,
-              });
-              yield* Effect.logDebug("mill.program-host:malformed-payload", {
-                runId: input.runId,
-                message,
-              });
-              yield* processHandle.kill({ killSignal: "SIGTERM" }).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("mill.program-host:kill-after-malformed-payload-failed", {
-                    runId: input.runId,
-                    error,
-                  }),
-                ),
-              );
-              return;
-            }
-
-            const message = decoded.value;
-
-            if (message.kind === "result") {
-              yield* completeResult(protocolResultRef, message);
-              return;
-            }
-
-            if (message.requestType === "task:create") {
-              const createExit = yield* Effect.exit(
-                makeTaskActorRuntime(message.input, {
-                  execute: input.task,
-                  runId: input.runId,
-                  taskId: message.taskId,
-                }),
-              );
-
-              if (Exit.isFailure(createExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(createExit.cause),
-                });
-                return;
-              }
-
-              const actor = createExit.value;
-              actor.subscribe((snapshot) => {
-                if (snapshot.status === "idle") {
-                  return;
-                }
-
-                Effect.runFork(
-                  sendOutbound(responseQueue, {
-                    kind: "task:snapshot",
-                    taskId: actor.id,
-                    snapshot,
-                  }),
-                );
-              });
-              yield* Effect.forkDetach(
-                actor.done.pipe(
-                  Effect.matchEffect({
-                    onFailure: (error) =>
-                      sendOutbound(responseQueue, {
-                        kind: "task:error",
-                        taskId: actor.id,
-                        message: toMessage(error),
-                      }),
-                    onSuccess: (result) =>
-                      sendOutbound(responseQueue, {
-                        kind: "task:done",
-                        taskId: actor.id,
-                        result,
-                      }),
-                  }),
-                ),
-              );
-
-              yield* Ref.update(taskActorsRef, (actors) => {
-                const next = new Map(actors);
-                next.set(message.taskId, { actor });
-                return next;
-              });
-              yield* sendResponse(responseQueue, {
-                kind: "response",
-                requestId: message.requestId,
-                ok: true,
-                value: actor.getSnapshot(),
-              });
-              return;
-            }
-
-            if (message.requestType === "task:start") {
-              const actorExit = yield* Effect.exit(getTaskActor(message.taskId));
-
-              if (Exit.isFailure(actorExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(actorExit.cause),
-                });
-                return;
-              }
-
-              const startExit = yield* Effect.exit(actorExit.value.start);
-
-              if (Exit.isFailure(startExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(startExit.cause),
-                });
-                return;
-              }
-
-              yield* sendResponse(responseQueue, {
-                kind: "response",
-                requestId: message.requestId,
-                ok: true,
-                value: actorExit.value.getSnapshot(),
-              });
-              return;
-            }
-
-            if (message.requestType === "task:send") {
-              const actorExit = yield* Effect.exit(getTaskActor(message.taskId));
-
-              if (Exit.isFailure(actorExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(actorExit.cause),
-                });
-                return;
-              }
-
-              const sendExit = yield* Effect.exit(
-                actorExit.value.send(message.command as ProgramHostTaskCommand),
-              );
-
-              if (Exit.isFailure(sendExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(sendExit.cause),
-                });
-                return;
-              }
-
-              yield* sendResponse(responseQueue, {
-                kind: "response",
-                requestId: message.requestId,
-                ok: true,
-                value: actorExit.value.getSnapshot(),
-              });
-              return;
-            }
-
-            if (message.requestType === "task:cancel") {
-              const actorExit = yield* Effect.exit(getTaskActor(message.taskId));
-
-              if (Exit.isFailure(actorExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(actorExit.cause),
-                });
-                return;
-              }
-
-              const cancelExit = yield* Effect.exit(actorExit.value.cancel(message.reason));
-
-              if (Exit.isFailure(cancelExit)) {
-                yield* sendResponse(responseQueue, {
-                  kind: "response",
-                  requestId: message.requestId,
-                  ok: false,
-                  message: summarizeCause(cancelExit.cause),
-                });
-                return;
-              }
-
-              yield* sendResponse(responseQueue, {
-                kind: "response",
-                requestId: message.requestId,
-                ok: true,
-                value: actorExit.value.getSnapshot(),
-              });
-              return;
-            }
-
-            const extensionApi = extensionLookup.get(message.extensionName);
-            const method = extensionApi?.[message.methodName];
-
-            if (method === undefined) {
-              yield* sendResponse(responseQueue, {
-                kind: "response",
-                requestId: message.requestId,
-                ok: false,
-                message: `Unknown extension api ${message.extensionName}.${message.methodName}`,
-              });
-              return;
-            }
-
-            const methodExit = yield* Effect.exit(method(...message.args));
-
-            if (Exit.isSuccess(methodExit)) {
-              yield* sendResponse(responseQueue, {
-                kind: "response",
-                requestId: message.requestId,
-                ok: true,
-                value: methodExit.value,
-              });
-              return;
-            }
-
-            yield* sendResponse(responseQueue, {
-              kind: "response",
-              requestId: message.requestId,
-              ok: false,
-              message: summarizeCause(methodExit.cause),
-            });
-          }),
-        ),
-      );
-
-      const stderrFiber = yield* Effect.forkDetach(
-        Stream.runForEach(Stream.splitLines(Stream.decodeText(processHandle.stderr)), (line) =>
-          Effect.gen(function* () {
-            yield* Ref.update(stderrLinesRef, (lines) => [...lines, line]);
-
-            if (line.length > 0 && input.onIo !== undefined) {
-              yield* input.onIo({
-                stream: "stderr",
-                line,
-              });
-            }
-          }),
-        ),
-      );
-
-      const exitCodeExit = yield* Effect.exit(processHandle.exitCode);
-      const exitCode = Exit.isSuccess(exitCodeExit) ? Number(exitCodeExit.value) : undefined;
-
-      yield* Effect.logDebug("mill.program-host:exit", {
-        runId: input.runId,
-        pid: Number(processHandle.pid),
-        exitCode: exitCode ?? "unknown",
-      });
-
-      yield* Queue.shutdown(responseQueue);
-      yield* Fiber.await(stdinFiber);
-      yield* Fiber.await(stdoutFiber);
-      yield* Fiber.await(stderrFiber);
-
-      const stderrLines = yield* Ref.get(stderrLinesRef);
-      const protocolResult = yield* Ref.get(protocolResultRef);
-
-      if (protocolResult === undefined) {
-        const exitMessage = Exit.isFailure(exitCodeExit)
-          ? summarizeCause(exitCodeExit.cause)
-          : `exitCode=${exitCode}`;
-        return yield* Effect.fail(
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Program host exited without result (${exitMessage}).${extensionMessage(
-              stderrLines,
-            )}`,
-          }),
-        );
+    const originalLog = globalThis.console.log;
+    const originalError = globalThis.console.error;
+    const publishProgramIo = (stream: "stdout" | "stderr", args: ReadonlyArray<unknown>): void => {
+      const line = args.map(toMessage).join(" ");
+      if (line.length === 0 || input.onIo === undefined) {
+        return;
       }
+      Effect.runForkWith(services)(input.onIo({ stream, line }));
+    };
 
-      if (protocolResult.ok === false) {
-        return yield* Effect.fail(
-          new ProgramHostError({
-            runId: input.runId,
-            message: `${protocolResult.message}${extensionMessage(stderrLines)}`,
-          }),
-        );
-      }
+    const module = yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        globalThis.console.log = (...args: ReadonlyArray<unknown>) => {
+          originalLog(...args);
+          publishProgramIo("stdout", args);
+        };
+        globalThis.console.error = (...args: ReadonlyArray<unknown>) => {
+          originalError(...args);
+          publishProgramIo("stderr", args);
+        };
+      }),
+      () =>
+        Effect.tryPromise({
+          try: () =>
+            withProgramContextPromise(
+              context,
+              () => import(importSpecifierFor(input.programPath, input.runId)),
+            ),
+          catch: (error) =>
+            new ProgramHostError({
+              runId: input.runId,
+              message: `Program import failed: ${toMessage(error)}`,
+            }),
+        }),
+      () =>
+        Effect.sync(() => {
+          globalThis.console.log = originalLog;
+          globalThis.console.error = originalError;
+        }),
+    );
 
-      if (exitCode !== undefined && exitCode !== 0) {
-        return yield* Effect.fail(
-          new ProgramHostError({
-            runId: input.runId,
-            message: `Program host exited with code ${exitCode}.${extensionMessage(stderrLines)}`,
-          }),
-        );
-      }
+    const result = inferProgramResult(module, completedTasks);
 
-      return protocolResult.value;
-    }),
-  );
+    yield* Effect.logDebug("mill.program-host:import:complete", {
+      runId: input.runId,
+      taskCount: completedTasks.length,
+    });
+
+    return result;
+  });

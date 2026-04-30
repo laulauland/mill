@@ -1292,6 +1292,7 @@ ${renderModelCatalogHelp(helpContext.modelCatalog)}
 Examples:
 
   Sequential pipeline:
+    import { claude, codex, mill } from "@mill/core/program";
     const scan = mill.task({
       agent: codex("openai-codex/gpt-5.3-codex"),
       role: "scout",
@@ -1307,6 +1308,7 @@ Examples:
     }).start();
 
   Parallel fan-out:
+    import { claude, codex, mill } from "@mill/core/program";
     const security = mill.task({ agent: claude("anthropic/claude-sonnet-4-6"), prompt: "Review src/auth/" }).start();
     const perf = mill.task({ agent: codex("openai-codex/gpt-5.3-codex"), prompt: "Profile src/api/" }).start();
     const [securityResult, perfResult] = await Promise.all([security.done, perf.done]);

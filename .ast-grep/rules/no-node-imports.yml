@@ -9,6 +9,7 @@ ignores:
   - "**/*.test.ts"
   - "**/*.spec.ts"
   - "packages/core/src/run-platform.adapter.ts"
+  - "packages/core/src/program-context.adapter.ts"
   - "packages/pi-mill/runtime.adapter.ts"
   - "packages/pi-mill/.vendor/**"
   - "packages/pi-mill/.pi-skills/**"

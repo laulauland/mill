@@ -227,6 +227,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -308,13 +309,14 @@ describe("runCli", () => {
       programPath,
       [
         "const statuses = [];",
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  prompt: "Say hello",',
         "});",
         "task.subscribe((snapshot) => statuses.push(snapshot.status));",
         "const result = await task.start().done;",
-        "return JSON.stringify({ text: result.text, status: task.getSnapshot().status, statuses });",
+        "export default JSON.stringify({ text: result.text, status: task.getSnapshot().status, statuses });",
       ].join("\n"),
       "utf-8",
     );
@@ -374,6 +376,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -381,7 +384,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -428,6 +431,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -435,7 +439,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -479,6 +483,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -486,7 +491,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -526,6 +531,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -533,7 +539,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -573,6 +579,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -580,7 +587,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -625,6 +632,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -703,6 +711,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -790,6 +799,7 @@ describe("runCli", () => {
     await writeFile(
       programPath,
       [
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -797,7 +807,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -874,7 +884,9 @@ describe("runCli", () => {
 
     await writeFile(
       programPath,
-      ["await new Promise((resolve) => setTimeout(resolve, 400));", "return 'done';"].join("\n"),
+      ["await new Promise((resolve) => setTimeout(resolve, 400));", "export default 'done';"].join(
+        "\n",
+      ),
       "utf-8",
     );
 
@@ -978,6 +990,7 @@ describe("runCli", () => {
       [
         "await new Promise((resolve) => setTimeout(resolve, 100));",
         'console.log("program-io");',
+        'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
         '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
@@ -985,7 +998,7 @@ describe("runCli", () => {
         '  role: "scout",',
         "}).start();",
         "const result = await task.done;",
-        "return result.text;",
+        "export default result.text;",
       ].join("\n"),
       "utf-8",
     );

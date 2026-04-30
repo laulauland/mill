@@ -34,7 +34,7 @@ The config sets your default driver, model preferences, and authoring guidance. 
 ## Quick example
 
 ```ts
-import { claude, codex } from "@mill/core";
+import { claude, codex, mill } from "@mill/core/program";
 
 const analysis = mill
   .task({
@@ -56,7 +56,7 @@ const plan = mill
   })
   .start();
 
-return await plan.done;
+await plan.done;
 ```
 
 ```bash
@@ -71,6 +71,8 @@ mill run review.ts --sync          # or block until done
 `mill.task(...)` creates a task actor. It is synchronous and cheap. `.start()` begins execution and `.done` is the Promise boundary for the final `TaskResult`.
 
 ```ts
+import { codex, mill } from "@mill/core/program";
+
 const task = mill
   .task({
     agent: codex("openai-codex/gpt-5.3-codex"),
@@ -84,7 +86,7 @@ task.subscribe((snapshot) => {
   console.log(snapshot.status, snapshot.text);
 });
 
-return await task.done;
+await task.done;
 ```
 
 Snapshots are the actor's current reduced state: status, accumulated text, queue, session pointer, result, or error. Events are the append-only history; snapshots are what is true now.
@@ -103,10 +105,10 @@ Current state: core task actors model `queue`, `interrupt`, and `reject` policie
 
 ## Agents and provider factories
 
-Tasks use an `agent` provider object. Built-in helpers are exported from `@mill/core`:
+Tasks use an `agent` provider object. In mill programs, import the program API from `@mill/core/program`:
 
 ```ts
-import { claude, codex, pi } from "@mill/core";
+import { claude, codex, pi } from "@mill/core/program";
 
 codex("openai-codex/gpt-5.3-codex");
 claude("anthropic/claude-opus-4-6");

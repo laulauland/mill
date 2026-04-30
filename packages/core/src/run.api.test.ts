@@ -174,13 +174,14 @@ describe("run.api integration", () => {
     await writeFile(
       programPath,
       [
-        "const task = mill.task({",
-        '  agent: { driver: "codex", model: "openai/gpt-5.3-codex" },',
+        'import { task as millTask, codex } from "@mill/core/program";',
+        "const task = millTask({",
+        '  agent: codex("openai/gpt-5.3-codex"),',
         '  prompt: "from runtime",',
         '  role: "scout",',
         "}).start();",
-        "const result = await task.done;",
-        "return result.text;",
+        "const taskResult = await task.done;",
+        "export const result = taskResult.text;",
       ].join("\n"),
       "utf-8",
     );
@@ -233,15 +234,16 @@ describe("run.api integration", () => {
     await writeFile(
       programPath,
       [
+        'import { mill, codex } from "@mill/core/program";',
         'const note = await mill.tools.echo("hello");',
         "const task = mill.task({",
-        '  agent: { driver: "codex", model: "openai/gpt-5.3-codex" },',
+        '  agent: codex("openai/gpt-5.3-codex"),',
         '  system: "You are concise.",',
         "  prompt: note,",
         '  role: "scout",',
         "}).start();",
-        "const result = await task.done;",
-        'return JSON.stringify({ note, driver: result.driver, executor: globalThis.__millExecutorName ?? "unknown" });',
+        "const taskResult = await task.done;",
+        'export const result = JSON.stringify({ note, driver: taskResult.driver, executor: globalThis.__millExecutorName ?? "unknown" });',
       ].join("\n"),
       "utf-8",
     );
@@ -298,7 +300,7 @@ describe("run.api integration", () => {
         join(output.run.paths.runDir, "program-host.marker"),
         "utf-8",
       );
-      expect(hostMarker).toContain("process-host:bun");
+      expect(hostMarker).toContain("program-host:import");
       expect(hostMarker).toContain(`executor=${output.run.executor}`);
     } finally {
       if (previousDepth === undefined) {
@@ -311,7 +313,7 @@ describe("run.api integration", () => {
     }
   });
 
-  it("injects actor-shaped mill.task into program host", async () => {
+  it("provides imported actor-shaped task API to program host", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-task-api-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
@@ -319,16 +321,17 @@ describe("run.api integration", () => {
     await writeFile(
       programPath,
       [
+        'import { task as millTask, codex } from "@mill/core/program";',
         "const statuses = [];",
-        "const task = mill.task({",
-        '  agent: { driver: "codex", model: "openai/gpt-5.3-codex" },',
+        "const task = millTask({",
+        '  agent: codex("openai/gpt-5.3-codex"),',
         '  prompt: "Say hello from task",',
         "});",
         "task.subscribe((snapshot) => statuses.push(snapshot.status));",
-        "const result = await task.start().done;",
-        "return JSON.stringify({",
-        "  text: result.text,",
-        "  driver: result.driver,",
+        "const taskResult = await task.start().done;",
+        "export const result = JSON.stringify({",
+        "  text: taskResult.text,",
+        "  driver: taskResult.driver,",
         "  status: task.getSnapshot().status,",
         "  statuses,",
         "});",
@@ -387,7 +390,7 @@ describe("run.api integration", () => {
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
 
-    await writeFile(programPath, "return 'home-default-ok';\n", "utf-8");
+    await writeFile(programPath, "export const result = 'home-default-ok';\n", "utf-8");
 
     let capturedRunsDirectory: string | undefined;
 
@@ -428,7 +431,7 @@ describe("run.api integration", () => {
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
 
-    await writeFile(programPath, "return 'ok';\n", "utf-8");
+    await writeFile(programPath, "export const result = 'ok';\n", "utf-8");
 
     try {
       await expect(

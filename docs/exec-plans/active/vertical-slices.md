@@ -72,7 +72,7 @@ Enable one complete, deterministic execution path from CLI to engine to driver w
 **Acceptance criteria**
 
 1. **Test intent:** unit (schema/decode/store), integration (engine↔driver), e2e (`run --sync`).
-2. `mill run <program.ts> --sync --json` executes a program with injected `mill.task` actor API and returns structured result.
+2. `mill run <program.ts> --sync --json` executes a program that imports `@mill/core/program` task actors and returns structured result.
 3. Run directory includes `run.json`, `events.ndjson` (append-only), and `result.json` per SPEC §5.3.
 4. Persisted events decode through Schema discriminated union and include `schemaVersion`, `runId`, sequence, timestamp.
 5. `task:complete` payload includes non-empty `sessionRef` (SPEC invariant #2).
@@ -211,7 +211,7 @@ Reach configurable runtime composition while preserving strict boundary contract
 
 1. **Test intent:** unit (registry/bridge), integration (selected driver/executor path), e2e (`run --driver ... --executor ...`).
 2. CLI resolves configured defaults and explicit `--driver/--executor` overrides correctly.
-3. Extension `api` methods are injected onto `globalThis.mill` and bridge via `Effect.runPromise` only at boundary adapters.
+3. Extension `api` methods are exposed through the imported `@mill/core/program` mill context and bridge via `Effect.runPromise` only at the program boundary adapter.
 4. Extension hook failures emit structured error events without crashing the run by default.
 5. Discovery/help metadata reflects registered drivers and authoring guidance from resolved config.
 
@@ -232,11 +232,11 @@ Reach configurable runtime composition while preserving strict boundary contract
 
 - ✅ Implemented driver and executor registries (`makeDriverRegistry`, `makeExecutorRegistry`) in core.
 - ✅ CLI resolves configured defaults and honors explicit `--driver` and `--executor` overrides.
-- ✅ Extension API methods are injected onto `globalThis.mill` via program host with proper `Effect.runPromise` bridging.
+- ✅ Extension API methods are exposed through the imported `@mill/core/program` mill context with proper `Effect.runPromise` bridging at the boundary.
 - ✅ Extension hook failures emit `extension:error` events without crashing the run.
 - ✅ Discovery payload includes registered driver models and authoring guidance from config.
 - ✅ `mill init` command creates scaffold `mill.config.ts` with all three drivers and direct executor.
-- ✅ Added unit/integration/e2e coverage for driver/executor selection and extension injection.
+- ✅ Added unit/integration/e2e coverage for driver/executor selection and imported extension context.
 - ✅ Re-ran targeted verification tests for S5 functionality.
 
 ---

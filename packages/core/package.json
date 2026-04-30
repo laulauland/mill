@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./program": "./src/program.api.ts"
   }
 }

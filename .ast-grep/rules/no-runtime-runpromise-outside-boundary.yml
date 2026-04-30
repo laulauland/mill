@@ -13,6 +13,7 @@ ignores:
   - "packages/core/src/runtime.api.ts"
   - "packages/core/src/task-actor.api.ts"
   - "packages/core/src/index.ts"
+  - "packages/core/src/program-context.adapter.ts"
   - "packages/core/src/test-runtime.ts"
   - "packages/driver-acp/src/test-runtime.ts"
 rule:

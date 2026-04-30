@@ -240,7 +240,7 @@ describe("mill run/status/wait (e2e)", () => {
       programPath,
       [
         "await new Promise((resolve) => setTimeout(resolve, 50));",
-        "return 'driver-executor-selected';",
+        "export default 'driver-executor-selected';",
       ].join("\n"),
       "utf-8",
     );
@@ -279,7 +279,7 @@ describe("mill run/status/wait (e2e)", () => {
     const programPath = join(tempDirectory, "program.ts");
     const bundledCliPath = join(tempDirectory, "mill.mjs");
 
-    await writeFile(programPath, "return 'node-bundle-ok';\n", "utf-8");
+    await writeFile(programPath, "export default 'node-bundle-ok';\n", "utf-8");
 
     try {
       const buildExitCode = await commandExitCode(
@@ -342,7 +342,7 @@ describe("mill run/status/wait (e2e)", () => {
     const runsDirectory = join(tempDirectory, "runs");
     const programPath = join(tempDirectory, "program.ts");
 
-    await writeFile(programPath, "return 'no-driver';\n", "utf-8");
+    await writeFile(programPath, "export default 'no-driver';\n", "utf-8");
 
     try {
       const exitCode = await commandExitCode(
@@ -594,7 +594,7 @@ describe("mill run/status/wait (e2e)", () => {
       completeProgramPath,
       [
         "await new Promise((resolve) => setTimeout(resolve, 150));",
-        "return 'quick-complete';",
+        "export default 'quick-complete';",
       ].join("\n"),
       "utf-8",
     );
@@ -603,7 +603,7 @@ describe("mill run/status/wait (e2e)", () => {
       cancelProgramPath,
       [
         "await new Promise((resolve) => setTimeout(resolve, 3000));",
-        "return 'late-complete';",
+        "export default 'late-complete';",
       ].join("\n"),
       "utf-8",
     );

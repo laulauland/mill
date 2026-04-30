@@ -1,8 +1,9 @@
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 import {
   makeRunActorRuntime,
   makeTaskActorRuntime,
   type RunActorRuntimeOptions,
+  type TaskActorRuntime,
   type TaskActorRuntimeOptions,
 } from "./task-actor.effect";
 import type { RunActor, RunSnapshot, TaskActor, TaskInput, TaskResult } from "./types";
@@ -17,6 +18,14 @@ export interface TaskActorOptions {
   readonly taskId?: string;
 }
 
+export interface EffectTaskActorOptions {
+  readonly execute: TaskActorRuntimeOptions["execute"];
+  readonly runId?: string;
+  readonly taskId?: string;
+  readonly onComplete?: (result: TaskResult) => void;
+  readonly services?: Context.Context<never>;
+}
+
 export type { RunActorRuntimeOptions as RunActorOptions };
 
 const promiseExecutorToEffect =
@@ -29,30 +38,35 @@ const promiseExecutorToEffect =
 
 const runSync = <A>(effect: Effect.Effect<A>): A => Effect.runSync(effect);
 
-export const createTaskActor = (input: TaskInput, options: TaskActorOptions): TaskActor => {
-  const runtime = runSync(
-    makeTaskActorRuntime(input, {
-      execute: promiseExecutorToEffect(options.execute),
-      runId: options.runId,
-      taskId: options.taskId,
-    }),
-  );
-
+const createTaskActorFromRuntime = (
+  runtime: TaskActorRuntime,
+  options: Pick<EffectTaskActorOptions, "onComplete" | "services"> = {},
+): TaskActor => {
+  const runPromise =
+    options.services === undefined ? Effect.runPromise : Effect.runPromiseWith(options.services);
   const actor: TaskActor = {
     id: runtime.id,
     ref: runtime.ref,
-    done: Effect.runPromise(runtime.done),
+    done: runPromise(
+      runtime.done.pipe(
+        Effect.tap((result) =>
+          options.onComplete === undefined
+            ? Effect.void
+            : Effect.sync(() => options.onComplete?.(result)),
+        ),
+      ),
+    ),
     start: () => {
-      runSync(runtime.start);
+      void runPromise(runtime.start);
       return actor;
     },
     stop: () => actor.cancel("Task stopped"),
     cancel: (reason?: string) => {
-      runSync(runtime.cancel(reason));
+      void runPromise(runtime.cancel(reason));
       return actor;
     },
     send: (command) => {
-      runSync(runtime.send(command));
+      void runPromise(runtime.send(command));
       return actor;
     },
     subscribe: runtime.subscribe,
@@ -61,6 +75,31 @@ export const createTaskActor = (input: TaskInput, options: TaskActorOptions): Ta
 
   return actor;
 };
+
+export const createTaskActorFromEffect = (
+  input: TaskInput,
+  options: EffectTaskActorOptions,
+): TaskActor => {
+  const runtime = runSync(
+    makeTaskActorRuntime(input, {
+      execute: options.execute,
+      runId: options.runId,
+      taskId: options.taskId,
+    }),
+  );
+
+  return createTaskActorFromRuntime(runtime, {
+    onComplete: options.onComplete,
+    services: options.services,
+  });
+};
+
+export const createTaskActor = (input: TaskInput, options: TaskActorOptions): TaskActor =>
+  createTaskActorFromEffect(input, {
+    execute: promiseExecutorToEffect(options.execute),
+    runId: options.runId,
+    taskId: options.taskId,
+  });
 
 const createNoopTask = (input: TaskInput, runId: string, taskId?: string): TaskActor =>
   createTaskActor(input, {

@@ -6,15 +6,15 @@ _Source: `SPEC.md`, updated to reflect current CLI behavior._
 
 `mill` is a runtime for executing TypeScript orchestration programs that create and coordinate AI agent task actors.
 
-A mill program is regular TS (sequential with `await`, parallel with `Promise.all`) with one injected global API:
+A mill program is regular TS (sequential with `await`, parallel with `Promise.all`) that imports the program API from `@mill/core/program`:
 
-- `mill.task(...)` for creating a task actor
-- extension-contributed APIs (optional)
+- `mill.task(...)` / `task(...)` for creating a task actor
+- extension-contributed APIs on the imported `mill` context (optional)
 
 A task actor is started with `.start()`, exposes current state through snapshots, and resolves its final result through `.done`.
 
 ```ts
-import { codex } from "@mill/core";
+import { codex, mill } from "@mill/core/program";
 
 const task = mill
   .task({
@@ -24,7 +24,7 @@ const task = mill
   })
   .start();
 
-return await task.done;
+await task.done;
 ```
 
 `mill` stores orchestration state and structured run events. Agent conversations remain owned by each agent tool; mill keeps `sessionRef` pointers.

@@ -98,7 +98,7 @@ scripts/
   - no terminal -> non-terminal transitions
   - duplicate terminal emissions are ignored or rejected deterministically
 - task actor contract tests:
-  - `mill.task({ agent: codex(...) }).start().done` works in program host
+  - imported `@mill/core/program` task actors work in program host
   - snapshots represent current reduced state
   - steering policies produce honest queue/interrupt/reject snapshots
 
@@ -133,7 +133,7 @@ scripts/
 3. Effect v4 baseline and guardrails
 4. Task vocabulary and provider factories
 5. Task actor handles, snapshots, and Promise boundary via `.done`
-6. Program-host injected `mill.task(...)`
+6. Program-host imported `@mill/core/program` context
 7. Steering snapshot policies
 8. ACP task sessions through internal `spawn-agent`
 9. CLI runtime facade over actor-compatible APIs
@@ -142,7 +142,7 @@ scripts/
 ## 23) Canonical program example
 
 ```ts
-import { claude, codex } from "@mill/core";
+import { claude, codex, mill } from "@mill/core/program";
 
 const scan = mill
   .task({
@@ -164,7 +164,7 @@ const synth = mill
   })
   .start();
 
-return await synth.done;
+await synth.done;
 ```
 
 This remains plain TypeScript orchestration with `await` / `Promise.all` and no DSL. The actors make state, snapshots, and future steering explicit.

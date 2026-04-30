@@ -9,10 +9,10 @@ Scope: local CLI + SDK runtime, detached async runs, generic drivers, Effect v4 
 
 `mill` is a runtime for executing TypeScript orchestration programs that create and coordinate AI agent task actors.
 
-A mill program is regular TypeScript. The injected `mill` global exposes task actors; package helpers provide agent provider factories:
+A mill program is regular TypeScript. It imports the program API from `@mill/core/program`; the imported `mill` context exposes task actors and package helpers provide agent provider factories:
 
 ```ts
-import { codex } from "@mill/core";
+import { codex, mill } from "@mill/core/program";
 
 const task = mill.task({
   agent: codex("openai-codex/gpt-5.3-codex"),
@@ -20,7 +20,7 @@ const task = mill.task({
   prompt: "Review src/auth.",
 }).start();
 
-return await task.done;
+await task.done;
 ```
 
 `mill` stores orchestration state and structured run events. Agent conversations remain owned by each agent tool; mill persists `sessionRef` pointers.
@@ -205,7 +205,7 @@ Config resolution order:
 CLI help includes authoring guidance and selected-driver model catalogs. Built-in provider factories are exported by `@mill/core`:
 
 ```ts
-import { claude, codex, pi } from "@mill/core";
+import { claude, codex, pi } from "@mill/core/program";
 ```
 
 ---

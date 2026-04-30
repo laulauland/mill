@@ -18,7 +18,7 @@ Only `Effect.runPromise` may bridge Effect to Promise, and only at public bounda
 Authored mill programs use task actors:
 
 ```ts
-import { codex } from "@mill/core";
+import { codex, mill } from "@mill/core/program";
 
 const task = mill
   .task({
@@ -28,10 +28,10 @@ const task = mill
   })
   .start();
 
-return await task.done;
+await task.done;
 ```
 
-Provider factories are pure data constructors exported by `@mill/core`:
+Provider factories are pure data constructors exported by `@mill/core/program` for programs and by `@mill/core` for host/config code:
 
 ```ts
 codex("openai-codex/gpt-5.3-codex");
