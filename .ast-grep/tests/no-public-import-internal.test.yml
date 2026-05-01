@@ -1,7 +1,7 @@
 id: no-public-import-internal
 valid:
   - |
-    import { createMill } from "./mill.api";
+    import { task } from "./program.api";
 invalid:
   - |
     import { makeEngine } from "./engine.effect";

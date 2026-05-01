@@ -4,8 +4,6 @@ severity: error
 message: Avoid sync filesystem APIs; use Effect FileSystem or isolate truly final-boundary sync IO.
 ignores:
   - "**/*.test.ts"
-  - "packages/pi-mill/.vendor/**"
-  - "packages/pi-mill/.pi-skills/**"
 rule:
   any:
     - pattern: "$FS.readFileSync($$$A)"

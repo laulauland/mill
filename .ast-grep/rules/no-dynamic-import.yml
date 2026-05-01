@@ -3,8 +3,6 @@ language: TypeScript
 severity: error
 message: Dynamic import is disallowed in core runtime modules.
 ignores:
-  - "packages/core/src/config-loader.api.ts"
   - "packages/core/src/program-host.effect.ts"
-  - "packages/pi-mill/executors/program-executor.ts"
 rule:
   pattern: "import($A)"

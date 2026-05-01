@@ -2,54 +2,48 @@ import { describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Schema from "effect/Schema";
-import { runCli } from "./index";
+import { Effect, Layer } from "effect";
+import { createMillRuntime, type AgentRuntime } from "@mill/core";
+import { CliAgentRuntimes, runCli, runCliEffect } from "./index";
 
-const FAKE_ACP_AGENT_SCRIPT = `
-const readline = require("readline");
-const rl = readline.createInterface({ input: process.stdin });
-const write = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
-
-rl.on("line", (line) => {
-  let msg;
-  try { msg = JSON.parse(line); } catch { return; }
-
-  if (msg.method === "initialize") {
-    write({ jsonrpc: "2.0", id: msg.id, result: {
-      protocolVersion: 1,
-      agentCapabilities: { promptCapabilities: {}, sessionCapabilities: { close: {} } },
-      agentInfo: { name: "fake-agent", version: "0.0.1" },
-      authMethods: []
-    }});
-    return;
-  }
-
-  if (msg.method === "session/new") {
-    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "test-session-123" }});
-    return;
-  }
-
-  if (msg.method === "session/prompt") {
-    const sessionId = msg.params?.sessionId || "test-session-123";
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello from " } } }});
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "fake agent" } } }});
-    write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" }});
-    return;
-  }
-
-  if (msg.method === "session/close") {
-    write({ jsonrpc: "2.0", id: msg.id, result: {} });
-  }
+const makeFakeAgentRuntime = (name: string): AgentRuntime => ({
+  name,
+  createSession: (input) =>
+    Effect.succeed({
+      sessionRef: `session/${name}/${input.role}`,
+      startTurn: () =>
+        Effect.succeed({
+          events: [
+            { type: "message_chunk", text: "Hello from " },
+            { type: "message_chunk", text: "fake agent" },
+          ],
+          result: {
+            text: "Hello from fake agent",
+            sessionRef: `session/${name}/${input.role}`,
+            role: input.role,
+            model: input.model,
+            provider: name,
+            exitCode: 0,
+          },
+        }),
+      cancelTurn: () => Effect.void,
+      close: () => Effect.void,
+    }),
 });
-`;
 
-const TEST_ACP_ENV = {
-  MILL_ACP_COMMAND: "bun",
-  MILL_ACP_ARGS_JSON: JSON.stringify(["-e", FAKE_ACP_AGENT_SCRIPT]),
-} as const;
+const testAgentRuntimes = {
+  codex: makeFakeAgentRuntime("codex"),
+  claude: makeFakeAgentRuntime("claude"),
+  pi: makeFakeAgentRuntime("pi"),
+};
+
+const testAgentRuntimesLayer = Layer.succeed(CliAgentRuntimes, {
+  runtimes: testAgentRuntimes,
+});
 
 const TEST_HARNESS_ENV = {
-  ...TEST_ACP_ENV,
   CODEX_THREAD_ID: "test-thread-id",
 } as const;
 
@@ -62,13 +56,36 @@ const runCliForTest = async (
   delete process.env.MILL_RUN_DEPTH;
 
   try {
-    return await runCli(argv, {
-      ...options,
-      env: {
-        ...TEST_HARNESS_ENV,
-        ...options?.env,
-      },
-    });
+    return await Effect.runPromise(
+      runCliEffect(argv, {
+        ...options,
+        env: {
+          ...TEST_HARNESS_ENV,
+          ...options?.env,
+        },
+        executablePath: options?.executablePath ?? Bun.argv[0],
+        launchWorker:
+          options?.launchWorker ??
+          ((input) =>
+            createMillRuntime({
+              cwd: input.cwd,
+              homeDirectory: options?.homeDirectory,
+              env: {
+                ...TEST_HARNESS_ENV,
+                ...options?.env,
+                MILL_RUN_DEPTH: String(input.runDepth),
+              },
+              runsDirectory: input.runsDirectory,
+              agentRuntimes: testAgentRuntimes,
+            })
+              .worker({
+                runId: input.runId,
+                programPath: input.programPath,
+                runDepth: input.runDepth,
+              })
+              .then(() => undefined)),
+      }).pipe(Effect.provide(testAgentRuntimesLayer), Effect.provide(BunServices.layer)),
+    );
   } finally {
     if (previousDepth === undefined) {
       delete process.env.MILL_RUN_DEPTH;
@@ -121,11 +138,11 @@ const StatusEnvelope = Schema.fromJsonString(
 );
 
 describe("runCli", () => {
-  it("returns non-zero for removed discovery subcommand", async () => {
+  it("returns non-zero for an unknown subcommand", async () => {
     const stdout: Array<string> = [];
     const stderr: Array<string> = [];
 
-    const code = await runCliForTest(["discovery", "--json"], {
+    const code = await runCliForTest(["unknown-command", "--json"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
       io: {

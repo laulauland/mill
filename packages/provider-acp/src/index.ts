@@ -1,5 +1,8 @@
-import type { AgentRuntime, AgentProcessConfig } from "@mill/core";
+import type { AgentRuntime } from "@mill/core";
 import { makeAcpProviderRuntime } from "./acp-provider.effect";
+import type { AgentProcessConfig } from "./process-config";
+
+export type { AgentProcessConfig } from "./process-config";
 
 export interface AcpProviderConfig {
   readonly command: string;

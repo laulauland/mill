@@ -5,7 +5,5 @@ message: Read cwd at CLI/config/runtime edges through explicit adapter helpers a
 ignores:
   - "**/*.test.ts"
   - "packages/cli/src/mill.ts"
-  - "packages/pi-mill/.vendor/**"
-  - "packages/pi-mill/.pi-skills/**"
 rule:
   pattern: "process.cwd()"

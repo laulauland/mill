@@ -1,12 +1,7 @@
 import * as FileSystem from "effect/FileSystem";
 import { Clock, Effect } from "effect";
 import type { RunId, RunSyncOutput } from "./run.schema";
-import {
-  ConfigError,
-  ProgramExecutionError,
-  type MillEngine,
-  type RunSyncInput,
-} from "./engine.effect";
+import { ProgramExecutionError, type MillEngine, type RunSyncInput } from "./engine.effect";
 import { PersistenceError, RunNotFoundError } from "./run-store.effect";
 import { LifecycleInvariantError } from "./lifecycle-guard.effect";
 
@@ -68,11 +63,7 @@ export const runDetachedWorker = (
   input: DetachedWorkerInput,
 ): Effect.Effect<
   RunSyncOutput,
-  | RunNotFoundError
-  | PersistenceError
-  | ProgramExecutionError
-  | LifecycleInvariantError
-  | ConfigError,
+  RunNotFoundError | PersistenceError | ProgramExecutionError | LifecycleInvariantError,
   unknown
 > =>
   Effect.gen(function* () {

@@ -15,7 +15,6 @@ import { ChildProcess } from "effect/unstable/process";
 import {
   createMillRuntime,
   type AgentRuntime,
-  type AgentProcessConfig,
   type LaunchWorkerInput,
   ProcessControlError,
   type ProcessControl,
@@ -26,11 +25,7 @@ import {
   createCodexAcpAgentProvider,
   createPiAcpAgentProvider,
 } from "@mill/provider-acp";
-import {
-  decodeStringArrayJson,
-  decodeStringRecordJson,
-  decodeStringRecordJsonEffect,
-} from "./json.schema";
+import { decodeStringRecordJsonEffect } from "./json.schema";
 
 interface CliIo {
   readonly stdout: (line: string) => void | Promise<void>;
@@ -45,6 +40,12 @@ interface CliPlatform {
 
 const CliPlatform = Context.Service<CliPlatform>("mill/CliPlatform");
 
+export interface CliAgentRuntimes {
+  readonly runtimes: Readonly<Record<string, AgentRuntime>>;
+}
+
+export const CliAgentRuntimes = Context.Service<CliAgentRuntimes>("mill/CliAgentRuntimes");
+
 interface RunCliOptions {
   readonly cwd?: string;
   readonly homeDirectory?: string;
@@ -57,7 +58,12 @@ interface RunCliOptions {
   readonly entrypointPath?: string;
   readonly pid?: number;
   readonly processControl?: ProcessControl;
+  readonly agentRuntimes?: Readonly<Record<string, AgentRuntime>>;
 }
+
+type ResolvedRunCliOptions = RunCliOptions & {
+  readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
+};
 
 interface CliExit {
   readonly _tag: "CliExit";
@@ -70,18 +76,6 @@ const CLI_ENVIRONMENT_VARIABLES = [
   "CODEX_SANDBOX_NETWORK_DISABLED",
   "CODEX_THREAD_ID",
   "HOME",
-  "MILL_ACP_ARGS_JSON",
-  "MILL_ACP_COMMAND",
-  "MILL_ACP_ENV_JSON",
-  "MILL_CLAUDE_ACP_ARGS_JSON",
-  "MILL_CLAUDE_ACP_COMMAND",
-  "MILL_CLAUDE_ACP_ENV_JSON",
-  "MILL_CODEX_ACP_ARGS_JSON",
-  "MILL_CODEX_ACP_COMMAND",
-  "MILL_CODEX_ACP_ENV_JSON",
-  "MILL_PI_ACP_ARGS_JSON",
-  "MILL_PI_ACP_COMMAND",
-  "MILL_PI_ACP_ENV_JSON",
   "MILL_RUN_DEPTH",
   "MILL_VERSION",
   "PATH",
@@ -124,74 +118,14 @@ const createStdioIo = (stdio: Stdio.Stdio): CliIo => ({
   stderr: (line) => Effect.runPromise(writeLine(stdio.stderr(), line)),
 });
 
-const normalizeOptionalText = (value: string | undefined): string | undefined => {
-  if (value === undefined) {
-    return undefined;
-  }
+const createDefaultAgentRuntimes = (): Readonly<Record<string, AgentRuntime>> => ({
+  pi: createPiAcpAgentProvider().runtime,
+  claude: createClaudeAcpAgentProvider().runtime,
+  codex: createCodexAcpAgentProvider().runtime,
+});
 
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-};
-
-const parseStringArrayJson = (raw: string | undefined): ReadonlyArray<string> | undefined => {
-  if (raw === undefined) {
-    return undefined;
-  }
-
-  const decoded = decodeStringArrayJson(raw);
-  return Option.isSome(decoded) ? decoded.value : undefined;
-};
-
-const parseStringRecordJson = (
-  raw: string | undefined,
-): Readonly<Record<string, string>> | undefined => {
-  if (raw === undefined) {
-    return undefined;
-  }
-
-  const decoded = decodeStringRecordJson(raw);
-  return Option.isSome(decoded) ? decoded.value : undefined;
-};
-
-const normalizeAcpCommand = (command: string, executablePath: string | undefined): string =>
-  command === "bun" && executablePath !== undefined ? executablePath : command;
-
-const readAcpProcessOverride = (
-  env: Readonly<Record<string, string | undefined>>,
-  prefix: "MILL_PI_ACP" | "MILL_CLAUDE_ACP" | "MILL_CODEX_ACP",
-  executablePath: string | undefined,
-): AgentProcessConfig | undefined => {
-  const command = normalizeOptionalText(env[`${prefix}_COMMAND`] ?? env.MILL_ACP_COMMAND);
-
-  if (command === undefined) {
-    return undefined;
-  }
-
-  const args = parseStringArrayJson(env[`${prefix}_ARGS_JSON`] ?? env.MILL_ACP_ARGS_JSON) ?? [];
-  const configuredEnv = parseStringRecordJson(env[`${prefix}_ENV_JSON`] ?? env.MILL_ACP_ENV_JSON);
-  const pathEnv = normalizeOptionalText(env.PATH);
-  const processEnv = pathEnv === undefined ? configuredEnv : { ...configuredEnv, PATH: pathEnv };
-
-  return {
-    command: normalizeAcpCommand(command, executablePath),
-    args,
-    env: processEnv,
-  } satisfies AgentProcessConfig;
-};
-
-const createDefaultAgentRuntimes = (
-  env: Readonly<Record<string, string | undefined>>,
-  executablePath: string | undefined,
-): Readonly<Record<string, AgentRuntime>> => ({
-  pi: createPiAcpAgentProvider({
-    process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
-  }).runtime,
-  claude: createClaudeAcpAgentProvider({
-    process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
-  }).runtime,
-  codex: createCodexAcpAgentProvider({
-    process: readAcpProcessOverride(env, "MILL_CODEX_ACP", executablePath),
-  }).runtime,
+export const liveCliAgentRuntimesLayer = Layer.succeed(CliAgentRuntimes, {
+  runtimes: createDefaultAgentRuntimes(),
 });
 
 const runWithBunServices = <A, E>(effect: Effect.Effect<A, E, unknown>): Promise<A> =>
@@ -466,7 +400,7 @@ const formatUnknownError = (error: unknown): string => {
 };
 
 const createCliRuntime = (
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   input: {
     readonly runsDirectory?: string;
     readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
@@ -478,7 +412,7 @@ const createCliRuntime = (
     env: options.env,
     executablePath: options.executablePath,
     runsDirectory: input.runsDirectory ?? options.runsDirectory,
-    agentRuntimes: createDefaultAgentRuntimes(options.env ?? {}, options.executablePath),
+    agentRuntimes: options.agentRuntimes,
     launchWorker: input.launchWorker,
     processControl: options.processControl,
   });
@@ -493,7 +427,7 @@ interface RunCommandInput {
 
 const runCommand = async (
   command: RunCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   const metadataText = fromOption(command.metaJson);
@@ -580,7 +514,7 @@ interface WorkerCommandInput {
 
 const workerCommand = async (
   command: WorkerCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   const runtime = createCliRuntime(options, {
@@ -608,7 +542,7 @@ interface StatusCommandInput {
 
 const statusCommand = async (
   command: StatusCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   const runtime = createCliRuntime(options, {
@@ -635,7 +569,7 @@ interface WaitCommandInput {
 
 const waitCommand = async (
   command: WaitCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   if (!Number.isFinite(command.timeout) || command.timeout <= 0) {
@@ -728,7 +662,7 @@ interface WatchCommandInput {
 
 const watchCommand = async (
   command: WatchCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   const runtime = createCliRuntime(options, {
@@ -763,7 +697,7 @@ interface CancelCommandInput {
 
 const cancelCommand = async (
   command: CancelCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   const runtime = createCliRuntime(options, {
@@ -792,7 +726,7 @@ interface LsCommandInput {
 
 const lsCommand = async (
   command: LsCommandInput,
-  options: RunCliOptions,
+  options: ResolvedRunCliOptions,
   io: CliIo,
 ): Promise<number> => {
   const runtime = createCliRuntime(options, {
@@ -817,7 +751,7 @@ const lsCommand = async (
   return 0;
 };
 
-const createCli = (options: RunCliOptions, io: CliIo) => {
+const createCli = (options: ResolvedRunCliOptions, io: CliIo) => {
   const run = CliCommand.make(
     "run",
     {
@@ -1019,7 +953,8 @@ export const runCliEffect = (
   options?: RunCliOptions,
 ): Effect.Effect<number, never, unknown> =>
   Effect.gen(function* () {
-    const resolvedOptions = options ?? {};
+    const agentRuntimes = yield* CliAgentRuntimes;
+    const resolvedOptions = { ...options, agentRuntimes: agentRuntimes.runtimes };
     const stdio = yield* Stdio.Stdio;
     const io = resolvedOptions.io ?? createStdioIo(stdio);
     const cliVersion = resolveCliVersion(resolvedOptions.env ?? {});
@@ -1095,7 +1030,7 @@ export const runCli = (argv: ReadonlyArray<string>, options?: RunCliOptions): Pr
           executablePath,
         });
       }),
-      bunCliPlatformLayer,
+      Layer.mergeAll(bunCliPlatformLayer, liveCliAgentRuntimesLayer),
     ),
   );
 

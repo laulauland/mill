@@ -4,15 +4,11 @@ severity: error
 message: "Direct node: imports are disallowed outside explicit final-boundary adapter modules."
 files:
   - "**/src/**/*.ts"
-  - "packages/pi-mill/**/*.ts"
 ignores:
   - "**/*.test.ts"
   - "**/*.spec.ts"
   - "packages/core/src/run-platform.adapter.ts"
   - "packages/core/src/program-context.adapter.ts"
-  - "packages/pi-mill/runtime.adapter.ts"
-  - "packages/pi-mill/.vendor/**"
-  - "packages/pi-mill/.pi-skills/**"
 rule:
   any:
     - pattern: 'import $$$A from "$MODULE"'

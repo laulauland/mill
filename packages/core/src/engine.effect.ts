@@ -47,8 +47,6 @@ import {
   type IoStreamEvent,
 } from "./observer-hub.effect";
 
-export class ConfigError extends Data.TaggedError("ConfigError")<{ message: string }> {}
-
 export class ProgramExecutionError extends Data.TaggedError("ProgramExecutionError")<{
   runId: string;
   message: string;
@@ -111,11 +109,7 @@ export interface MillEngine {
     input: RunSyncInput,
   ) => Effect.Effect<
     RunSyncOutput,
-    | ConfigError
-    | PersistenceError
-    | ProgramExecutionError
-    | LifecycleInvariantError
-    | RunNotFoundError,
+    PersistenceError | ProgramExecutionError | LifecycleInvariantError | RunNotFoundError,
     unknown
   >;
   readonly status: (

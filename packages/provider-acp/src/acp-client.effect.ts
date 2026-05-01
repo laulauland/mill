@@ -8,13 +8,13 @@ import {
   type SessionId,
 } from "spawn-agent";
 import type {
-  AgentProcessConfig,
   AgentRuntimeEvent,
   AgentSession,
   AgentSessionInput,
   AgentTurnInput,
   AgentTurnOutput,
 } from "@mill/core";
+import type { AgentProcessConfig } from "./process-config";
 
 export class AcpClientError extends Data.TaggedError("AcpClientError")<{
   message: string;

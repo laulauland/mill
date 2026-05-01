@@ -48,7 +48,6 @@ describe("runDetachedWorker", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {

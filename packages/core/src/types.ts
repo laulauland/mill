@@ -168,9 +168,3 @@ export interface AgentRuntime {
   readonly name: string;
   readonly createSession: (input: AgentSessionInput) => Effect.Effect<AgentSession, unknown>;
 }
-
-export interface AgentProcessConfig {
-  readonly command: string;
-  readonly args: ReadonlyArray<string>;
-  readonly env?: Readonly<Record<string, string>>;
-}

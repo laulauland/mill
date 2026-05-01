@@ -1,6 +1,7 @@
 import { Effect } from "effect";
-import type { AgentRuntime, AgentSessionInput, AgentProcessConfig } from "@mill/core";
+import type { AgentRuntime, AgentSessionInput } from "@mill/core";
 import { createAcpSession } from "./acp-client.effect";
+import type { AgentProcessConfig } from "./process-config";
 
 export const makeAcpProviderRuntime = (
   name: string,

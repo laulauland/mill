@@ -57,7 +57,6 @@ describe("MillEngine sync lifecycle", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {
@@ -82,7 +81,6 @@ describe("MillEngine sync lifecycle", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {
@@ -176,7 +174,6 @@ describe("MillEngine sync lifecycle", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {
@@ -268,7 +265,6 @@ describe("MillEngine sync lifecycle", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {
@@ -311,7 +307,6 @@ describe("MillEngine sync lifecycle", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {
@@ -366,7 +361,7 @@ describe("MillEngine sync lifecycle", () => {
     const runsDirectory = await mkdtemp(join(tmpdir(), "mill-engine-watch-"));
     const runId = decodeRunIdSync(`run_${crypto.randomUUID()}`);
 
-    const driverWithRaw: AgentRuntime = {
+    const agentRuntimeWithRaw: AgentRuntime = {
       name: "test-agent-runtime",
       createSession: (input) =>
         Effect.succeed({
@@ -399,8 +394,7 @@ describe("MillEngine sync lifecycle", () => {
 
     const engine = makeMillEngine({
       runsDirectory,
-      agentRuntimes: { default: driverWithRaw, codex: driverWithRaw },
-      extensions: [],
+      agentRuntimes: { default: agentRuntimeWithRaw, codex: agentRuntimeWithRaw },
     });
 
     try {
@@ -474,7 +468,6 @@ describe("MillEngine sync lifecycle", () => {
     const engine = makeMillEngine({
       runsDirectory,
       agentRuntimes: { default: testRuntime, codex: testRuntime },
-      extensions: [],
     });
 
     try {

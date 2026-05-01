@@ -3,12 +3,16 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Effect, Exit, Layer, Runtime } from "effect";
-import { bunCliPlatformLayer, runCliMainEffect } from "./index";
+import { bunCliPlatformLayer, liveCliAgentRuntimesLayer, runCliMainEffect } from "./index";
 
 const entrypointPath = decodeURIComponent(new URL(import.meta.url).pathname);
 const main = runCliMainEffect({ entrypointPath }).pipe(
   Effect.provide(
-    Layer.mergeAll(BunServices.layer, bunCliPlatformLayer.pipe(Layer.provide(BunServices.layer))),
+    Layer.mergeAll(
+      BunServices.layer,
+      bunCliPlatformLayer.pipe(Layer.provide(BunServices.layer)),
+      liveCliAgentRuntimesLayer,
+    ),
   ),
 ) as Effect.Effect<number, never>;
 

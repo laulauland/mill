@@ -6,10 +6,6 @@ ignores:
   - "**/*.test.ts"
   - "packages/cli/src/mill.ts"
   - "packages/core/src/run-platform.adapter.ts"
-  - "packages/pi-mill/**"
-  - "packages/pi-mill/runtime.adapter.ts"
-  - "packages/pi-mill/.vendor/**"
-  - "packages/pi-mill/.pi-skills/**"
 rule:
   any:
     - pattern: 'import $$$A from "node:child_process"'
