@@ -18,7 +18,7 @@ const decodeBytes = (bytes: Uint8Array): string => new TextDecoder().decode(byte
 
 const collectStdout = (
   command: ReturnType<typeof ChildProcess.make>,
-): Effect.Effect<string, unknown> =>
+): Effect.Effect<string, unknown, unknown> =>
   Effect.scoped(
     Effect.gen(function* () {
       const handle = yield* command;
@@ -115,7 +115,7 @@ export const writeTextFile = (
 
 export const readProcessCommand = (
   pid: number,
-): Effect.Effect<string | undefined, RunPlatformProcessError> =>
+): Effect.Effect<string | undefined, RunPlatformProcessError, unknown> =>
   collectStdout(
     ChildProcess.make("ps", ["-o", "command=", "-p", String(pid)], {
       stdin: "ignore",
@@ -134,7 +134,8 @@ export const readProcessCommand = (
 
 export const readProcessTable = (): Effect.Effect<
   ReadonlyArray<{ pid: number; ppid: number }>,
-  RunPlatformProcessError
+  RunPlatformProcessError,
+  unknown
 > =>
   collectStdout(
     ChildProcess.make("ps", ["-ax", "-o", "pid=,ppid="], {
@@ -143,19 +144,19 @@ export const readProcessTable = (): Effect.Effect<
       stderr: "ignore",
     }),
   ).pipe(
-    Effect.map((stdout) =>
-      stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .map((line) => line.split(/\s+/))
-        .map(([pidText, ppidText]) => ({
-          pid: Number.parseInt(pidText ?? "", 10),
-          ppid: Number.parseInt(ppidText ?? "", 10),
-        }))
-        .filter((entry) => Number.isInteger(entry.pid) && Number.isInteger(entry.ppid)),
+    Effect.map(
+      (stdout): ReadonlyArray<{ pid: number; ppid: number }> =>
+        stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((line) => line.split(/\s+/))
+          .map(([pidText, ppidText]) => ({
+            pid: Number.parseInt(pidText ?? "", 10),
+            ppid: Number.parseInt(ppidText ?? "", 10),
+          }))
+          .filter((entry) => Number.isInteger(entry.pid) && Number.isInteger(entry.ppid)),
     ),
-    Effect.catchTag("RunPlatformProcessError", (error) => Effect.fail(error)),
     Effect.mapError(
       (cause) => new RunPlatformProcessError({ operation: "readProcessTable", cause }),
     ),

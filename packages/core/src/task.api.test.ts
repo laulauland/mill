@@ -6,17 +6,17 @@ const agentModel = "openai-codex/gpt-5.3-codex";
 describe("agent provider factories", () => {
   it("creates provider descriptors for built-in ACP providers", () => {
     expect(codex(agentModel)).toEqual({
-      driver: "codex",
+      provider: "codex",
       model: agentModel,
     });
 
     expect(claude("anthropic/claude-opus-4-6")).toEqual({
-      driver: "claude",
+      provider: "claude",
       model: "anthropic/claude-opus-4-6",
     });
 
     expect(pi("pi/default")).toEqual({
-      driver: "pi",
+      provider: "pi",
       model: "pi/default",
     });
   });

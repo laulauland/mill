@@ -22,8 +22,6 @@ import type {
   AgentRuntimeEvent,
   AgentTurnOutput,
   AgentRuntime,
-  ExtensionContext,
-  ExtensionRegistration,
   TaskInput,
   TaskResult,
 } from "./types";
@@ -74,9 +72,10 @@ export interface RunSyncInput extends RunSubmitInput {
       input: TaskInput,
     ) => Effect.Effect<
       TaskResult,
-      ProgramExecutionError | PersistenceError | LifecycleInvariantError
+      ProgramExecutionError | PersistenceError | LifecycleInvariantError,
+      unknown
     >,
-  ) => Effect.Effect<unknown, ProgramExecutionError>;
+  ) => Effect.Effect<unknown, ProgramExecutionError, unknown>;
 }
 
 export interface InspectRef {
@@ -105,47 +104,62 @@ export interface CancelResult {
 }
 
 export interface MillEngine {
-  readonly submit: (input: RunSubmitInput) => Effect.Effect<RunSyncOutput["run"], PersistenceError>;
+  readonly submit: (
+    input: RunSubmitInput,
+  ) => Effect.Effect<RunSyncOutput["run"], PersistenceError, unknown>;
   readonly runSync: (
     input: RunSyncInput,
   ) => Effect.Effect<
     RunSyncOutput,
-    ConfigError | PersistenceError | ProgramExecutionError | LifecycleInvariantError
+    | ConfigError
+    | PersistenceError
+    | ProgramExecutionError
+    | LifecycleInvariantError
+    | RunNotFoundError,
+    unknown
   >;
   readonly status: (
     runId: RunId,
-  ) => Effect.Effect<RunSyncOutput["run"], RunNotFoundError | PersistenceError>;
+  ) => Effect.Effect<RunSyncOutput["run"], RunNotFoundError | PersistenceError, unknown>;
   readonly result: (
     runId: RunId,
-  ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError>;
+  ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError, unknown>;
   readonly wait: (
     runId: RunId,
     timeout: number | string,
   ) => Effect.Effect<
     RunSyncOutput["run"],
-    RunNotFoundError | PersistenceError | LifecycleInvariantError | WaitTimeoutError
+    RunNotFoundError | PersistenceError | LifecycleInvariantError | WaitTimeoutError,
+    unknown
   >;
   readonly list: (
     status?: RunSyncOutput["run"]["status"],
-  ) => Effect.Effect<ReadonlyArray<RunSyncOutput["run"]>, PersistenceError>;
-  readonly watch: (runId: RunId) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError>;
-  readonly watchAll: (sinceTimeIso?: string) => Stream.Stream<MillEvent, PersistenceError>;
+  ) => Effect.Effect<ReadonlyArray<RunSyncOutput["run"]>, PersistenceError, unknown>;
+  readonly watch: (
+    runId: RunId,
+  ) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError, unknown>;
+  readonly watchAll: (
+    sinceTimeIso?: string,
+  ) => Stream.Stream<MillEvent, RunNotFoundError | PersistenceError, unknown>;
   readonly watchIo: (
     runId: RunId,
-  ) => Stream.Stream<IoStreamEvent, RunNotFoundError | PersistenceError>;
+  ) => Stream.Stream<IoStreamEvent, RunNotFoundError | PersistenceError, unknown>;
   readonly inspect: (
     ref: InspectRef,
-  ) => Effect.Effect<InspectResult, RunNotFoundError | PersistenceError>;
+  ) => Effect.Effect<InspectResult, RunNotFoundError | PersistenceError, unknown>;
   readonly cancel: (
     runId: RunId,
     reason?: string,
-  ) => Effect.Effect<CancelResult, RunNotFoundError | PersistenceError | LifecycleInvariantError>;
+  ) => Effect.Effect<
+    CancelResult,
+    RunNotFoundError | PersistenceError | LifecycleInvariantError,
+    unknown
+  >;
 }
 
 export interface MakeMillEngineInput {
   readonly runsDirectory: string;
   readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
-  readonly extensions: ReadonlyArray<ExtensionRegistration>;
 }
 
 const toIsoTimestamp = Effect.map(Clock.currentTimeMillis, (millis) =>
@@ -187,7 +201,7 @@ const synchronizeAppendState = (
   sequenceRef: Ref.Ref<number>,
   runStore: RunStore,
   runId: RunId,
-): Effect.Effect<LifecycleGuardState, PersistenceError | LifecycleInvariantError> =>
+): Effect.Effect<LifecycleGuardState, PersistenceError | LifecycleInvariantError, unknown> =>
   Effect.gen(function* () {
     const persistedEvents = yield* Effect.mapError(runStore.readEvents(runId), (error) =>
       toPersistenceError(runId, error),
@@ -216,7 +230,7 @@ const appendTier1Event = (
   runStore: RunStore,
   runId: RunId,
   eventBuilder: (sequence: number, timestamp: string) => MillEvent,
-): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+): Effect.Effect<void, PersistenceError | LifecycleInvariantError, unknown> =>
   Effect.gen(function* () {
     const synchronizedState = yield* synchronizeAppendState(
       lifecycleStateRef,
@@ -232,147 +246,6 @@ const appendTier1Event = (
     yield* Ref.set(lifecycleStateRef, nextState);
     yield* runStore.appendEvent(runId, event);
     yield* publishTier1Event(runId, event);
-  });
-
-const appendExtensionErrorEvent = (
-  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
-  sequenceRef: Ref.Ref<number>,
-  runStore: RunStore,
-  runId: RunId,
-  extensionName: string,
-  hook: "setup" | "onEvent",
-  message: string,
-): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
-  appendTier1Event(lifecycleStateRef, sequenceRef, runStore, runId, (sequence, timestamp) => ({
-    ...makeEventEnvelope(runId, sequence, timestamp),
-    type: "extension:error",
-    payload: {
-      extensionName,
-      hook,
-      message,
-    },
-  }));
-
-const notifyExtensionHookFailures = (
-  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
-  sequenceRef: Ref.Ref<number>,
-  runStore: RunStore,
-  runId: RunId,
-  extensionName: string,
-  hook: "setup" | "onEvent",
-  message: string,
-): Effect.Effect<void, never> =>
-  Effect.catch(
-    appendExtensionErrorEvent(
-      lifecycleStateRef,
-      sequenceRef,
-      runStore,
-      runId,
-      extensionName,
-      hook,
-      message,
-    ),
-    () => Effect.void,
-  );
-
-const runExtensionSetupHooks = (
-  extensions: ReadonlyArray<ExtensionRegistration>,
-  extensionContext: ExtensionContext,
-  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
-  sequenceRef: Ref.Ref<number>,
-  runStore: RunStore,
-  runId: RunId,
-): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
-  Effect.gen(function* () {
-    for (const extension of extensions) {
-      if (extension.setup === undefined) {
-        continue;
-      }
-
-      const setupExit = yield* Effect.exit(extension.setup(extensionContext));
-
-      if (Exit.isFailure(setupExit)) {
-        yield* notifyExtensionHookFailures(
-          lifecycleStateRef,
-          sequenceRef,
-          runStore,
-          runId,
-          extension.name,
-          "setup",
-          Cause.pretty(setupExit.cause),
-        );
-      }
-    }
-  });
-
-const runExtensionOnEventHooks = (
-  extensions: ReadonlyArray<ExtensionRegistration>,
-  extensionContext: ExtensionContext,
-  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
-  sequenceRef: Ref.Ref<number>,
-  runStore: RunStore,
-  runId: RunId,
-  event: MillEvent,
-): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
-  Effect.gen(function* () {
-    if (event.type === "extension:error") {
-      return;
-    }
-
-    for (const extension of extensions) {
-      if (extension.onEvent === undefined) {
-        continue;
-      }
-
-      const hookExit = yield* Effect.exit(extension.onEvent(event, extensionContext));
-
-      if (Exit.isFailure(hookExit)) {
-        yield* notifyExtensionHookFailures(
-          lifecycleStateRef,
-          sequenceRef,
-          runStore,
-          runId,
-          extension.name,
-          "onEvent",
-          Cause.pretty(hookExit.cause),
-        );
-      }
-    }
-  });
-
-const appendTier1EventWithHooks = (
-  extensions: ReadonlyArray<ExtensionRegistration>,
-  extensionContext: ExtensionContext,
-  lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
-  sequenceRef: Ref.Ref<number>,
-  runStore: RunStore,
-  runId: RunId,
-  eventBuilder: (sequence: number, timestamp: string) => MillEvent,
-): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
-  Effect.gen(function* () {
-    const synchronizedState = yield* synchronizeAppendState(
-      lifecycleStateRef,
-      sequenceRef,
-      runStore,
-      runId,
-    );
-    const sequence = yield* nextSequence(sequenceRef);
-    const timestamp = yield* toIsoTimestamp;
-    const event = eventBuilder(sequence, timestamp);
-    const nextState = yield* applyLifecycleTransition(synchronizedState, event);
-
-    yield* Ref.set(lifecycleStateRef, nextState);
-    yield* runStore.appendEvent(runId, event);
-    yield* publishTier1Event(runId, event);
-    yield* runExtensionOnEventHooks(
-      extensions,
-      extensionContext,
-      lifecycleStateRef,
-      sequenceRef,
-      runStore,
-      runId,
-      event,
-    );
   });
 
 const toTimeoutMillis = (timeout: number | string): number => {
@@ -435,7 +308,8 @@ const waitForRunTerminal = (
   runId: RunId,
 ): Effect.Effect<
   RunSyncOutput["run"],
-  RunNotFoundError | PersistenceError | LifecycleInvariantError
+  RunNotFoundError | PersistenceError | LifecycleInvariantError,
+  unknown
 > =>
   Effect.gen(function* () {
     // Check if run is already terminal before entering polling loop
@@ -476,31 +350,21 @@ const waitForRunTerminal = (
   });
 
 const appendTaskErrorEvent = (
-  extensions: ReadonlyArray<ExtensionRegistration>,
-  extensionContext: ExtensionContext,
   lifecycleStateRef: Ref.Ref<LifecycleGuardState>,
   sequenceRef: Ref.Ref<number>,
   runStore: RunStore,
   runId: RunId,
   taskId: string,
   message: string,
-): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
-  appendTier1EventWithHooks(
-    extensions,
-    extensionContext,
-    lifecycleStateRef,
-    sequenceRef,
-    runStore,
-    runId,
-    (sequence, timestamp) => ({
-      ...makeEventEnvelope(runId, sequence, timestamp),
-      type: "task:error",
-      payload: {
-        taskId: decodeTaskIdSync(taskId),
-        message,
-      },
-    }),
-  );
+): Effect.Effect<void, PersistenceError | LifecycleInvariantError, unknown> =>
+  appendTier1Event(lifecycleStateRef, sequenceRef, runStore, runId, (sequence, timestamp) => ({
+    ...makeEventEnvelope(runId, sequence, timestamp),
+    type: "task:error",
+    payload: {
+      taskId: decodeTaskIdSync(taskId),
+      message,
+    },
+  }));
 
 const terminalEventForRun = (event: MillEvent): boolean =>
   event.type === "run:complete" || event.type === "run:failed" || event.type === "run:cancelled";
@@ -564,11 +428,11 @@ const taskResultFromEvents = (
 const DefaultTaskSystemPrompt = "You are a helpful coding agent.";
 
 const taskInputToStorageTaskOptions = (taskInput: TaskInput): TaskOptions => ({
-  role: taskInput.role ?? taskInput.agent.driver,
+  role: taskInput.role ?? taskInput.agent.provider,
   system: taskInput.system ?? DefaultTaskSystemPrompt,
   prompt: taskInput.prompt,
   model: taskInput.agent.model,
-  driver: taskInput.agent.driver,
+  provider: taskInput.agent.provider,
 });
 
 const storageTaskResultFromTaskResult = (result: TaskResult): TaskStorageResult => ({
@@ -576,7 +440,7 @@ const storageTaskResultFromTaskResult = (result: TaskResult): TaskStorageResult 
   sessionRef: result.sessionRef,
   role: result.role,
   model: result.model,
-  driver: result.driver,
+  provider: result.provider,
   exitCode: result.exitCode,
   stopReason: result.stopReason,
   errorMessage: result.errorMessage,
@@ -587,7 +451,7 @@ const taskResultFromTaskTurnOutput = (output: AgentTurnOutput): TaskResult => ({
   sessionRef: output.result.sessionRef,
   role: output.result.role,
   model: output.result.model,
-  driver: output.result.driver,
+  provider: output.result.provider,
   exitCode: output.result.exitCode,
   stopReason: output.result.stopReason,
   errorMessage: output.result.errorMessage,
@@ -696,9 +560,6 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         const taskResultsRef = yield* Ref.make<ReadonlyArray<TaskStorageResult>>(
           existingTaskStorageResults,
         );
-        const extensionContext: ExtensionContext = {
-          runId: runInput.runId,
-        };
 
         const publishAgentRawLines = (
           taskId: TaskId,
@@ -722,7 +583,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
         const appendAgentEvents = (
           taskId: TaskId,
           agentEvents: ReadonlyArray<AgentRuntimeEvent>,
-        ): Effect.Effect<void, PersistenceError | LifecycleInvariantError> =>
+        ): Effect.Effect<void, PersistenceError | LifecycleInvariantError, unknown> =>
           Effect.gen(function* () {
             for (const agentEvent of agentEvents) {
               if (agentEvent.type === "milestone") {
@@ -737,9 +598,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
+                yield* appendTier1Event(
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -763,9 +622,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
+                yield* appendTier1Event(
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -789,9 +646,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
+                yield* appendTier1Event(
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -815,9 +670,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
+                yield* appendTier1Event(
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -841,9 +694,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                   },
                 };
 
-                yield* appendTier1EventWithHooks(
-                  input.extensions,
-                  extensionContext,
+                yield* appendTier1Event(
                   lifecycleStateRef,
                   sequenceRef,
                   runStore,
@@ -858,18 +709,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           });
 
         if (existingEvents.length === 0) {
-          yield* runExtensionSetupHooks(
-            input.extensions,
-            extensionContext,
-            lifecycleStateRef,
-            sequenceRef,
-            runStore,
-            runInput.runId,
-          );
-
-          yield* appendTier1EventWithHooks(
-            input.extensions,
-            extensionContext,
+          yield* appendTier1Event(
             lifecycleStateRef,
             sequenceRef,
             runStore,
@@ -883,9 +723,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             }),
           );
 
-          yield* appendTier1EventWithHooks(
-            input.extensions,
-            extensionContext,
+          yield* appendTier1Event(
             lifecycleStateRef,
             sequenceRef,
             runStore,
@@ -904,7 +742,8 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           taskInput: TaskInput,
         ): Effect.Effect<
           TaskResult,
-          ProgramExecutionError | PersistenceError | LifecycleInvariantError
+          ProgramExecutionError | PersistenceError | LifecycleInvariantError,
+          unknown
         > =>
           Effect.gen(function* () {
             const storageInput = taskInputToStorageTaskOptions(taskInput);
@@ -926,9 +765,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               },
             };
 
-            yield* appendTier1EventWithHooks(
-              input.extensions,
-              extensionContext,
+            yield* appendTier1Event(
               lifecycleStateRef,
               sequenceRef,
               runStore,
@@ -942,20 +779,20 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
             yield* Effect.logDebug("mill.engine:task-session-start", {
               runId: runInput.runId,
               taskId,
-              driver: storageInput.driver,
+              provider: storageInput.provider,
               role: storageInput.role,
               model: storageInput.model,
             });
 
             const agentTurnExit = yield* Effect.exit(
               Effect.gen(function* () {
-                const runtime = input.agentRuntimes[storageInput.driver];
+                const runtime = input.agentRuntimes[storageInput.provider];
 
                 if (runtime === undefined) {
                   return yield* Effect.fail(
                     new ProgramExecutionError({
                       runId: runInput.runId,
-                      message: `Unknown agent provider '${storageInput.driver}'. Available providers: ${Object.keys(
+                      message: `Unknown agent provider '${storageInput.provider}'. Available providers: ${Object.keys(
                         input.agentRuntimes,
                       )
                         .sort((left, right) => left.localeCompare(right))
@@ -975,13 +812,13 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
 
                 return yield* session
                   .startTurn({ prompt: storageInput.prompt })
-                  .pipe(Effect.ensuring(session.close()));
+                  .pipe(Effect.ensuring(Effect.ignore(session.close())));
               }).pipe(
                 Effect.mapError(
                   (error) =>
                     new ProgramExecutionError({
                       runId: runInput.runId,
-                      message: `Agent provider ${storageInput.driver} task session failed: ${toMessage(error)}`,
+                      message: `Agent provider ${storageInput.provider} task session failed: ${toMessage(error)}`,
                     }),
                 ),
               ),
@@ -993,13 +830,11 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               yield* Effect.logDebug("mill.engine:task-session-failed", {
                 runId: runInput.runId,
                 taskId,
-                driver: storageInput.driver,
+                provider: storageInput.provider,
                 message: failureMessage,
               });
 
               yield* appendTaskErrorEvent(
-                input.extensions,
-                extensionContext,
                 lifecycleStateRef,
                 sequenceRef,
                 runStore,
@@ -1032,9 +867,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
               },
             };
 
-            yield* appendTier1EventWithHooks(
-              input.extensions,
-              extensionContext,
+            yield* appendTier1Event(
               lifecycleStateRef,
               sequenceRef,
               runStore,
@@ -1077,9 +910,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
                 : JSON.stringify(executionExit.value),
           };
 
-          yield* appendTier1EventWithHooks(
-            input.extensions,
-            extensionContext,
+          yield* appendTier1Event(
             lifecycleStateRef,
             sequenceRef,
             runStore,
@@ -1113,9 +944,7 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           errorMessage: failureMessage,
         };
 
-        yield* appendTier1EventWithHooks(
-          input.extensions,
-          extensionContext,
+        yield* appendTier1Event(
           lifecycleStateRef,
           sequenceRef,
           runStore,
@@ -1220,14 +1049,15 @@ export const makeMillEngine = (input: MakeMillEngineInput): MillEngine => {
           } satisfies InspectResult;
         }
 
-        const taskEvents = events.filter((event) => isTaskEventForTask(event, ref.taskId));
+        const taskId = ref.taskId;
+        const taskEvents = events.filter((event) => isTaskEventForTask(event, taskId));
 
         return {
           kind: "task",
           runId: ref.runId,
-          taskId: ref.taskId,
+          taskId,
           events: taskEvents,
-          result: taskResultFromEvents(events, ref.taskId),
+          result: taskResultFromEvents(events, taskId),
         } satisfies InspectResult;
       }),
 

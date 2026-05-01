@@ -5,5 +5,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./program": "./src/program.api.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "test": "bun test src"
   }
 }

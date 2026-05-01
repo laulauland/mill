@@ -7,3 +7,5 @@ packages/pi-mill/.pi-skills/
 packages/pi-mill/.vendor/
 
 Library/
+
+*.tsbuildinfo

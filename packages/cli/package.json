@@ -8,8 +8,12 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "test": "bun test src"
+  },
   "dependencies": {
     "@mill/core": "workspace:*",
-    "@mill/driver-acp": "workspace:*"
+    "@mill/provider-acp": "workspace:*"
   }
 }

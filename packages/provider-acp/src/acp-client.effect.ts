@@ -5,6 +5,7 @@ import {
   type AgentEvent,
   type AgentStream,
   type ConfigOption,
+  type SessionId,
 } from "spawn-agent";
 import type {
   AgentProcessConfig,
@@ -155,7 +156,7 @@ const collectPrompt = (
   agent: SpawnAgent,
   input: AgentSessionInput,
   turn: AgentTurnInput,
-  sessionId: string,
+  sessionId: SessionId,
   setActiveStream: (stream: AgentStream | undefined) => void,
 ): Effect.Effect<AgentTurnOutput, AcpClientError> =>
   Effect.gen(function* () {
@@ -187,7 +188,7 @@ const collectPrompt = (
             sessionRef: sessionId,
             role: input.role,
             model: input.model,
-            driver: "acp",
+            provider: "acp",
             exitCode: mapStopReasonToExitCode(stopReason),
             stopReason: mapStopReason(stopReason),
           },

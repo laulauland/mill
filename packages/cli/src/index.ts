@@ -8,10 +8,9 @@ import {
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as BunServices from "@effect/platform-bun/BunServices";
-import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
-import { Cause, Config, Context, Data, Effect, Exit, Layer, Option, Scope } from "effect";
+import { Cause, Config, Context, Effect, Exit, Layer, Option, Scope } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 import {
   createMillRuntime,
@@ -26,8 +25,12 @@ import {
   createClaudeAcpAgentProvider,
   createCodexAcpAgentProvider,
   createPiAcpAgentProvider,
-} from "@mill/driver-acp";
-import { parseJson } from "./json.codec";
+} from "@mill/provider-acp";
+import {
+  decodeStringArrayJson,
+  decodeStringRecordJson,
+  decodeStringRecordJsonEffect,
+} from "./json.schema";
 
 interface CliIo {
   readonly stdout: (line: string) => void | Promise<void>;
@@ -46,8 +49,6 @@ interface RunCliOptions {
   readonly cwd?: string;
   readonly homeDirectory?: string;
   readonly runsDirectory?: string;
-  readonly pathExists?: (path: string) => Promise<boolean>;
-  readonly loadConfigModule?: (path: string) => Promise<unknown>;
   readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
   readonly io?: CliIo;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -87,10 +88,6 @@ const CLI_ENVIRONMENT_VARIABLES = [
   "PWD",
   "npm_package_version",
 ] as const;
-
-class CliResolutionError extends Data.TaggedError("CliResolutionError")<{
-  readonly message: string;
-}> {}
 
 declare const __MILL_VERSION__: string | undefined;
 
@@ -141,19 +138,8 @@ const parseStringArrayJson = (raw: string | undefined): ReadonlyArray<string> | 
     return undefined;
   }
 
-  const parsed = Effect.runSyncExit(
-    Effect.try({
-      try: () => parseJson(raw),
-      catch: (error) => new CliResolutionError({ message: formatUnknownError(error) }),
-    }),
-  );
-  if (Exit.isFailure(parsed)) {
-    return undefined;
-  }
-
-  return Array.isArray(parsed.value)
-    ? parsed.value.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
+  const decoded = decodeStringArrayJson(raw);
+  return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 const parseStringRecordJson = (
@@ -163,25 +149,8 @@ const parseStringRecordJson = (
     return undefined;
   }
 
-  const parsed = Effect.runSyncExit(
-    Effect.try({
-      try: () => parseJson(raw),
-      catch: (error) => new CliResolutionError({ message: formatUnknownError(error) }),
-    }),
-  );
-  if (Exit.isFailure(parsed)) {
-    return undefined;
-  }
-
-  if (typeof parsed.value !== "object" || parsed.value === null || Array.isArray(parsed.value)) {
-    return undefined;
-  }
-
-  const entries = Object.entries(parsed.value).filter(
-    (entry): entry is [string, string] => typeof entry[1] === "string",
-  );
-
-  return Object.fromEntries(entries);
+  const decoded = decodeStringRecordJson(raw);
+  return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 const normalizeAcpCommand = (command: string, executablePath: string | undefined): string =>
@@ -216,7 +185,6 @@ const createDefaultAgentRuntimes = (
 ): Readonly<Record<string, AgentRuntime>> => ({
   pi: createPiAcpAgentProvider({
     process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
-    homeDirectory: normalizeOptionalText(env.HOME),
   }).runtime,
   claude: createClaudeAcpAgentProvider({
     process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
@@ -226,19 +194,23 @@ const createDefaultAgentRuntimes = (
   }).runtime,
 });
 
-const runWithBunServices = <A, E>(
-  effect: Effect.Effect<A, E, BunServices.BunServices>,
-): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
+const runWithBunServices = <A, E>(effect: Effect.Effect<A, E, unknown>): Promise<A> =>
+  Effect.runPromise(
+    Effect.provide(effect as Effect.Effect<A, E, BunServices.BunServices>, BunServices.layer),
+  );
 
 const readOptionalConfigString = (
   name: (typeof CLI_ENVIRONMENT_VARIABLES)[number],
-): Effect.Effect<string | undefined> =>
+): Effect.Effect<string | undefined, Config.ConfigError> =>
   Effect.gen(function* () {
     const value = yield* Config.string(name).pipe(Config.option);
     return Option.isSome(value) ? value.value : undefined;
   });
 
-const readCliEnvironment = (): Effect.Effect<Readonly<Record<string, string | undefined>>> =>
+const readCliEnvironment = (): Effect.Effect<
+  Readonly<Record<string, string | undefined>>,
+  Config.ConfigError
+> =>
   Effect.map(
     Effect.forEach(CLI_ENVIRONMENT_VARIABLES, (name) =>
       Effect.map(readOptionalConfigString(name), (value) => [name, value] as const),
@@ -254,7 +226,7 @@ const readCliBootstrap = (): Effect.Effect<
     readonly executablePath: string;
     readonly pid: number | undefined;
   },
-  never,
+  Config.ConfigError,
   Stdio.Stdio | CliPlatform
 > =>
   Effect.gen(function* () {
@@ -460,17 +432,12 @@ const optionalTextOption = (name: string) => Options.string(name).pipe(Options.o
 const fromOption = <A>(value: Option.Option<A>): A | undefined =>
   Option.isSome(value) ? value.value : undefined;
 
-const MetadataJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
-
-const parseMetadataJson = (raw: string): Readonly<Record<string, string>> | undefined => {
-  const parsed = Schema.decodeUnknownSync(MetadataJson)(raw);
-
-  if (Object.keys(parsed).length === 0) {
-    return undefined;
-  }
-
-  return parsed;
-};
+const parseMetadataJson = (
+  raw: string,
+): Effect.Effect<Readonly<Record<string, string>> | undefined, unknown> =>
+  Effect.map(decodeStringRecordJsonEffect(raw), (parsed) =>
+    Object.keys(parsed).length === 0 ? undefined : parsed,
+  );
 
 const toCliEffect = (program: Promise<number>) =>
   Effect.flatMap(
@@ -510,7 +477,6 @@ const createCliRuntime = (
     homeDirectory: options.homeDirectory,
     env: options.env,
     executablePath: options.executablePath,
-    entrypointPath: options.entrypointPath,
     runsDirectory: input.runsDirectory ?? options.runsDirectory,
     agentRuntimes: createDefaultAgentRuntimes(options.env ?? {}, options.executablePath),
     launchWorker: input.launchWorker,
@@ -534,12 +500,7 @@ const runCommand = async (
   let metadata: Readonly<Record<string, string>> | undefined;
 
   if (metadataText !== undefined) {
-    const decodedMetadata = Effect.runSyncExit(
-      Effect.try({
-        try: () => parseMetadataJson(metadataText),
-        catch: (error) => error,
-      }),
-    );
+    const decodedMetadata = Effect.runSyncExit(parseMetadataJson(metadataText));
 
     if (Exit.isFailure(decodedMetadata)) {
       await io.stderr(`Invalid --meta-json payload: ${Cause.pretty(decodedMetadata.cause)}`);
@@ -951,46 +912,22 @@ const STATIC_AUTHORING_HELP_LINES = [
   "  prompt = WHAT to do now (specific files, concrete task)",
 ] as const;
 
-interface ProviderModelCatalogEntry {
-  readonly providerName: string;
-  readonly modelFormat: string;
-  readonly models: ReadonlyArray<string>;
-}
-
 type ResolvedAuthoringHelp = { readonly source: "static" };
-
-type ResolvedModelCatalogHelp =
-  | { readonly source: "resolved"; readonly entries: ReadonlyArray<ProviderModelCatalogEntry> }
-  | { readonly source: "unavailable"; readonly message: string };
 
 interface ResolvedHelpContext {
   readonly authoring: ResolvedAuthoringHelp;
-  readonly modelCatalog: ResolvedModelCatalogHelp;
 }
 
 const renderAuthoringHelp = (_authoringHelp: ResolvedAuthoringHelp): string =>
   `Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`;
 
-const renderModelCatalogHelp = (modelCatalog: ResolvedModelCatalogHelp): string => {
-  if (modelCatalog.source === "unavailable") {
-    return `Models:\n  (unavailable: ${modelCatalog.message})`;
-  }
-
-  if (modelCatalog.entries.length === 0) {
-    return "Models:\n  (no providers configured)";
-  }
-
-  return [
-    "Models:",
-    ...modelCatalog.entries.map((entry) => {
-      if (entry.models.length === 0) {
-        return `  ${entry.providerName} (${entry.modelFormat}): (catalog empty)`;
-      }
-
-      return `  ${entry.providerName} (${entry.modelFormat}): ${entry.models.join(", ")}`;
-    }),
+const renderProviderHelp = (): string =>
+  [
+    "Providers:",
+    "  codex(model)  ACP provider using the codex-acp command",
+    "  claude(model) ACP provider using the claude command",
+    "  pi(model)     ACP provider using the pi acp command",
   ].join("\n");
-};
 
 const buildHelpText = (helpContext: ResolvedHelpContext, version: string): string =>
   `mill ${version} - orchestration runtime for AI agents
@@ -1007,7 +944,7 @@ Commands:
 
 Global options: --json, --runs-dir <path>
 
-${renderModelCatalogHelp(helpContext.modelCatalog)}
+${renderProviderHelp()}
 
 Examples:
 
@@ -1057,47 +994,8 @@ const isCommandHelpRequest = (argv: ReadonlyArray<string>): boolean => {
   return argv.slice(1).some((argument) => HELP_FLAGS.has(argument));
 };
 
-const resolveHelpContextForHelpEffect = (
-  options: RunCliOptions,
-): Effect.Effect<ResolvedHelpContext, never, BunServices.BunServices> =>
-  Effect.gen(function* () {
-    const env = options.env ?? {};
-    const executablePath = options.executablePath;
-    const registrations = {
-      codex: createCodexAcpAgentProvider({
-        process: readAcpProcessOverride(env, "MILL_CODEX_ACP", executablePath),
-      }),
-      claude: createClaudeAcpAgentProvider({
-        process: readAcpProcessOverride(env, "MILL_CLAUDE_ACP", executablePath),
-      }),
-      pi: createPiAcpAgentProvider({
-        process: readAcpProcessOverride(env, "MILL_PI_ACP", executablePath),
-        homeDirectory: normalizeOptionalText(env.HOME),
-      }),
-    };
-
-    const entries = yield* Effect.forEach(
-      Object.entries(registrations),
-      ([providerName, registration]) =>
-        Effect.map(registration.models, (models) => ({
-          providerName: providerName,
-          modelFormat: registration.modelFormat,
-          models: Array.from(new Set(models)),
-        })),
-    );
-
-    return {
-      authoring: { source: "static" },
-      modelCatalog: { source: "resolved", entries },
-    } satisfies ResolvedHelpContext;
-  }).pipe(
-    Effect.catch((error) =>
-      Effect.succeed({
-        authoring: { source: "static" },
-        modelCatalog: { source: "unavailable", message: formatUnknownError(error) },
-      } satisfies ResolvedHelpContext),
-    ),
-  );
+const resolveHelpContextForHelpEffect = (): Effect.Effect<ResolvedHelpContext> =>
+  Effect.succeed({ authoring: { source: "static" } });
 
 const createCliHelpFormatter = (): CliOutput.Formatter => {
   const defaultFormatter = CliOutput.defaultFormatter({ colors: false });
@@ -1119,7 +1017,7 @@ const createCliHelpFormatter = (): CliOutput.Formatter => {
 export const runCliEffect = (
   argv: ReadonlyArray<string>,
   options?: RunCliOptions,
-): Effect.Effect<number, never, BunServices.BunServices> =>
+): Effect.Effect<number, never, unknown> =>
   Effect.gen(function* () {
     const resolvedOptions = options ?? {};
     const stdio = yield* Stdio.Stdio;
@@ -1127,7 +1025,7 @@ export const runCliEffect = (
     const cliVersion = resolveCliVersion(resolvedOptions.env ?? {});
 
     if (isHelpRequest(argv)) {
-      const helpContext = yield* resolveHelpContextForHelpEffect(resolvedOptions);
+      const helpContext = yield* resolveHelpContextForHelpEffect();
       yield* Effect.promise(() =>
         Promise.resolve(io.stdout(buildHelpText(helpContext, cliVersion))),
       );
@@ -1135,9 +1033,7 @@ export const runCliEffect = (
     }
 
     const commandHelpRequest = isCommandHelpRequest(argv);
-    const helpContext = commandHelpRequest
-      ? yield* resolveHelpContextForHelpEffect(resolvedOptions)
-      : undefined;
+    const helpContext = commandHelpRequest ? yield* resolveHelpContextForHelpEffect() : undefined;
 
     const command = createCli(resolvedOptions, io);
     const run = CliCommand.runWith(command, {
@@ -1146,7 +1042,14 @@ export const runCliEffect = (
 
     const exitCode = yield* run(argv).pipe(
       Effect.as(0),
-      Effect.catchTag("CliExit", (error) => Effect.succeed(error.code)),
+      Effect.catchIf(
+        (error): error is CliExit =>
+          typeof error === "object" &&
+          error !== null &&
+          "_tag" in error &&
+          error._tag === "CliExit",
+        (error) => Effect.succeed(error.code),
+      ),
       Effect.catchIf(
         (error): error is CliError.CliError => CliError.isCliError(error),
         (error) =>
@@ -1172,9 +1075,7 @@ export const runCliEffect = (
         Promise.resolve(io.stdout(`Authoring:\n${STATIC_AUTHORING_HELP_LINES.join("\n")}`)),
       );
 
-      yield* Effect.promise(() =>
-        Promise.resolve(io.stdout(renderModelCatalogHelp(helpContext.modelCatalog))),
-      );
+      yield* Effect.promise(() => Promise.resolve(io.stdout(renderProviderHelp())));
     }
 
     return exitCode;
@@ -1202,7 +1103,11 @@ export const bunCliPlatformLayer: Layer.Layer<CliPlatform, never, Path.Path> = L
   CliPlatform,
   Effect.gen(function* () {
     const path = yield* Path.Path;
-    const bun = globalThis.Bun;
+    const bun = (
+      globalThis as {
+        readonly Bun?: { readonly cwd: string; readonly argv: ReadonlyArray<string> };
+      }
+    ).Bun;
     return {
       cwd: Effect.sync(() => (bun === undefined ? path.resolve(".") : bun.cwd)),
       executablePath: Effect.sync(() => bun?.argv[0] ?? "node"),
@@ -1213,7 +1118,7 @@ export const bunCliPlatformLayer: Layer.Layer<CliPlatform, never, Path.Path> = L
 
 export const runCliMainEffect = (options?: {
   readonly entrypointPath?: string;
-}): Effect.Effect<number, never, BunServices.BunServices> =>
+}): Effect.Effect<number, never, unknown> =>
   Effect.gen(function* () {
     const bootstrap = yield* readCliBootstrap();
     return yield* runCliEffect(bootstrap.argv, {
@@ -1224,4 +1129,4 @@ export const runCliMainEffect = (options?: {
       pid: bootstrap.pid,
       processControl: createEffectProcessControl(),
     });
-  });
+  }).pipe(Effect.catch(() => Effect.succeed(1)));

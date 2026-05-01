@@ -14,7 +14,7 @@ export interface Subscription {
 }
 
 export interface TaskActorRuntimeOptions {
-  readonly execute: (input: TaskInput) => Effect.Effect<TaskResult, unknown>;
+  readonly execute: (input: TaskInput) => Effect.Effect<TaskResult, unknown, unknown>;
   readonly runId?: string;
   readonly taskId?: string;
 }
@@ -22,11 +22,11 @@ export interface TaskActorRuntimeOptions {
 export interface TaskActorRuntime {
   readonly id: string;
   readonly ref: TaskRef;
-  readonly done: Effect.Effect<TaskResult, unknown>;
-  readonly start: Effect.Effect<void>;
-  readonly stop: Effect.Effect<void>;
-  readonly cancel: (reason?: string) => Effect.Effect<void>;
-  readonly send: (command: TaskCommand) => Effect.Effect<void>;
+  readonly done: Effect.Effect<TaskResult, unknown, unknown>;
+  readonly start: Effect.Effect<void, never, unknown>;
+  readonly stop: Effect.Effect<void, never, unknown>;
+  readonly cancel: (reason?: string) => Effect.Effect<void, never, unknown>;
+  readonly send: (command: TaskCommand) => Effect.Effect<void, never, unknown>;
   readonly subscribe: (listener: (snapshot: TaskSnapshot) => void) => Subscription;
   readonly getSnapshot: () => TaskSnapshot;
 }
@@ -57,9 +57,9 @@ const makeActorId = (prefix: string): string => {
 const makeCancelledResult = (input: TaskInput, ref: TaskRef, reason?: string): TaskResult => ({
   text: "",
   sessionRef: `task://${ref.runId}/${ref.taskId}`,
-  role: input.role ?? input.agent.driver,
+  role: input.role ?? input.agent.provider,
   model: input.agent.model,
-  driver: input.agent.driver,
+  provider: input.agent.provider,
   exitCode: 1,
   stopReason: "cancelled",
   errorMessage: reason ?? "Task cancelled",

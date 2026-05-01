@@ -10,12 +10,12 @@ const main = runCliMainEffect({ entrypointPath }).pipe(
   Effect.provide(
     Layer.mergeAll(BunServices.layer, bunCliPlatformLayer.pipe(Layer.provide(BunServices.layer))),
   ),
-);
+) as Effect.Effect<number, never>;
 
 BunRuntime.runMain(main, {
   teardown: (exit, onExit) => {
     if (Exit.isSuccess(exit)) {
-      onExit(exit.value);
+      onExit(exit.value as number);
       return;
     }
 

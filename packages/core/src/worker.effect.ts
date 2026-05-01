@@ -1,7 +1,12 @@
 import * as FileSystem from "effect/FileSystem";
 import { Clock, Effect } from "effect";
 import type { RunId, RunSyncOutput } from "./run.schema";
-import { ProgramExecutionError, type MillEngine, type RunSyncInput } from "./engine.effect";
+import {
+  ConfigError,
+  ProgramExecutionError,
+  type MillEngine,
+  type RunSyncInput,
+} from "./engine.effect";
 import { PersistenceError, RunNotFoundError } from "./run-store.effect";
 import { LifecycleInvariantError } from "./lifecycle-guard.effect";
 
@@ -34,7 +39,7 @@ const toIsoTimestamp = Effect.map(Clock.currentTimeMillis, (millis) =>
 const appendWorkerLog = (
   logFilePath: string,
   message: string,
-): Effect.Effect<void, PersistenceError> =>
+): Effect.Effect<void, PersistenceError, unknown> =>
   Effect.gen(function* () {
     const timestamp = yield* toIsoTimestamp;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -63,7 +68,12 @@ export const runDetachedWorker = (
   input: DetachedWorkerInput,
 ): Effect.Effect<
   RunSyncOutput,
-  RunNotFoundError | PersistenceError | ProgramExecutionError | LifecycleInvariantError
+  | RunNotFoundError
+  | PersistenceError
+  | ProgramExecutionError
+  | LifecycleInvariantError
+  | ConfigError,
+  unknown
 > =>
   Effect.gen(function* () {
     const submittedRun = yield* input.engine.submit({

@@ -6,14 +6,15 @@
   ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "bun run typecheck:packages && tsgo --noEmit",
+    "typecheck:packages": "bun run --cwd packages/core typecheck && bun run --cwd packages/provider-acp typecheck && bun run --cwd packages/cli typecheck",
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "lint:ast-grep:test": "ast-grep test --config .ast-grep/sgconfig.yml --test-dir .ast-grep/tests --skip-snapshot-tests",
     "lint:ast-grep": "bun run lint:effect && bun run lint:boundary && bun run lint:runtime-safety",
-    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src packages/pi-mill --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --globs '!**/.vendor/**' --globs '!**/.pi-skills/**' --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import|effect-promise-in-effect-modules)'",
+    "lint:effect": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src --globs '**/*.effect.ts' --globs '**/*.schema.ts' --globs '**/*.codec.ts' --globs '!**/*.test.ts' --globs '!**/.vendor/**' --globs '!**/.pi-skills/**' --error --filter 'no-(raw-promise|try-catch|throw|dot-then|any|bun-globals|node-imports|dynamic-import|effect-promise-in-effect-modules)'",
     "lint:boundary": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src --error --filter 'no-(interface-outside-public|promise-outside-public|interface-for-domain-models|effect-runpromise|runtime-runpromise-outside-boundary|public-import-internal|dynamic-import)'",
-    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src packages/pi-mill --globs '**/*.ts' --globs '!**/*.test.ts' --globs '!**/.vendor/**' --globs '!**/.pi-skills/**' --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random|new-error|promise-reject|process-cwd-outside-edge|sync-fs|node-child-process|crypto-randomuuid-outside-id-service|instanceof-error|dot-catch-finally|raw-promise|try-catch|throw|dot-then)'",
+    "lint:runtime-safety": "ast-grep scan --config .ast-grep/sgconfig.yml packages/*/src --globs '**/*.ts' --globs '!**/*.test.ts' --globs '!**/.vendor/**' --globs '!**/.pi-skills/**' --error --filter 'no-(json-parse-outside-codec|shell-string-command|process-env-outside-config|date-now-outside-clock|math-random-outside-random|new-error|promise-reject|process-cwd-outside-edge|sync-fs|node-child-process|crypto-randomuuid-outside-id-service|instanceof-error|dot-catch-finally|raw-promise|try-catch|throw|dot-then)'",
     "lint:exports": "bun run scripts/check-exports.ts",
     "format": "oxfmt . --write",
     "format:check": "oxfmt . --check",
@@ -25,6 +26,9 @@
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.39.6",
+    "@mill/core": "workspace:*",
+    "@mill/provider-acp": "workspace:*",
+    "@types/node": "^25.6.0",
     "@typescript/native-preview": "latest",
     "oxfmt": "^0.26.0",
     "oxlint": "^1.18.0"

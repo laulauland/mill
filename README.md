@@ -120,7 +120,7 @@ mill ls [--status <filter>]            list runs
 
 All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
 
-`mill --help` and `mill <command> --help` include a **Models** section for built-in ACP agent providers. Live model discovery is not part of normal help yet.
+`mill --help` and `mill <command> --help` include a **Providers** section for built-in ACP agent providers. Programs pass model strings explicitly with `codex(model)`, `claude(model)`, or `pi(model)`.
 
 ## Use with Claude Code
 
@@ -131,16 +131,6 @@ npx skills add laulauland/mill
 ```
 
 This teaches Claude Code how to write and run mill programs. When you ask it to farm out work to subagents, it will author a `.ts` program using task actors, show it to you for confirmation, and execute it via the CLI.
-
-## Use with pi
-
-[Install mill](#install), then add the [pi-mill](https://github.com/laulauland/mill/tree/main/packages/pi-mill) extension:
-
-```bash
-pi install npm:pi-mill
-```
-
-This registers a `subagent` tool in pi. Pi-mill has an extension-specific serialized task shape (`agent` label + `model` string) and generates core-compatible mill programs internally. The extension also adds monitoring: `/mill` opens an in-session overlay, and `pi --mill` launches a standalone run monitor.
 
 ## FAQ
 
@@ -163,17 +153,11 @@ No. The orchestrator writes them. You review and confirm.
 
 Mill ships built-in ACP-backed Claude, Codex, and pi providers. The ACP implementation delegates protocol/session work to `spawn-agent`, which is an internal dependency, not a public mill API.
 
-| Package      | Purpose                                    |
-| ------------ | ------------------------------------------ |
-| `@mill/core` | Engine, lifecycle, and task actor API      |
-| `@mill/cli`  | CLI commands and built-in agent providers  |
-| `pi-mill`    | Pi extension for mill as execution backend |
-
-Model catalog source for built-in providers:
-
-- `pi`: reads `~/.pi/agent/settings.json` (`enabledModels`) by default.
-- `claude`: built-in default catalog (`sonnet`, `opus`, `haiku`).
-- `codex`: built-in default catalog (`openai-codex/gpt-5.3-codex`).
+| Package              | Purpose                                          |
+| -------------------- | ------------------------------------------------ |
+| `@mill/core`         | Engine, lifecycle, and task actor API            |
+| `@mill/cli`          | CLI commands and built-in agent providers        |
+| `@mill/provider-acp` | Internal ACP provider adapter around spawn-agent |
 
 ## Internals
 

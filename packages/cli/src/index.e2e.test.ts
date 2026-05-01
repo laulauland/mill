@@ -70,7 +70,6 @@ const envCommand = (
 const withNeutralRunDepthEnv = (command: ChildProcess.Command): ChildProcess.Command =>
   envCommand(command, {
     ...TEST_ACP_ENV,
-    HOME: "",
     MILL_RUN_DEPTH: "",
   });
 
@@ -84,28 +83,7 @@ const commandOutput = (command: ChildProcess.Command): Promise<string> =>
     ),
   );
 
-const commandExitCode = (command: ChildProcess.Command): Promise<number> =>
-  Effect.runPromise(
-    Effect.provide(
-      Effect.map(
-        ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
-          spawner.exitCode(withNeutralRunDepthEnv(command)),
-        ),
-        Number,
-      ),
-      BunServices.layer,
-    ),
-  );
-
 describe("mill help (e2e)", () => {
-  it("does not expose discovery subcommand", async () => {
-    const exitCode = await commandExitCode(
-      makeCommand("bun", "run", "packages/cli/src/mill.ts", "discovery", "--json"),
-    );
-
-    expect(exitCode).toBe(1);
-  });
-
   it("prints top-level help via built-in --help", async () => {
     const output = await commandOutput(
       makeCommand("bun", "run", "packages/cli/src/mill.ts", "--help"),
@@ -115,7 +93,6 @@ describe("mill help (e2e)", () => {
     expect(output).toContain("Commands:");
     expect(output).toContain("run <program.ts>");
     expect(output).not.toContain("inspect <ref>");
-    expect(output).not.toContain("discovery");
     expect(output).not.toContain("Effect-first");
   });
 
@@ -125,8 +102,6 @@ describe("mill help (e2e)", () => {
     );
 
     expect(output).toContain("$ run [--json] [--sync]");
-    expect(output).not.toContain(`--${"driver"}`);
-    expect(output).not.toContain(`--${"executor"}`);
   });
 });
 

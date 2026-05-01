@@ -1,16 +1,16 @@
 import type { AgentProvider } from "./types";
 
 export const codex = (model: string): AgentProvider => ({
-  driver: "codex",
+  provider: "codex",
   model,
 });
 
 export const claude = (model: string): AgentProvider => ({
-  driver: "claude",
+  provider: "claude",
   model,
 });
 
 export const pi = (model: string): AgentProvider => ({
-  driver: "pi",
+  provider: "pi",
   model,
 });

@@ -14,7 +14,7 @@ const successResult: TaskResult = {
   sessionRef: "session/1",
   role: "scout",
   model: "openai-codex/gpt-5.3-codex",
-  driver: "default",
+  provider: "default",
   exitCode: 0,
 };
 

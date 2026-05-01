@@ -4,6 +4,6 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/cli" },
-    { "path": "./packages/driver-acp" }
+    { "path": "./packages/provider-acp" }
   ]
 }

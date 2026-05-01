@@ -42,8 +42,10 @@ const createTaskActorFromRuntime = (
   runtime: TaskActorRuntime,
   options: Pick<EffectTaskActorOptions, "onComplete" | "services"> = {},
 ): TaskActor => {
-  const runPromise =
-    options.services === undefined ? Effect.runPromise : Effect.runPromiseWith(options.services);
+  const runPromise = <A, E>(effect: Effect.Effect<A, E, unknown>): Promise<A> =>
+    options.services === undefined
+      ? Effect.runPromise(effect as Effect.Effect<A, E>)
+      : Effect.runPromiseWith(options.services)(effect as Effect.Effect<A, E>);
   const actor: TaskActor = {
     id: runtime.id,
     ref: runtime.ref,
@@ -60,7 +62,6 @@ const createTaskActorFromRuntime = (
       void runPromise(runtime.start);
       return actor;
     },
-    stop: () => actor.cancel("Task stopped"),
     cancel: (reason?: string) => {
       void runPromise(runtime.cancel(reason));
       return actor;
@@ -106,9 +107,9 @@ const createNoopTask = (input: TaskInput, runId: string, taskId?: string): TaskA
     execute: async () => ({
       text: "",
       sessionRef: `task://${runId}/${taskId ?? "task_session"}`,
-      role: input.role ?? input.agent.driver,
+      role: input.role ?? input.agent.provider,
       model: input.agent.model,
-      driver: input.agent.driver,
+      provider: input.agent.provider,
       exitCode: 0,
     }),
     runId,
@@ -165,7 +166,6 @@ export const createRunActor = (options: RunActorRuntimeOptions = {}): RunActor =
       runSync(runtime.start);
       return actor;
     },
-    stop: () => actor.cancel("Run stopped"),
     cancel: (reason?: string) => {
       runSync(runtime.cancel(reason));
       return actor;
@@ -178,7 +178,7 @@ export const createRunActor = (options: RunActorRuntimeOptions = {}): RunActor =
     taskRef: (taskId: string) =>
       createNoopTask(
         {
-          agent: { driver: "unknown", model: "unknown" },
+          agent: { provider: "unknown", model: "unknown" },
           prompt: "",
         },
         runtime.id,

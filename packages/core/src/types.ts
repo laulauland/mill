@@ -1,7 +1,7 @@
 import type * as Effect from "effect/Effect";
 
 export interface AgentProvider {
-  readonly driver: string;
+  readonly provider: string;
   readonly model: string;
   readonly displayName?: string;
 }
@@ -84,7 +84,6 @@ export interface TaskActor {
   readonly ref: TaskRef;
   readonly done: Promise<TaskResult>;
   readonly start: () => TaskActor;
-  readonly stop: () => TaskActor;
   readonly cancel: (reason?: string) => TaskActor;
   readonly send: (command: TaskCommand) => TaskActor;
   readonly subscribe: (listener: (snapshot: TaskSnapshot) => void) => {
@@ -97,7 +96,6 @@ export interface RunActor {
   readonly id: string;
   readonly done: Promise<unknown>;
   readonly start: () => RunActor;
-  readonly stop: () => RunActor;
   readonly cancel: (reason?: string) => RunActor;
   readonly task: (input: TaskInput) => TaskActor;
   readonly taskRef: (taskId: string) => TaskActor;
@@ -112,7 +110,7 @@ export interface TaskResult {
   readonly sessionRef: string;
   readonly role: string;
   readonly model: string;
-  readonly driver: string;
+  readonly provider: string;
   readonly exitCode: number;
   readonly stopReason?: string;
   readonly errorMessage?: string;
@@ -166,40 +164,9 @@ export interface AgentSession {
   readonly close: () => Effect.Effect<void, unknown>;
 }
 
-export interface AgentSessionPointer {
-  readonly provider: string;
-  readonly sessionRef: string;
-  readonly pointer: string;
-}
-
 export interface AgentRuntime {
   readonly name: string;
   readonly createSession: (input: AgentSessionInput) => Effect.Effect<AgentSession, unknown>;
-  readonly resolveSession?: (input: {
-    readonly sessionRef: string;
-  }) => Effect.Effect<AgentSessionPointer, unknown>;
-}
-
-export interface ExtensionContext {
-  readonly runId: string;
-}
-
-export interface ExtensionRegistration {
-  readonly name: string;
-  readonly setup?: (ctx: ExtensionContext) => Effect.Effect<void, unknown>;
-  readonly onEvent?: (
-    event: { readonly type: string },
-    ctx: ExtensionContext,
-  ) => Effect.Effect<void, unknown>;
-  readonly api?: Readonly<
-    Record<string, (...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, unknown>>
-  >;
-}
-
-export interface Mill {
-  task(input: TaskInput): Promise<TaskResult>;
-  taskActor(input: TaskInput): TaskActor;
-  runActor(): RunActor;
 }
 
 export interface AgentProcessConfig {

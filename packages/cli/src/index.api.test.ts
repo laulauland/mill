@@ -99,7 +99,7 @@ const RunSyncEnvelope = Schema.fromJsonString(
           sessionRef: Schema.String,
           role: Schema.String,
           model: Schema.String,
-          driver: Schema.String,
+          provider: Schema.String,
           exitCode: Schema.Number,
         }),
       ),
@@ -128,7 +128,6 @@ describe("runCli", () => {
     const code = await runCliForTest(["discovery", "--json"], {
       cwd: "/workspace/repo",
       homeDirectory: "/Users/tester",
-      pathExists: async () => false,
       io: {
         stdout: (line) => {
           stdout.push(line);
@@ -154,7 +153,7 @@ describe("runCli", () => {
       [
         'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
-        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  agent: { provider: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  system: "You are concise.",',
         '  prompt: "Say hello",',
         '  role: "scout",',
@@ -232,7 +231,7 @@ describe("runCli", () => {
         "const statuses = [];",
         'import { mill } from "@mill/core/program";',
         "const task = mill.task({",
-        '  agent: { driver: "codex", model: "openai-codex/gpt-5.3-codex" },',
+        '  agent: { provider: "codex", model: "openai-codex/gpt-5.3-codex" },',
         '  prompt: "Say hello",',
         "});",
         "task.subscribe((snapshot) => statuses.push(snapshot.status));",

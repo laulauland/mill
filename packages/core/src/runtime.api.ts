@@ -21,7 +21,7 @@ import {
   type RunSyncOutput,
   type WatchRunInput,
 } from "./run.api";
-import type { AgentRuntime, ExtensionRegistration } from "./types";
+import type { AgentRuntime } from "./types";
 
 class MissingLaunchWorkerError extends Data.TaggedError("MissingLaunchWorkerError")<{
   readonly message: string;
@@ -34,7 +34,6 @@ interface MillRuntimeBaseOptions {
   readonly runsDirectory?: string;
   readonly maxRunDepth?: number;
   readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
-  readonly extensions?: ReadonlyArray<ExtensionRegistration>;
   readonly executablePath?: string;
   readonly processControl?: ProcessControl;
 }
@@ -136,21 +135,36 @@ export const createMillRuntime = (options: MillRuntimeOptions): MillRuntime => {
         return;
       }
 
-      const outputEffect = (
-        input.sync === true ? runProgramSyncEffect(runInput) : submitRunEffect(runInput)
-      ).pipe(
-        Effect.tap((output) =>
-          Effect.sync(() => {
-            snapshot = "run" in output ? output.run : output;
+      if (input.sync === true) {
+        void runWithBunServices(
+          runProgramSyncEffect(runInput).pipe(
+            Effect.tap((output) =>
+              Effect.sync(() => {
+                snapshot = output.run;
+              }),
+            ),
+            Effect.match({
+              onFailure: (error) => deferred.reject(error),
+              onSuccess: (output) => deferred.resolve(output),
+            }),
+          ),
+        );
+        return;
+      }
+
+      void runWithBunServices(
+        submitRunEffect(runInput).pipe(
+          Effect.tap((output) =>
+            Effect.sync(() => {
+              snapshot = output;
+            }),
+          ),
+          Effect.match({
+            onFailure: (error) => deferred.reject(error),
+            onSuccess: (output) => deferred.resolve(output),
           }),
         ),
-        Effect.match({
-          onFailure: (error) => deferred.reject(error),
-          onSuccess: (output) => deferred.resolve(output),
-        }),
       );
-
-      void runWithBunServices(outputEffect);
     };
 
     const actor: MillRuntimeRunActor = {

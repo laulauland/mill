@@ -27,28 +27,37 @@ export interface CreateRunInput {
 }
 
 export interface RunStore {
-  readonly create: (input: CreateRunInput) => Effect.Effect<RunRecord, PersistenceError>;
-  readonly appendEvent: (runId: RunId, event: MillEvent) => Effect.Effect<void, PersistenceError>;
+  readonly create: (input: CreateRunInput) => Effect.Effect<RunRecord, PersistenceError, unknown>;
+  readonly appendEvent: (
+    runId: RunId,
+    event: MillEvent,
+  ) => Effect.Effect<void, PersistenceError, unknown>;
   readonly readEvents: (
     runId: RunId,
-  ) => Effect.Effect<ReadonlyArray<MillEvent>, RunNotFoundError | PersistenceError>;
+  ) => Effect.Effect<ReadonlyArray<MillEvent>, RunNotFoundError | PersistenceError, unknown>;
   readonly setStatus: (
     runId: RunId,
     status: RunRecord["status"],
     timestamp: string,
-  ) => Effect.Effect<RunRecord, RunNotFoundError | PersistenceError | LifecycleInvariantError>;
+  ) => Effect.Effect<
+    RunRecord,
+    RunNotFoundError | PersistenceError | LifecycleInvariantError,
+    unknown
+  >;
   readonly setResult: (
     runId: RunId,
     result: RunResult,
     timestamp: string,
-  ) => Effect.Effect<void, RunNotFoundError | PersistenceError | LifecycleInvariantError>;
-  readonly getRun: (runId: RunId) => Effect.Effect<RunRecord, RunNotFoundError | PersistenceError>;
+  ) => Effect.Effect<void, RunNotFoundError | PersistenceError | LifecycleInvariantError, unknown>;
+  readonly getRun: (
+    runId: RunId,
+  ) => Effect.Effect<RunRecord, RunNotFoundError | PersistenceError, unknown>;
   readonly getResult: (
     runId: RunId,
-  ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError>;
+  ) => Effect.Effect<RunResult | undefined, RunNotFoundError | PersistenceError, unknown>;
   readonly listRuns: (
     status?: RunRecord["status"],
-  ) => Effect.Effect<ReadonlyArray<RunRecord>, PersistenceError>;
+  ) => Effect.Effect<ReadonlyArray<RunRecord>, PersistenceError, unknown>;
 }
 
 export interface MakeRunStoreInput {
@@ -79,7 +88,11 @@ const storeSetStatus = (
   runId: RunId,
   status: RunRecord["status"],
   timestamp: string,
-): Effect.Effect<RunRecord, RunNotFoundError | PersistenceError | LifecycleInvariantError> =>
+): Effect.Effect<
+  RunRecord,
+  RunNotFoundError | PersistenceError | LifecycleInvariantError,
+  unknown
+> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const currentRun = yield* storeGetRun(runsDirectory, runId);
@@ -262,7 +275,7 @@ export const makeRunStore = (input: MakeRunStoreInput): RunStore => ({
 const storeGetRun = (
   runsDirectory: string,
   runId: RunId,
-): Effect.Effect<RunRecord, RunNotFoundError | PersistenceError> =>
+): Effect.Effect<RunRecord, RunNotFoundError | PersistenceError, unknown> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const paths = buildPaths(runsDirectory, runId);

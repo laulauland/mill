@@ -2,7 +2,7 @@ import * as FileSystem from "effect/FileSystem";
 import { Data, Effect } from "effect";
 import { makeProgramContext, withProgramContextPromise } from "./program-context.adapter";
 import { createTaskActorFromEffect } from "./task-actor.api";
-import type { ExtensionRegistration, TaskInput, TaskResult } from "./types";
+import type { TaskInput, TaskResult } from "./types";
 
 export class ProgramHostError extends Data.TaggedError("ProgramHostError")<{
   readonly runId: string;
@@ -16,13 +16,12 @@ export interface ExecuteProgramInProcessHostInput {
   readonly programPath: string;
   readonly programSource: string;
   readonly executablePath?: string;
-  readonly extensions: ReadonlyArray<ExtensionRegistration>;
   readonly env?: Readonly<Record<string, string>>;
-  readonly task: (input: TaskInput) => Effect.Effect<TaskResult, unknown>;
+  readonly task: (input: TaskInput) => Effect.Effect<TaskResult, unknown, unknown>;
   readonly onIo?: (input: {
     readonly stream: "stdout" | "stderr";
     readonly line: string;
-  }) => Effect.Effect<void>;
+  }) => Effect.Effect<void, unknown>;
 }
 
 const normalizePath = (path: string): string => {
@@ -161,7 +160,7 @@ const inferProgramResult = (
 
 export const executeProgramInProcessHost = (
   input: ExecuteProgramInProcessHostInput,
-): Effect.Effect<unknown, ProgramHostError> =>
+): Effect.Effect<unknown, ProgramHostError, unknown> =>
   Effect.gen(function* () {
     const services = yield* Effect.context<never>();
     const fileSystem = yield* FileSystem.FileSystem;
@@ -199,7 +198,6 @@ export const executeProgramInProcessHost = (
     });
 
     const context = makeProgramContext({
-      extensions: input.extensions,
       completedTasks: () => completedTasks,
       task: (taskInput) =>
         createTaskActorFromEffect(taskInput, {

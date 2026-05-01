@@ -17,7 +17,7 @@ import {
   removePath,
   writeTextFile,
 } from "./run-platform.adapter";
-import type { AgentRuntime, ExtensionRegistration } from "./types";
+import type { AgentRuntime } from "./types";
 export type { RunRecord, RunSyncOutput } from "./run.schema";
 
 export type ProcessSignal = "SIGTERM" | "SIGKILL";
@@ -30,11 +30,11 @@ export class ProcessControlError extends Data.TaggedError("ProcessControlError")
 }> {}
 
 export interface ProcessControl {
-  readonly isAlive: (pid: number) => Effect.Effect<boolean, ProcessControlError>;
+  readonly isAlive: (pid: number) => Effect.Effect<boolean, ProcessControlError, unknown>;
   readonly sendSignal: (
     pid: number,
     signal: ProcessSignal,
-  ) => Effect.Effect<boolean, ProcessControlError>;
+  ) => Effect.Effect<boolean, ProcessControlError, unknown>;
 }
 
 interface BaseRunInput {
@@ -44,7 +44,6 @@ interface BaseRunInput {
   readonly runsDirectory?: string;
   readonly maxRunDepth?: number;
   readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
-  readonly extensions?: ReadonlyArray<ExtensionRegistration>;
   readonly executablePath?: string;
   readonly processControl?: ProcessControl;
 }
@@ -165,7 +164,7 @@ const workerPidPathFor = (runDirectory: string): string =>
 const appendCancelLog = (
   runDirectory: string,
   message: string,
-): Effect.Effect<void, never, FileSystem.FileSystem> => {
+): Effect.Effect<void, never, unknown> => {
   const logPath = joinPath(runDirectory, CANCEL_LOG_PATH);
   const logDirectory = logPath.slice(0, logPath.lastIndexOf("/"));
   const timestamp = new Date().toISOString();
@@ -202,9 +201,7 @@ const readWorkerPid = (
     ),
   );
 
-const removeWorkerPidFile = (
-  runDirectory: string,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
+const removeWorkerPidFile = (runDirectory: string): Effect.Effect<void, never, unknown> =>
   removePath(workerPidPathFor(runDirectory)).pipe(
     Effect.catch((error) =>
       Effect.logWarning("mill.worker-pid:remove-failed", { runDirectory, error }),
@@ -258,7 +255,7 @@ const countSignals = (
   processControl: ProcessControl,
   targets: ReadonlyArray<number>,
   signal: ProcessSignal,
-): Effect.Effect<number> =>
+): Effect.Effect<number, never, unknown> =>
   Effect.map(
     Effect.forEach(
       targets,
@@ -281,7 +278,7 @@ const countSignals = (
 const liveProcesses = (
   processControl: ProcessControl,
   targets: ReadonlyArray<number>,
-): Effect.Effect<ReadonlyArray<number>> =>
+): Effect.Effect<ReadonlyArray<number>, never, unknown> =>
   Effect.map(
     Effect.forEach(targets, (pid) =>
       processControl.isAlive(pid).pipe(
@@ -298,7 +295,7 @@ const terminateWorkerProcessTree = (
   runsDirectory: string,
   runId: string,
   processControl: ProcessControl | undefined,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
+): Effect.Effect<void, never, unknown> =>
   Effect.gen(function* () {
     const runDirectory = runDirectoryFor(runsDirectory, runId);
 
@@ -321,15 +318,16 @@ const terminateWorkerProcessTree = (
       Effect.matchEffect({
         onFailure: (error) =>
           Effect.as(
-            Effect.zipRight(
-              Effect.logWarning("mill.cancel:read-worker-command-failed", {
-                runId,
-                pid: workerPid,
-                error,
-              }),
-              appendCancelLog(
-                runDirectory,
-                `cancel:kill skipped run=${runId} pid=${workerPid} reason=command-inspection-failed`,
+            Effect.logWarning("mill.cancel:read-worker-command-failed", {
+              runId,
+              pid: workerPid,
+              error,
+            }).pipe(
+              Effect.andThen(
+                appendCancelLog(
+                  runDirectory,
+                  `cancel:kill skipped run=${runId} pid=${workerPid} reason=command-inspection-failed`,
+                ),
               ),
             ),
             { _tag: "inspection-failed" as const },
@@ -412,7 +410,7 @@ const resolveProgramPath = (cwd: string, programPath: string): string =>
 const resolveRunsDirectoryEffect = (
   homeDirectory: string | undefined,
   runsDirectory: string | undefined,
-): Effect.Effect<string> =>
+): Effect.Effect<string, RunApiError> =>
   Effect.gen(function* () {
     if (runsDirectory !== undefined && runsDirectory.length > 0) {
       return runsDirectory;
@@ -463,13 +461,12 @@ const resolveMaxRunDepth = (configured: number | undefined): number => {
   return configured;
 };
 
-export const runWithBunServices = <A, E>(
-  effect: Effect.Effect<A, E, BunServices.BunServices>,
-): Promise<A> => Effect.runPromise(Effect.provide(effect, BunServices.layer));
+export const runWithBunServices = <A, E>(effect: Effect.Effect<A, E, unknown>): Promise<A> =>
+  Effect.runPromise(
+    Effect.provide(effect as Effect.Effect<A, E, BunServices.BunServices>, BunServices.layer),
+  );
 
-const readProgramSource = (
-  programPath: string,
-): Effect.Effect<string, unknown, BunServices.BunServices> =>
+const readProgramSource = (programPath: string): Effect.Effect<string, unknown, unknown> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     return yield* fileSystem.readFileString(programPath, "utf-8");
@@ -478,7 +475,7 @@ const readProgramSource = (
 const writeSubmissionArtifacts = (
   run: RunRecord,
   programSource: string,
-): Effect.Effect<void, unknown, BunServices.BunServices> =>
+): Effect.Effect<void, unknown, unknown> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const copiedProgramPath = joinPath(run.paths.runDir, "program.ts");
@@ -503,7 +500,6 @@ const makeEngineForInputEffect = (input: BaseRunInput): Effect.Effect<EngineCont
       engine: makeMillEngine({
         runsDirectory,
         agentRuntimes: input.agentRuntimes,
-        extensions: input.extensions ?? [],
       }),
     };
   });
@@ -521,7 +517,6 @@ const makeWaitEngineEffect = (
       engine: makeMillEngine({
         runsDirectory,
         agentRuntimes: {},
-        extensions: [],
       }),
     };
   });
@@ -581,7 +576,7 @@ const filterIoEvent = (
 
 export const submitRunEffect = (
   input: SubmitRunInput,
-): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
+): Effect.Effect<RunRecord, unknown, unknown> =>
   Effect.gen(function* () {
     const cwd = input.cwd ?? ".";
     const programPath = resolveProgramPath(cwd, input.programPath);
@@ -638,7 +633,7 @@ export const submitRun = (input: SubmitRunInput): Promise<RunRecord> =>
 
 export const runProgramSyncEffect = (
   input: RunProgramSyncInput,
-): Effect.Effect<RunSyncOutput, unknown, BunServices.BunServices> =>
+): Effect.Effect<RunSyncOutput, unknown, unknown> =>
   Effect.gen(function* () {
     const submittedRun = yield* submitRunEffect(input);
     const timeoutSeconds = input.waitTimeoutSeconds ?? DEFAULT_SYNC_WAIT_TIMEOUT_SECONDS;
@@ -669,9 +664,7 @@ export const runProgramSyncEffect = (
 export const runProgramSync = (input: RunProgramSyncInput): Promise<RunSyncOutput> =>
   runWithBunServices(runProgramSyncEffect(input));
 
-const runWorkerEffect = (
-  input: RunWorkerInput,
-): Effect.Effect<RunSyncOutput, unknown, BunServices.BunServices> =>
+const runWorkerEffect = (input: RunWorkerInput): Effect.Effect<RunSyncOutput, unknown, unknown> =>
   Effect.gen(function* () {
     const cwd = input.cwd ?? ".";
     const programPath = resolveProgramPath(cwd, input.programPath);
@@ -701,7 +694,6 @@ const runWorkerEffect = (
               programPath,
               programSource,
               executablePath: input.executablePath,
-              extensions: input.extensions ?? [],
               env: {
                 ...input.env,
                 [RUN_DEPTH_ENV]: String(runDepth),
@@ -734,9 +726,7 @@ const runWorkerEffect = (
 export const runWorker = (input: RunWorkerInput): Promise<RunSyncOutput> =>
   runWithBunServices(runWorkerEffect(input));
 
-const getRunStatusEffect = (
-  input: GetRunStatusInput,
-): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
+const getRunStatusEffect = (input: GetRunStatusInput): Effect.Effect<RunRecord, unknown, unknown> =>
   Effect.gen(function* () {
     const engineContext = yield* makeEngineForInputEffect(input);
     return yield* engineContext.engine.status(decodeRunIdSync(input.runId));
@@ -761,9 +751,7 @@ const findWaitTimeoutError = (cause: Cause.Cause<unknown>): WaitTimeoutError | u
   return undefined;
 };
 
-const waitForRunEffect = (
-  input: WaitForRunInput,
-): Effect.Effect<RunRecord, unknown, BunServices.BunServices> =>
+const waitForRunEffect = (input: WaitForRunInput): Effect.Effect<RunRecord, unknown, unknown> =>
   Effect.gen(function* () {
     const engineContext = yield* makeWaitEngineEffect(input);
     const waitOutcome = yield* Effect.exit(
@@ -789,9 +777,7 @@ const waitForRunEffect = (
 export const waitForRun = (input: WaitForRunInput): Promise<RunRecord> =>
   runWithBunServices(waitForRunEffect(input));
 
-const watchRunEffect = (
-  input: WatchRunInput,
-): Effect.Effect<void, unknown, BunServices.BunServices> =>
+const watchRunEffect = (input: WatchRunInput): Effect.Effect<void, unknown, unknown> =>
   Effect.gen(function* () {
     if (input.sinceTimeIso !== undefined && !isSinceTimeIso(input.sinceTimeIso)) {
       return yield* Effect.fail(
@@ -918,7 +904,7 @@ const cancelRunEffect = (
     alreadyTerminal: boolean;
   },
   unknown,
-  BunServices.BunServices
+  unknown
 > =>
   Effect.gen(function* () {
     const engineContext = yield* makeEngineForInputEffect(input);
@@ -950,7 +936,7 @@ export const cancelRun = (
 
 const listRunsEffect = (
   input: ListRunsInput,
-): Effect.Effect<ReadonlyArray<RunRecord>, unknown, BunServices.BunServices> =>
+): Effect.Effect<ReadonlyArray<RunRecord>, unknown, unknown> =>
   Effect.gen(function* () {
     const engineContext = yield* makeEngineForInputEffect(input);
     return yield* engineContext.engine.list(input.status);

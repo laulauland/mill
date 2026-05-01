@@ -151,17 +151,6 @@ export const TaskCancelledEvent = Schema.Struct({
 });
 export type TaskCancelledEvent = Schema.Schema.Type<typeof TaskCancelledEvent>;
 
-export const ExtensionErrorEvent = Schema.Struct({
-  ...EventEnvelope,
-  type: Schema.Literal("extension:error"),
-  payload: Schema.Struct({
-    extensionName: Schema.NonEmptyString,
-    hook: Schema.Literals(["setup", "onEvent"]),
-    message: Schema.String,
-  }),
-});
-export type ExtensionErrorEvent = Schema.Schema.Type<typeof ExtensionErrorEvent>;
-
 export const MillEvent = Schema.Union([
   RunStartEvent,
   RunStatusEvent,
@@ -177,7 +166,6 @@ export const MillEvent = Schema.Union([
   TaskErrorEvent,
   TaskCompleteEvent,
   TaskCancelledEvent,
-  ExtensionErrorEvent,
 ]);
 export type MillEvent = Schema.Schema.Type<typeof MillEvent>;
 

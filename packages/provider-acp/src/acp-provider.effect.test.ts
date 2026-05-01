@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import { Effect } from "effect";
 import { runEffect } from "./test-runtime";
-import { makeAcpAgentRuntime } from "./acp-driver.effect";
+import { makeAcpProviderRuntime } from "./acp-provider.effect";
 
 const FAKE_ACP_AGENT_SCRIPT = `
 const readline = require("readline");
@@ -198,9 +198,9 @@ rl.on("line", (line) => {
 });
 `;
 
-describe("makeAcpAgentRuntime", () => {
+describe("makeAcpProviderRuntime", () => {
   it("creates a session, selects ACP model config, and collects turn output", async () => {
-    const runtime = makeAcpAgentRuntime("test-acp", {
+    const runtime = makeAcpProviderRuntime("test-acp", {
       command: "bun",
       args: ["-e", FAKE_ACP_AGENT_SCRIPT],
     });
@@ -221,7 +221,7 @@ describe("makeAcpAgentRuntime", () => {
 
     expect(output.result.text).toBe("Hello from fake agent using test/model");
     expect(output.result.sessionRef).toBe("test-session-123");
-    expect(output.result.driver).toBe("test-acp");
+    expect(output.result.provider).toBe("test-acp");
     expect(output.result.exitCode).toBe(0);
     expect(output.result.stopReason).toBeUndefined();
     expect(output.events.some((e) => e.type === "tool_call")).toBe(true);
@@ -235,7 +235,7 @@ describe("makeAcpAgentRuntime", () => {
     const logPath = join(tempDirectory, "events.ndjson");
 
     try {
-      const runtime = makeAcpAgentRuntime("test-acp", {
+      const runtime = makeAcpProviderRuntime("test-acp", {
         command: "bun",
         args: ["-e", MULTI_TURN_ACP_AGENT_SCRIPT],
         env: { MILL_TEST_LOG: logPath },
@@ -261,7 +261,7 @@ describe("makeAcpAgentRuntime", () => {
       expect(first.result.text).toBe("first prompt via test/model");
       expect(second.result.sessionRef).toBe("multi-turn-session");
       expect(second.result.text).toBe("second prompt via test/model");
-      expect(second.result.driver).toBe("test-acp");
+      expect(second.result.provider).toBe("test-acp");
 
       const records = readFileSync(logPath, "utf8")
         .trim()
@@ -284,7 +284,7 @@ describe("makeAcpAgentRuntime", () => {
     const logPath = join(tempDirectory, "events.ndjson");
 
     try {
-      const runtime = makeAcpAgentRuntime("test-acp", {
+      const runtime = makeAcpProviderRuntime("test-acp", {
         command: "bun",
         args: ["-e", MULTI_TURN_ACP_AGENT_SCRIPT],
         env: { MILL_TEST_LOG: logPath },
@@ -327,7 +327,7 @@ describe("makeAcpAgentRuntime", () => {
   }, 15000);
 
   it("handles refusal stop reason", async () => {
-    const runtime = makeAcpAgentRuntime("test-acp", {
+    const runtime = makeAcpProviderRuntime("test-acp", {
       command: "bun",
       args: ["-e", makeVariantAgentScript("refusal")],
     });
@@ -351,7 +351,7 @@ describe("makeAcpAgentRuntime", () => {
   }, 15000);
 
   it("handles cancelled stop reason", async () => {
-    const runtime = makeAcpAgentRuntime("test-acp", {
+    const runtime = makeAcpProviderRuntime("test-acp", {
       command: "bun",
       args: ["-e", makeVariantAgentScript("cancelled")],
     });
@@ -373,14 +373,4 @@ describe("makeAcpAgentRuntime", () => {
     expect(output.result.exitCode).toBe(1);
     expect(output.result.stopReason).toBe("cancelled");
   }, 15000);
-
-  it("resolveSession returns correct pointer", async () => {
-    const runtime = makeAcpAgentRuntime("claude");
-
-    const pointer = await runEffect(runtime.resolveSession!({ sessionRef: "session-abc" }));
-
-    expect(pointer.provider).toBe("claude");
-    expect(pointer.sessionRef).toBe("session-abc");
-    expect(pointer.pointer).toContain("acp://claude/session/");
-  });
 });

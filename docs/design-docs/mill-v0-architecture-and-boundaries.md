@@ -38,8 +38,8 @@ The CLI is batteries-included for built-in `codex`, `claude`, and `pi` providers
 - `packages/core/src/*.schema.ts` contains persisted/domain schemas.
 - `packages/cli/src/mill.ts` is the executable Effect platform entrypoint.
 - `packages/cli/src/index.ts` maps CLI commands to core runtime calls.
-- `packages/driver-acp` is an internal implementation package for built-in ACP-backed provider runtimes.
-- `packages/pi-mill` is an extension-specific wrapper and has its own serialized program shape.
+- `packages/provider-acp` is an internal implementation package for built-in ACP-backed provider runtimes.
+- `packages/
 
 ## Program host
 

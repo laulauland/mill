@@ -173,13 +173,7 @@ The CLI registers built-in ACP-backed providers for Claude, Codex, and pi. Norma
 import { claude, codex, pi } from "@mill/core/program";
 ```
 
-Model catalog source for CLI help:
-
-- `codex`: built-in default catalog.
-- `claude`: built-in default catalog.
-- `pi`: enabled models from pi settings where available.
-
-Live model discovery is not part of normal help.
+CLI help lists the built-in providers and example authoring shape. Programs pass model strings explicitly; mill does not maintain or discover a model catalog.
 
 ## 9) Boundary contracts: public Promise API, internal Effect core
 

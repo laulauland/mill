@@ -5,7 +5,7 @@ export const TaskOptions = Schema.Struct({
   system: Schema.NonEmptyString,
   prompt: Schema.NonEmptyString,
   model: Schema.NonEmptyString,
-  driver: Schema.NonEmptyString,
+  provider: Schema.NonEmptyString,
 });
 
 export type TaskOptions = Schema.Schema.Type<typeof TaskOptions>;
@@ -15,7 +15,7 @@ export const TaskResult = Schema.Struct({
   sessionRef: Schema.NonEmptyString,
   role: Schema.NonEmptyString,
   model: Schema.NonEmptyString,
-  driver: Schema.NonEmptyString,
+  provider: Schema.NonEmptyString,
   exitCode: Schema.Number,
   stopReason: Schema.optional(Schema.String),
   errorMessage: Schema.optional(Schema.String),

@@ -5,18 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Schema from "effect/Schema";
 import { Effect } from "effect";
-import { decodeMillEventJsonSync } from "./event.schema";
 import { decodeRunIdSync } from "./run.schema";
 import { makeRunStore } from "./run-store.effect";
 import { runWithBunServices } from "./test-runtime";
 import { ProcessControlError, cancelRun, runProgramSync, runWorker, submitRun } from "./run.api";
 import { createMillRuntime } from "./runtime.api";
-import type { AgentRuntime, ExtensionRegistration } from "./types";
+import type { AgentRuntime } from "./types";
 
 const ProgramResultEnvelope = Schema.fromJsonString(
   Schema.Struct({
     note: Schema.optional(Schema.String),
-    driver: Schema.optional(Schema.String),
+    provider: Schema.optional(Schema.String),
   }),
 );
 
@@ -59,7 +58,7 @@ const makeAgentRuntime = (name: string): AgentRuntime => ({
             sessionRef: `session/${name}/${input.role}`,
             role: input.role,
             model: input.model,
-            driver: name,
+            provider: name,
             exitCode: 0,
           },
         }),
@@ -68,23 +67,11 @@ const makeAgentRuntime = (name: string): AgentRuntime => ({
     }),
 });
 
-const extensions: ReadonlyArray<ExtensionRegistration> = [
-  {
-    name: "tools",
-    setup: () => Effect.fail("setup exploded"),
-    onEvent: (event) => (event.type === "task:start" ? Effect.fail("event exploded") : Effect.void),
-    api: {
-      echo: (...args) => Effect.succeed(`echo:${String(args[0] ?? "")}`),
-    },
-  },
-];
-
 const makeRunOptions = () => ({
   agentRuntimes: {
     default: makeAgentRuntime("default"),
     codex: makeAgentRuntime("codex"),
   },
-  extensions,
   maxRunDepth: 1,
 });
 
@@ -140,7 +127,7 @@ describe("run.api integration", () => {
     }
   });
 
-  it("uses task agent providers, injects extension API, and emits extension:error events", async () => {
+  it("uses task agent providers and persists task-native results", async () => {
     const tempDirectory = await mkdtemp(join(tmpdir(), "mill-run-api-"));
     const homeDirectory = join(tempDirectory, "home");
     const programPath = join(tempDirectory, "program.ts");
@@ -152,15 +139,14 @@ describe("run.api integration", () => {
       programPath,
       [
         'import { mill, codex } from "@mill/core/program";',
-        'const note = await mill.tools.echo("hello");',
         "const task = mill.task({",
         '  agent: codex("openai/gpt-5.3-codex"),',
         '  system: "You are concise.",',
-        "  prompt: note,",
+        '  prompt: "hello",',
         '  role: "scout",',
         "}).start();",
         "const taskResult = await task.done;",
-        "export const result = JSON.stringify({ note, driver: taskResult.driver });",
+        "export const result = JSON.stringify({ provider: taskResult.provider });",
       ].join("\n"),
       "utf-8",
     );
@@ -186,23 +172,13 @@ describe("run.api integration", () => {
       });
 
       expect(output.run.status).toBe("complete");
-      expect(output.result.tasks[0]?.driver).toBe("codex");
+      expect(output.result.tasks[0]?.provider).toBe("codex");
 
       const parsedProgramResult = Schema.decodeUnknownSync(ProgramResultEnvelope)(
         output.result.programResult ?? "{}",
       );
 
-      expect(parsedProgramResult.note).toBe("echo:hello");
-      expect(parsedProgramResult.driver).toBe("codex");
-
-      const eventsContent = await readFile(output.run.paths.eventsFile, "utf-8");
-      const eventTypes = eventsContent
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .map((line) => decodeMillEventJsonSync(line).type);
-
-      expect(eventTypes.includes("extension:error")).toBe(true);
+      expect(parsedProgramResult.provider).toBe("codex");
 
       const hostMarker = await readFile(
         join(output.run.paths.runDir, "program-host.marker"),
@@ -238,7 +214,7 @@ describe("run.api integration", () => {
         "const taskResult = await task.start().done;",
         "export const result = JSON.stringify({",
         "  text: taskResult.text,",
-        "  driver: taskResult.driver,",
+        "  provider: taskResult.provider,",
         "  status: task.getSnapshot().status,",
         "  statuses,",
         "});",
@@ -266,18 +242,18 @@ describe("run.api integration", () => {
 
       expect(output.run.status).toBe("complete");
       expect(output.result.tasks).toHaveLength(1);
-      expect(output.result.tasks[0]?.driver).toBe("codex");
+      expect(output.result.tasks[0]?.provider).toBe("codex");
 
       const parsed = JSON.parse(String(output.result.programResult ?? "{}")) as {
         readonly text?: string;
-        readonly driver?: string;
+        readonly provider?: string;
         readonly status?: string;
         readonly statuses?: ReadonlyArray<string>;
       };
 
       expect(parsed).toEqual({
         text: "codex:Say hello from task",
-        driver: "codex",
+        provider: "codex",
         status: "complete",
         statuses: ["idle", "running", "complete"],
       });
