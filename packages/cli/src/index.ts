@@ -860,7 +860,7 @@ const renderProviderHelp = (): string =>
     "Providers:",
     "  codex(model)  ACP provider using the codex-acp command",
     "  claude(model) ACP provider using the claude command",
-    "  pi(model)     ACP provider using the pi acp command",
+    "  pi(model)     ACP provider using the pi-acp command",
   ].join("\n");
 
 const buildHelpText = (helpContext: ResolvedHelpContext, version: string): string =>
@@ -975,27 +975,11 @@ export const runCliEffect = (
       version: cliVersion,
     });
 
-    const exitCode = yield* run(argv).pipe(
+    const commandEffect = run(argv) as Effect.Effect<void, CliExit | CliError.CliError, unknown>;
+    const exitCode = yield* commandEffect.pipe(
       Effect.as(0),
-      Effect.catchIf(
-        (error): error is CliExit =>
-          typeof error === "object" &&
-          error !== null &&
-          "_tag" in error &&
-          error._tag === "CliExit",
-        (error) => Effect.succeed(error.code),
-      ),
-      Effect.catchIf(
-        (error): error is CliError.CliError => CliError.isCliError(error),
-        (error) =>
-          Effect.promise(async () => {
-            if (error._tag !== "ShowHelp") {
-              await io.stderr(formatUnknownError(error));
-            }
-
-            return error._tag === "ShowHelp" ? (error.errors.length === 0 ? 0 : 1) : 1;
-          }),
-      ),
+      Effect.catchTag("CliExit", (error) => Effect.succeed(error.code)),
+      Effect.catchTag("ShowHelp", (error) => Effect.succeed(error.errors.length === 0 ? 0 : 1)),
       Effect.catch((error) =>
         Effect.promise(async () => {
           await io.stderr(formatUnknownError(error));

@@ -17,6 +17,7 @@ describe("ACP agent providers", () => {
     expect(claude.description).toBe("Claude ACP provider");
     expect(codex.description).toBe("Codex ACP provider");
     expect(pi.description).toBe("Pi ACP provider");
+    expect(pi.process).toEqual({ command: "pi-acp", args: [], env: undefined });
   });
 
   it("allows process overrides", () => {

@@ -35,7 +35,7 @@ const createAcpAgentProvider = (
   return {
     description: config.description,
     process: processConfig,
-    runtime: makeAcpProviderRuntime(name, runtimeProcess),
+    runtime: makeAcpProviderRuntime(name, runtimeProcess ?? processConfig),
   };
 };
 
@@ -66,8 +66,8 @@ export const createCodexAcpAgentProvider = (input?: CreateAcpProviderInput): Acp
 export const createPiAcpAgentProvider = (input?: CreateAcpProviderInput): AcpAgentProvider =>
   createAcpAgentProvider(
     {
-      command: input?.process?.command ?? "pi",
-      args: input?.process?.args ?? ["acp"],
+      command: input?.process?.command ?? "pi-acp",
+      args: input?.process?.args ?? [],
       env: input?.process?.env,
       description: "Pi ACP provider",
     },
