@@ -2,20 +2,25 @@
 
 ## Source of truth
 
-- Product and architecture constraints are split from `SPEC.md` under `docs/`.
-- Start with `docs/indexes/docs.index.md`.
+- `/CONTEXT.md` — canonical glossary and decisions log.
+- `docs/spec.md` — target shape of Mill (post-rewrite).
+- `docs/rewrite-plan.md` — implementation roadmap.
+- `docs/adr/` — load-bearing decisions.
+
+The shipped v0 source under `packages/` is being replaced ground-up; the docs above describe the target, not the current code.
 
 ## Implementation guidance location
 
-- Product requirements: `docs/product-specs/`
-- Architecture and boundary contracts: `docs/design-docs/`
-- Toolchain + guardrails + invariants: `docs/references/`
 - Active execution plan: `docs/exec-plans/active/`
+- Completed plans: `docs/exec-plans/completed/`
 
-## Guardrail reminder
+## File layout (post-rewrite)
 
-- Respect file boundary naming (`*.api.ts`, `*.schema.ts`, `*.effect.ts`) and flat package `src/` layouts.
-- Use only public package exports across packages.
+- Public API: `*.api.ts` plus `index.ts` (the package's export boundary).
+- Schema definitions: `schemas/` folder.
+- Effect services / Layers: `services/` folder, PascalCase modules.
+- Pure-function modules (reducers, id helpers): top level next to `index.ts`.
+- Suffixes `*.effect.ts` and `*.schema.ts` are retired (see `docs/adr/0004-folder-layout.md`).
 
 ## Commits
 
