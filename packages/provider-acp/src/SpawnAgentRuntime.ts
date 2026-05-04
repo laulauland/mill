@@ -1,4 +1,7 @@
-import { Data, Effect, Layer } from "effect";
+import nodeProcess from "node:process";
+import { Context, Data, Effect, Layer, Option, Queue, Stream } from "effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { AgentRuntime, AgentRuntimeError, type AgentRuntimeInput } from "@mill/core";
 import type { TaskEvent } from "@mill/core";
 import { SpawnAgent, type AgentEvent, type SupportedAgentId, type ConfigOption } from "spawn-agent";
@@ -8,6 +11,18 @@ export class SpawnAgentRuntimeError extends Data.TaggedError("SpawnAgentRuntimeE
   readonly model: string;
   readonly message: string;
 }> {}
+
+type Process = {
+  readonly cwd: Effect.Effect<string>;
+  readonly env: (name: string) => Effect.Effect<string | undefined>;
+};
+
+export const Process = Context.Service<Process>("@mill/provider-acp/Process");
+
+export const ProcessLive = Layer.succeed(Process, {
+  cwd: Effect.sync(() => nodeProcess.cwd()),
+  env: (name) => Effect.sync(() => nodeProcess.env[name]),
+} satisfies Process);
 
 const supportedAgents = new Set(["claude", "codex", "pi"]);
 
