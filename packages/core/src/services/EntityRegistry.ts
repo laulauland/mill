@@ -9,7 +9,7 @@ export class EntityRegistryError extends Data.TaggedError("EntityRegistryError")
 }> {}
 
 export interface EntityRegistry {
-  readonly getOrCreate: (taskId: string, rootTaskId: string, parentId?: string) => Effect.Effect<TaskEntity, never, EventAppender | IdGenerator>;
+  readonly getOrCreate: (taskId: string, rootTaskId: string, parentId?: string) => Effect.Effect<TaskEntity, never>;
   readonly lookup: (taskId: string) => Effect.Effect<TaskEntity | undefined, never>;
   readonly register: (entity: TaskEntity) => Effect.Effect<void, never>;
   readonly remove: (taskId: string) => Effect.Effect<void, never>;
@@ -18,8 +18,10 @@ export interface EntityRegistry {
 
 export const makeEntityRegistry = Effect.gen(function* () {
   const registryRef = yield* Ref.make(new Map<string, TaskEntity>());
+  const eventAppender = yield* EventAppender;
+  const idGenerator = yield* IdGenerator;
 
-  const getOrCreate = (taskId: string, rootTaskId: string, parentId?: string): Effect.Effect<TaskEntity, never, EventAppender | IdGenerator> =>
+  const getOrCreate = (taskId: string, rootTaskId: string, parentId?: string): Effect.Effect<TaskEntity, never> =>
     Effect.gen(function* () {
       const registry = yield* Ref.get(registryRef);
       const existing = registry.get(taskId);
@@ -33,7 +35,10 @@ export const makeEntityRegistry = Effect.gen(function* () {
         return next;
       });
       return entity;
-    });
+    }).pipe(
+      Effect.provide(Layer.succeed(EventAppender, eventAppender)),
+      Effect.provide(Layer.succeed(IdGenerator, idGenerator)),
+    );
 
   const lookup = (taskId: string): Effect.Effect<TaskEntity | undefined, never> =>
     Ref.get(registryRef).pipe(Effect.map((map) => map.get(taskId)));
