@@ -39,7 +39,7 @@ Service in `packages/core/src/services/TaskEntity.ts`:
 - Sequential command handler (queue-driven, mailbox semantics).
 - State projection via the reducer.
 - Child spawning emits `task:child_spawned` on the parent's log and `task:created` on the child's view.
-- Await/watch/cancel resolved against the entity's state and event stream.
+- Task awaiting remains an internal entity/program primitive; CLI observation is via status/watch/result-style projections.
 - Shape kept compatible with `effect/unstable/cluster` `Entity` (intentional 1:1).
 
 `packages/core/src/services/EntityRegistry.ts` holds active entities and resolves by `taskId`.
@@ -50,7 +50,7 @@ Service in `packages/core/src/services/Mill.ts`:
 
 - `submit(programPath)` — creates root program task; returns `taskId`.
 - `status(taskId)` — current snapshot.
-- `wait(taskId, timeout?)` — completed output; fails on failed/cancelled terminal status.
+- `result(taskId)` — terminal result; fails if the task is not terminal yet.
 - `watch(taskId, opts?)` — event stream.
 - `cancel(taskId, reason?)` — cascades.
 - `list({ all? })` — root tasks (or full set with `--all`).

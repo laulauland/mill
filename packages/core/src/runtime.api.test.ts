@@ -18,7 +18,6 @@ describe("runtime.api", () => {
     const runtime = createMillRuntime({ tasksDirectory: tmpDir });
     expect(typeof runtime.submit).toBe("function");
     expect(typeof runtime.status).toBe("function");
-    expect(typeof runtime.wait).toBe("function");
     expect(typeof runtime.result).toBe("function");
     expect(typeof runtime.send).toBe("function");
     expect(typeof runtime.complete).toBe("function");

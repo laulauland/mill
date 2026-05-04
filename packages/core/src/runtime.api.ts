@@ -8,7 +8,7 @@ import { PathServiceLive } from "./services/PathService";
 import { IdGeneratorLive } from "./services/IdGenerator";
 import { ProgramHostLive } from "./services/ProgramHost";
 import { AgentRuntimeStub } from "./services/AgentRuntime";
-import type { TaskOutput, TaskResult, TaskSnapshot } from "./schemas/task-state";
+import type { TaskResult, TaskSnapshot, TurnResult } from "./schemas/task-state";
 export type {
   TaskCancelledError,
   TaskFailedError,
@@ -21,7 +21,6 @@ export type {
 export interface MillRuntime {
   readonly submit: (programPath: string) => Promise<string>;
   readonly status: (taskId: string) => Promise<TaskSnapshot>;
-  readonly wait: (taskId: string, timeout?: number) => Promise<TaskOutput>;
   readonly result: (taskId: string) => Promise<TaskResult>;
   readonly send: (taskId: string, prompt: string) => Promise<TurnResult>;
   readonly complete: (taskId: string) => Promise<void>;
@@ -73,13 +72,6 @@ export const createMillRuntime = (options: { tasksDirectory?: string } = {}): Mi
         Effect.gen(function* () {
           const mill = yield* Mill;
           return yield* mill.status(taskId);
-        }),
-      ),
-    wait: (taskId, timeout) =>
-      run(
-        Effect.gen(function* () {
-          const mill = yield* Mill;
-          return yield* mill.wait(taskId, timeout);
         }),
       ),
     result: (taskId) =>

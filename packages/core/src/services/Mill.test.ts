@@ -245,7 +245,7 @@ describe("Mill", () => {
     expect(ids).toEqual([childId, rootId]);
   });
 
-  test("submit executes top-level program tasks and wait resolves", async () => {
+  test("submit executes top-level program tasks and result resolves", async () => {
     const fs = require("fs");
     const programPath = `${tmpDir}/top-level-program.ts`;
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -265,18 +265,21 @@ describe("Mill", () => {
       Effect.gen(function* () {
         const mill = yield* Mill;
         const taskId = yield* mill.submit(programPath);
-        const output = yield* mill.wait(taskId, 1_000);
+        const taskResult = yield* mill.result(taskId);
         const snapshot = yield* mill.status(taskId);
-        return { taskId, output, snapshot };
+        return { taskId, taskResult, snapshot };
       }),
     );
 
-    expect(result.output.text).toBe("{}");
+    expect(result.taskResult.status).toBe("completed");
+    expect(result.taskResult.status === "completed" ? result.taskResult.output.text : "").toBe(
+      "{}",
+    );
     expect(result.snapshot.status).toBe("completed");
     expect(result.snapshot.text).toContain("child settled");
   });
 
-  test("status and wait replay terminal root and child tasks from disk", async () => {
+  test("status and result replay terminal root and child tasks from disk", async () => {
     const fs = require("fs");
     const programPath = `${tmpDir}/replay-program.ts`;
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -296,7 +299,7 @@ describe("Mill", () => {
         const mill = yield* Mill;
         const appender = yield* EventAppender;
         const taskId = yield* mill.submit(programPath);
-        yield* mill.wait(taskId, 1_000);
+        yield* mill.result(taskId);
         const events = yield* appender.readEvents(taskId);
         const childSpawned = events.find((event) => event.type === "task:child_spawned");
         expect(childSpawned?.type).toBe("task:child_spawned");
@@ -310,16 +313,19 @@ describe("Mill", () => {
     const replayed = await run(
       Effect.gen(function* () {
         const mill = yield* Mill;
-        const rootOutput = yield* mill.wait(ids.taskId, 1_000);
+        const rootResult = yield* mill.result(ids.taskId);
         const root = yield* mill.status(ids.taskId);
         const child = yield* mill.status(ids.childId);
-        return { rootOutput, root, child };
+        return { rootResult, root, child };
       }),
     );
 
     expect(replayed.root.status).toBe("completed");
     expect(replayed.child.status).toBe("completed");
-    expect(replayed.rootOutput.kind).toBe("agent");
+    expect(replayed.rootResult.status).toBe("completed");
+    expect(replayed.rootResult.status === "completed" ? replayed.rootResult.output.kind : "").toBe(
+      "agent",
+    );
     expect(replayed.child.output?.text).toContain("persist me");
   });
 });

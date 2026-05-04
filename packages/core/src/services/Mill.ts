@@ -1,15 +1,13 @@
-import { Context, Data, Effect, Layer, Option, Stream } from "effect";
+import { Context, Data, Effect, Fiber, Layer, Option, Stream } from "effect";
 import type { TaskEvent } from "../schemas/task-event";
 import {
   TaskCancelledError,
   TaskFailedError,
-  TaskTerminalError,
-  type TaskOutput,
   type TaskResult,
   type TaskSnapshot,
   type TurnResult,
 } from "../schemas/task-state";
-import { reduceEvents } from "../task-reducer";
+import { isTerminalStatus, reduceEvents } from "../task-reducer";
 import { EntityRegistry } from "./EntityRegistry";
 import { EventAppender } from "./EventAppender";
 import { IdGenerator } from "./IdGenerator";
@@ -22,11 +20,9 @@ export class MillError extends Data.TaggedError("MillError")<{
 
 export type Mill = {
   readonly submit: (programPath: string) => Effect.Effect<string, MillError>;
+  readonly prepare: (programPath: string) => Effect.Effect<string, MillError>;
+  readonly executePrepared: (taskId: string, programPath: string) => Effect.Effect<void, MillError>;
   readonly status: (taskId: string) => Effect.Effect<TaskSnapshot, MillError>;
-  readonly wait: (
-    taskId: string,
-    timeout?: number,
-  ) => Effect.Effect<TaskOutput, MillError | TaskFailedError | TaskCancelledError>;
   readonly result: (taskId: string) => Effect.Effect<TaskResult, MillError>;
   readonly watch: (
     taskId: string,
@@ -87,6 +83,83 @@ export const makeMill = Effect.gen(function* () {
   const idGenerator = yield* IdGenerator;
   const programHost = yield* ProgramHost;
 
+  const prepare = (programPath: string): Effect.Effect<string, MillError> =>
+    Effect.gen(function* () {
+      const taskId = yield* idGenerator.generateTaskId;
+      const created: TaskEvent = {
+        taskId,
+        sequence: 0,
+        timestamp: now(),
+        type: "task:created",
+        payload: { kind: "program", input: programPath },
+      };
+      yield* eventAppender.append(taskId, created);
+
+      const started: TaskEvent = {
+        taskId,
+        sequence: 0,
+        timestamp: now(),
+        type: "task:started",
+        payload: {},
+      };
+      yield* eventAppender.append(taskId, started);
+      return taskId;
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.fail(
+          new MillError({
+            message: `Failed to prepare program task: ${String(error)}`,
+          }),
+        ),
+      ),
+    );
+
+  const executePrepared = (taskId: string, programPath: string): Effect.Effect<void, MillError> =>
+    Effect.gen(function* () {
+      const events = yield* eventAppender.readEvents(taskId);
+      const entity = yield* registry.getOrCreate(taskId, taskId);
+      for (const event of events.filter((event) => event.taskId === taskId)) {
+        yield* entity.applyEvent(event);
+      }
+
+      yield* programHost.runProgram(programPath, taskId).pipe(
+        Effect.flatMap((result) => {
+          const event: TaskEvent = {
+            taskId,
+            sequence: 0,
+            timestamp: now(),
+            type: "task:completed",
+            payload: { result: typeof result === "string" ? result : JSON.stringify(result) },
+          };
+          return eventAppender
+            .append(taskId, event)
+            .pipe(Effect.flatMap((persistedEvent) => entity.applyEvent(persistedEvent)));
+        }),
+        Effect.catch((error) => {
+          const event: TaskEvent = {
+            taskId,
+            sequence: 0,
+            timestamp: now(),
+            type: "task:failed",
+            payload: { error: String(error) },
+          };
+          return eventAppender.append(taskId, event).pipe(
+            Effect.flatMap((persistedEvent) => entity.applyEvent(persistedEvent)),
+            Effect.catch(() => Effect.void),
+          );
+        }),
+      );
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.fail(
+          new MillError({
+            taskId,
+            message: `Failed to execute prepared program task: ${String(error)}`,
+          }),
+        ),
+      ),
+    );
+
   const submit = (programPath: string): Effect.Effect<string, MillError> =>
     Effect.gen(function* () {
       const taskId = yield* idGenerator.generateTaskId;
@@ -111,35 +184,7 @@ export const makeMill = Effect.gen(function* () {
       const persistedStarted = yield* eventAppender.append(taskId, started);
       yield* entity.applyEvent(persistedStarted);
       yield* entity.query({ _tag: "GetTask", taskId });
-      yield* Effect.forkDetach(
-        programHost.runProgram(programPath, taskId).pipe(
-          Effect.flatMap((result) => {
-            const event: TaskEvent = {
-              taskId,
-              sequence: 0,
-              timestamp: now(),
-              type: "task:completed",
-              payload: { result: typeof result === "string" ? result : JSON.stringify(result) },
-            };
-            return eventAppender
-              .append(taskId, event)
-              .pipe(Effect.flatMap((persistedEvent) => entity.applyEvent(persistedEvent)));
-          }),
-          Effect.catch((error) => {
-            const event: TaskEvent = {
-              taskId,
-              sequence: 0,
-              timestamp: now(),
-              type: "task:failed",
-              payload: { error: String(error) },
-            };
-            return eventAppender.append(taskId, event).pipe(
-              Effect.flatMap((persistedEvent) => entity.applyEvent(persistedEvent)),
-              Effect.catch(() => Effect.void),
-            );
-          }),
-        ),
-      );
+      yield* Effect.forkDetach(executePrepared(taskId, programPath));
       return taskId;
     }).pipe(
       Effect.catch((error) =>
@@ -214,46 +259,6 @@ export const makeMill = Effect.gen(function* () {
             : new MillError({
                 taskId,
                 message: `Failed to get task result: ${String(error)}`,
-              }),
-        ),
-      ),
-    );
-
-  const wait = (
-    taskId: string,
-    timeout?: number,
-  ): Effect.Effect<TaskOutput, MillError | TaskFailedError | TaskCancelledError> =>
-    Effect.gen(function* () {
-      const taskResult = yield* result(taskId);
-      switch (taskResult.status) {
-        case "completed":
-          return taskResult.output;
-        case "failed":
-        case "cancelled":
-          return yield* Effect.fail(taskResult.error);
-      }
-    }).pipe(
-      (effect) => {
-        if (timeout !== undefined && timeout > 0) {
-          return effect.pipe(
-            Effect.timeoutOption(`${timeout} millis`),
-            Effect.flatMap((option) =>
-              Option.match(option, {
-                onNone: () => Effect.fail(new MillError({ taskId, message: "Wait timed out" })),
-                onSome: (output) => Effect.succeed(output),
-              }),
-            ),
-          );
-        }
-        return effect;
-      },
-      Effect.catch((error) =>
-        Effect.fail(
-          error instanceof MillError || error instanceof TaskTerminalError
-            ? error
-            : new MillError({
-                taskId,
-                message: `Failed to wait for task: ${String(error)}`,
               }),
         ),
       ),
@@ -365,7 +370,29 @@ export const makeMill = Effect.gen(function* () {
         Effect.gen(function* () {
           const entity = yield* registry.lookup(id);
           if (entity === undefined) {
-            return yield* Effect.fail(new MillError({ taskId: id, message: "Task not found" }));
+            const rootTaskId = yield* eventAppender.resolveRootTaskId(id);
+            if (rootTaskId === undefined) {
+              return yield* Effect.fail(new MillError({ taskId: id, message: "Task not found" }));
+            }
+
+            const events = yield* eventAppender.readEvents(rootTaskId);
+            const taskEvents = events.filter((event) => event.taskId === id);
+            if (taskEvents.length === 0) {
+              return yield* Effect.fail(new MillError({ taskId: id, message: "Task not found" }));
+            }
+
+            const snapshot = reduceEvents(id, taskEvents).snapshot;
+            if (!isTerminalStatus(snapshot.status)) {
+              const event: TaskEvent = {
+                taskId: id,
+                sequence: 0,
+                timestamp: now(),
+                type: "task:cancelled",
+                payload: { reason },
+              };
+              yield* eventAppender.append(rootTaskId, event);
+            }
+            return;
           }
 
           const children = yield* entity.query({ _tag: "GetChildTasks", taskId: id });
@@ -442,8 +469,9 @@ export const makeMill = Effect.gen(function* () {
 
   return {
     submit,
+    prepare,
+    executePrepared,
     status,
-    wait,
     result,
     watch,
     send,

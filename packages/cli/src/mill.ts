@@ -2,33 +2,27 @@
 
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
-import { Effect, Exit, Layer, Runtime, Stream } from "effect";
-import {
-  Mill,
-  MillLive,
-  PathServiceLive,
-  EventAppenderLive,
-  EntityRegistryLive,
-  IdGeneratorLive,
-  ProgramHostLive,
-} from "@mill/core";
-import { ProcessLive, SpawnAgentRuntimeLive } from "@mill/provider-acp";
+import { Effect, Exit, Runtime, Stream } from "effect";
+import { Mill } from "@mill/core";
+import { launchDetachedWorker, makeMillLayer, stopDetachedWorker } from "./cli.platform";
 
 const usage = `mill — supervised task runtime
 
 Usage:
   mill run <program.ts>     Submit a program task; prints taskId
+  mill run <program.ts> --sync
+                            Run in-process until terminal
   mill status <taskId>      Show current task snapshot
   mill watch <taskId>       Stream events for a task
   mill cancel <taskId>      Cancel a task (cascades to children)
   mill ls [--all]           List root tasks; --all for everything
-  mill wait <taskId>        Wait for task to reach terminal status
 
 Options:
   --tasks-dir <path>        Tasks directory (default: ~/.mill/tasks)
   --shallow                 Scope watch to task only (no subtree)
   --include <types>         Comma-separated event types to include
   --exclude <types>         Comma-separated event types to exclude
+  --sync                    Run in-process until terminal
   -h, --help                Show this help message
 `;
 
@@ -60,31 +54,6 @@ const parseArgs = (
   return { command, positional: positional.slice(1), flags };
 };
 
-const makeMillLayer = (tasksDirectory: string) => {
-  const fsLayer = EventAppenderLive.pipe(
-    Layer.provide(PathServiceLive(tasksDirectory)),
-    Layer.provide(BunServices.layer),
-  );
-  const registryLayer = EntityRegistryLive.pipe(
-    Layer.provide(fsLayer),
-    Layer.provide(IdGeneratorLive),
-  );
-  return MillLive.pipe(
-    Layer.provide(registryLayer),
-    Layer.provide(
-      ProgramHostLive.pipe(
-        Layer.provide(registryLayer),
-        Layer.provide(fsLayer),
-        Layer.provide(
-          SpawnAgentRuntimeLive.pipe(Layer.provide(BunServices.layer), Layer.provide(ProcessLive)),
-        ),
-      ),
-    ),
-    Layer.provide(fsLayer),
-    Layer.provide(IdGeneratorLive),
-  );
-};
-
 const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =>
   Effect.gen(function* () {
     const { command, positional, flags } = parseArgs(args);
@@ -111,11 +80,28 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
           console.error("Error: program path required");
           return 1;
         }
+        if (flags.sync === true) {
+          const taskId = yield* runMill(
+            Effect.gen(function* () {
+              const mill = yield* Mill;
+              const taskId = yield* mill.submit(programPath);
+              yield* mill.result(taskId);
+              return taskId;
+            }),
+          );
+          console.log(taskId);
+          return 0;
+        }
+
         const taskId = yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            return yield* mill.submit(programPath);
+            return yield* mill.prepare(programPath);
           }),
+        );
+        yield* Effect.provide(
+          Effect.scoped(launchDetachedWorker({ taskId, programPath, tasksDirectory })),
+          BunServices.layer,
         );
         console.log(taskId);
         return 0;
@@ -130,23 +116,6 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
         const snapshot = yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            return yield* mill.status(taskId);
-          }),
-        );
-        console.log(JSON.stringify(snapshot, null, 2));
-        return 0;
-      }
-
-      case "wait": {
-        const taskId = positional[0];
-        if (!taskId) {
-          console.error("Error: taskId required");
-          return 1;
-        }
-        const snapshot = yield* runMill(
-          Effect.gen(function* () {
-            const mill = yield* Mill;
-            yield* mill.result(taskId);
             return yield* mill.status(taskId);
           }),
         );
@@ -183,6 +152,10 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
             const mill = yield* Mill;
             return yield* mill.cancel(taskId);
           }),
+        );
+        yield* Effect.provide(
+          Effect.scoped(stopDetachedWorker(tasksDirectory, taskId)),
+          BunServices.layer,
         );
         return 0;
       }
