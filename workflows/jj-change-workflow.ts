@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { claude, codex, pi, task } from "@mill/core/program";
 
 const MAX_ITERATIONS = 3;
@@ -15,19 +16,16 @@ Constraints:
 `;
 
 const readCurrentRevisionDescription = (): string => {
-  const proc = Bun.spawnSync({
-    cmd: ["jj", "log", "-r", "@", "--no-graph", "--template", "description"],
+  const proc = spawnSync("jj", ["log", "-r", "@", "--no-graph", "--template", "description"], {
     cwd: "/Users/laurynas-fp/Code/laulauland/mill",
-    stdout: "pipe",
-    stderr: "pipe",
+    encoding: "utf8",
   });
 
-  if (!proc.success) {
-    const stderr = new TextDecoder().decode(proc.stderr).trim();
-    throw new Error(`Failed to read current jj revision description: ${stderr}`);
+  if (proc.status !== 0) {
+    throw new Error(`Failed to read current jj revision description: ${proc.stderr.trim()}`);
   }
 
-  const description = new TextDecoder().decode(proc.stdout).trim();
+  const description = proc.stdout.trim();
   if (description.length === 0) {
     throw new Error("Current jj revision has no description to use as the change request.");
   }
@@ -35,30 +33,19 @@ const readCurrentRevisionDescription = (): string => {
   return description;
 };
 
-const resultText = (value: unknown): string => {
-  if (typeof value !== "object" || value === null) {
-    return String(value ?? "");
-  }
-
-  const maybeResult = value as {
-    readonly result?: { readonly text?: unknown };
-    readonly text?: unknown;
-  };
-  if (typeof maybeResult.result?.text === "string") {
-    return maybeResult.result.text;
-  }
-  if (typeof maybeResult.text === "string") {
-    return maybeResult.text;
-  }
-
-  return JSON.stringify(value, null, 2);
+const runResearcher = async (prompt: string): Promise<string> => {
+  return (await task({ agent: claude("default") }).run(prompt)).text;
 };
 
-const changeRequest = readCurrentRevisionDescription();
+const runImplementer = async (prompt: string): Promise<string> => {
+  return (await task({ agent: pi() }).run(prompt)).text;
+};
 
-const research = task({
-  agent: claude("claude-opus-4.7"),
-  prompt: `${repositoryContext}
+const runReviewer = async (prompt: string): Promise<string> => {
+  return (await task({ agent: codex("gpt-5.5") }).run(prompt)).text;
+};
+
+const buildResearcherPrompt = (changeRequest: string): string => `${repositoryContext}
 
 Step 1 — research and plan only. Do not modify files.
 
@@ -74,15 +61,15 @@ Produce a concise implementation plan. Include:
 - command/test plan,
 - risks or unknowns for the implementer,
 - any mismatch between docs and code.
-`,
-}).start();
+`;
 
-const researchSnapshot = await research.done;
-const plan = resultText(researchSnapshot);
-
-const implementation = task({
-  agent: pi("gpt-5.5"),
-  prompt: `${repositoryContext}
+const buildImplementerPrompt = (
+  changeRequest: string,
+  plan: string,
+  previousDraft: string | undefined,
+  previousReview: string | undefined,
+): string => {
+  const head = `${repositoryContext}
 
 Step 2 — implement.
 
@@ -102,18 +89,30 @@ Requirements:
 - If you touch provider/runtime wiring, ensure model selection is explicit and fail-fast: do not pass modelPreference to agent.prompt; resolve the model option and call agent.setConfigOption before prompting.
 - Add or update tests if practical; otherwise document manual validation.
 - Run format/typecheck/export checks that are appropriate.
-- Leave a concise summary of changed files and validation results.
-`,
-}).start();
+- Leave a concise summary of changed files and validation results.`;
 
-const implementationSnapshot = await implementation.done;
-const implementationSummary = resultText(implementationSnapshot);
+  if (previousDraft !== undefined && previousReview !== undefined) {
+    return `${head}
 
-const review = task({
-  agent: codex("gpt-5.5"),
-  prompt: `${repositoryContext}
+Previous implementation summary (from a prior iteration of this same change request):
 
-Step 3 — review only. Do not implement unless explicitly necessary to verify a finding.
+${previousDraft}
+
+Reviewer's blocking feedback to address (in addition to the change request and the research plan):
+
+${previousReview}
+
+Re-implement, addressing the reviewer's feedback. Do not regress prior fixes that were correct.`;
+  }
+
+  return head;
+};
+
+const buildReviewerPrompt = (
+  changeRequest: string,
+  currentDraft: string,
+  iteration: number,
+): string => `${repositoryContext}
 
 Change request from the current jj revision description:
 
@@ -131,8 +130,37 @@ Review focus:
 - ACP model selection remains explicit and fail-fast if provider/runtime code is touched.
 - Tests/checks are sufficient.
 
-Return: verdict, blockers, non-blocking suggestions, and exact follow-up commands if any.
-`,
-}).start();
+Verdict format:
+- If the implementation is acceptable with no blocking issues, respond with the literal token APPROVED on its own line, then optionally non-blocking suggestions and follow-up commands.
+- Otherwise, list blocking issues and exact follow-up commands the implementer should run. Do NOT include the token APPROVED on its own line in this case.`;
 
-await review.done;
+const isApproved = (reviewOutput: string): boolean => /^\s*APPROVED\s*$/m.test(reviewOutput);
+
+export default async function runJjChangeWorkflow(): Promise<string> {
+  const changeRequest = readCurrentRevisionDescription();
+
+  const plan = await runResearcher(buildResearcherPrompt(changeRequest));
+
+  let draft = await runImplementer(
+    buildImplementerPrompt(changeRequest, plan, undefined, undefined),
+  );
+  let reviewOutput = "";
+
+  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+    reviewOutput = await runReviewer(buildReviewerPrompt(changeRequest, draft, iteration));
+
+    if (isApproved(reviewOutput)) {
+      console.log(reviewOutput);
+      return reviewOutput;
+    }
+
+    if (iteration === MAX_ITERATIONS - 1) {
+      break;
+    }
+
+    draft = await runImplementer(buildImplementerPrompt(changeRequest, plan, draft, reviewOutput));
+  }
+
+  console.log(reviewOutput);
+  return reviewOutput;
+}
