@@ -1,5 +1,5 @@
 import * as FileSystem from "effect/FileSystem";
-import { Context, Data, Effect, Layer, PlatformError, PubSub, Ref, Stream } from "effect";
+import { Context, Data, Effect, Layer, PlatformError, PubSub, Ref, Schedule, Stream } from "effect";
 import type { TaskEvent } from "../schemas/task-event";
 import { reduceEvent, isTerminalStatus, type ReducerState } from "../task-reducer";
 import { PathService } from "./PathService";
@@ -37,6 +37,10 @@ export type EventAppender = {
   >;
 
   readonly watch: (rootTaskId: string) => Stream.Stream<TaskEvent>;
+
+  readonly watchFromFile: (
+    rootTaskId: string,
+  ) => Stream.Stream<TaskEvent, EventAppendError | PlatformError.PlatformError>;
 
   readonly resolveRootTaskId: (
     taskId: string,
@@ -518,6 +522,81 @@ export const makeEventAppender = Effect.gen(function* () {
       );
     });
 
+  const watchFromFile = (
+    rootTaskId: string,
+  ): Stream.Stream<TaskEvent, EventAppendError | PlatformError.PlatformError> => {
+    const readAppendedEvents = (
+      offsetRef: Ref.Ref<number>,
+    ): Effect.Effect<ReadonlyArray<TaskEvent>, EventAppendError | PlatformError.PlatformError> =>
+      Effect.gen(function* () {
+        const file = eventsFilePath(tasksDirectory, rootTaskId);
+        const exists = yield* fileSystem.exists(file);
+
+        if (!exists) {
+          return [];
+        }
+
+        const content = yield* fileSystem.readFileString(file, "utf-8").pipe(
+          Effect.mapError(
+            (error) =>
+              new EventAppendError({
+                rootTaskId,
+                event: placeholderEvent(rootTaskId),
+                message: `Failed to read events file: ${String(error)}`,
+              }),
+          ),
+        );
+        const offset = yield* Ref.get(offsetRef);
+
+        if (content.length <= offset) {
+          return [];
+        }
+
+        const appended = content.slice(offset);
+        const lastNewline = appended.lastIndexOf("\n");
+        if (lastNewline < 0) {
+          return [];
+        }
+
+        const complete = appended.slice(0, lastNewline + 1);
+        const nextOffset = offset + complete.length;
+        const lines = complete
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        const events: Array<TaskEvent> = [];
+
+        for (const line of lines) {
+          const event = yield* Effect.mapError(
+            decodeEvent(line),
+            (error) =>
+              new EventAppendError({
+                rootTaskId,
+                event: placeholderEvent(rootTaskId),
+                message: `Failed to decode event: ${error.message}`,
+              }),
+          );
+          events.push(event);
+        }
+
+        yield* Ref.set(offsetRef, nextOffset);
+        return events;
+      });
+
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const offsetRef = yield* Ref.make(0);
+        const replay = Stream.fromIterableEffect(readAppendedEvents(offsetRef));
+        const tail = Stream.fromEffectSchedule(
+          readAppendedEvents(offsetRef),
+          Schedule.spaced("150 millis"),
+        ).pipe(Stream.flatMap((events) => Stream.fromIterable(events)));
+
+        return Stream.concat(replay, tail);
+      }),
+    );
+  };
+
   const resolveRootTaskId = (
     taskId: string,
   ): Effect.Effect<string | undefined, EventAppendError | PlatformError.PlatformError> =>
@@ -553,6 +632,7 @@ export const makeEventAppender = Effect.gen(function* () {
     readEvents,
     listRootTaskIds,
     watch,
+    watchFromFile,
     resolveRootTaskId,
   } satisfies EventAppender;
 });

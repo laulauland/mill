@@ -132,7 +132,19 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
         yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            const events = mill.watch(taskId, { shallow: flags.shallow === true });
+            const include =
+              typeof flags.include === "string"
+                ? flags.include.split(",").filter((type) => type.length > 0)
+                : undefined;
+            const exclude =
+              typeof flags.exclude === "string"
+                ? flags.exclude.split(",").filter((type) => type.length > 0)
+                : undefined;
+            const events = mill.watch(taskId, {
+              shallow: flags.shallow === true,
+              include,
+              exclude,
+            });
             yield* Stream.runForEach(events, (event) =>
               Effect.sync(() => console.log(JSON.stringify(event))),
             );

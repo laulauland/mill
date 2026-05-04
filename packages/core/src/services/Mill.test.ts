@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { Effect, Fiber, Layer, Queue } from "effect";
+import { Effect, Fiber, Layer, Queue, Stream } from "effect";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Mill, MillLive } from "./Mill";
 import { EntityRegistry, EntityRegistryLive } from "./EntityRegistry";
@@ -245,6 +245,170 @@ describe("Mill", () => {
     expect(ids).toEqual([childId, rootId]);
   });
 
+  test("watch replays persisted child subtree and applies include/exclude filters", async () => {
+    const fs = require("fs");
+    const rootId = "task_disk_root";
+    const childId = "task_disk_child";
+    fs.mkdirSync(`${tmpDir}/${rootId}`, { recursive: true });
+    fs.writeFileSync(
+      `${tmpDir}/${rootId}/events.ndjson`,
+      [
+        {
+          taskId: rootId,
+          sequence: 1,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:created",
+          payload: { kind: "program" },
+        },
+        {
+          taskId: rootId,
+          sequence: 2,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:child_spawned",
+          payload: { childId, kind: "agent" },
+        },
+        {
+          taskId: childId,
+          sequence: 3,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:created",
+          payload: { parentId: rootId, kind: "agent" },
+        },
+        {
+          taskId: childId,
+          sequence: 4,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:message_chunk",
+          payload: { text: "hello" },
+        },
+        {
+          taskId: childId,
+          sequence: 5,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:completed",
+          payload: { result: "hello" },
+        },
+        {
+          taskId: rootId,
+          sequence: 6,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:completed",
+          payload: { result: "done" },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n",
+    );
+
+    const replayed = await run(
+      Effect.gen(function* () {
+        const mill = yield* Mill;
+        return yield* mill
+          .watch(childId, {
+            include: ["task:created", "task:message_chunk", "task:completed"],
+            exclude: ["task:message_chunk"],
+          })
+          .pipe(Stream.take(2), Stream.runCollect);
+      }),
+    );
+
+    expect(Array.from(replayed).map((event) => [event.taskId, event.type])).toEqual([
+      [childId, "task:created"],
+      [childId, "task:completed"],
+    ]);
+  });
+
+  test("watch does not stop at root terminal before later child events", async () => {
+    const fs = require("fs");
+    const rootId = "task_disk_root";
+    const childId = "task_disk_child";
+    fs.mkdirSync(`${tmpDir}/${rootId}`, { recursive: true });
+    fs.writeFileSync(
+      `${tmpDir}/${rootId}/events.ndjson`,
+      [
+        {
+          taskId: rootId,
+          sequence: 1,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:created",
+          payload: { kind: "program" },
+        },
+        {
+          taskId: rootId,
+          sequence: 2,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:child_spawned",
+          payload: { childId, kind: "agent" },
+        },
+        {
+          taskId: childId,
+          sequence: 3,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:created",
+          payload: { parentId: rootId, kind: "agent" },
+        },
+        {
+          taskId: childId,
+          sequence: 4,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:started",
+          payload: {},
+        },
+        {
+          taskId: rootId,
+          sequence: 5,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:completed",
+          payload: { result: "done" },
+        },
+        {
+          taskId: childId,
+          sequence: 6,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:message_chunk",
+          payload: { text: "late child" },
+        },
+        {
+          taskId: childId,
+          sequence: 7,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:completed",
+          payload: { result: "late child" },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n",
+    );
+
+    const watched = await run(
+      Effect.gen(function* () {
+        const mill = yield* Mill;
+        const rootEvents = yield* mill.watch(rootId).pipe(Stream.take(7), Stream.runCollect);
+        const childEvents = yield* mill.watch(childId).pipe(Stream.take(4), Stream.runCollect);
+        return {
+          rootEvents: Array.from(rootEvents).map((event) => `${event.taskId}:${event.type}`),
+          childEvents: Array.from(childEvents).map((event) => `${event.taskId}:${event.type}`),
+        };
+      }),
+    );
+
+    expect(watched.rootEvents).toEqual([
+      "task_disk_root:task:created",
+      "task_disk_root:task:child_spawned",
+      "task_disk_child:task:created",
+      "task_disk_child:task:started",
+      "task_disk_root:task:completed",
+      "task_disk_child:task:message_chunk",
+      "task_disk_child:task:completed",
+    ]);
+    expect(watched.childEvents).toEqual([
+      "task_disk_child:task:created",
+      "task_disk_child:task:started",
+      "task_disk_child:task:message_chunk",
+      "task_disk_child:task:completed",
+    ]);
+  });
+
   test("submit executes top-level program tasks and result resolves", async () => {
     const fs = require("fs");
     const programPath = `${tmpDir}/top-level-program.ts`;
@@ -281,41 +445,79 @@ describe("Mill", () => {
 
   test("status and result replay terminal root and child tasks from disk", async () => {
     const fs = require("fs");
-    const programPath = `${tmpDir}/replay-program.ts`;
-    fs.mkdirSync(tmpDir, { recursive: true });
+    const rootId = "task_disk_root";
+    const childId = "task_disk_child";
+    fs.mkdirSync(`${tmpDir}/${rootId}`, { recursive: true });
     fs.writeFileSync(
-      programPath,
+      `${tmpDir}/${rootId}/events.ndjson`,
       [
-        `import { task, codex } from "${import.meta.dir}/../program.api.ts";`,
-        `const child = task({ agent: codex("gpt-5") });`,
-        `child.send("persist me");`,
-        `child.complete();`,
-        `await child.done;`,
-      ].join("\n"),
-    );
-
-    const ids = await run(
-      Effect.gen(function* () {
-        const mill = yield* Mill;
-        const appender = yield* EventAppender;
-        const taskId = yield* mill.submit(programPath);
-        yield* mill.result(taskId);
-        const events = yield* appender.readEvents(taskId);
-        const childSpawned = events.find((event) => event.type === "task:child_spawned");
-        expect(childSpawned?.type).toBe("task:child_spawned");
-        return {
-          taskId,
-          childId: childSpawned?.type === "task:child_spawned" ? childSpawned.payload.childId : "",
-        };
-      }),
+        {
+          taskId: rootId,
+          sequence: 1,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:created",
+          payload: { kind: "program", input: "replay-program.ts" },
+        },
+        {
+          taskId: rootId,
+          sequence: 2,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:started",
+          payload: {},
+        },
+        {
+          taskId: rootId,
+          sequence: 3,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:child_spawned",
+          payload: { childId, kind: "agent" },
+        },
+        {
+          taskId: childId,
+          sequence: 4,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:created",
+          payload: { parentId: rootId, kind: "agent" },
+        },
+        {
+          taskId: childId,
+          sequence: 5,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:started",
+          payload: {},
+        },
+        {
+          taskId: childId,
+          sequence: 6,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:message_chunk",
+          payload: { text: "persist me" },
+        },
+        {
+          taskId: childId,
+          sequence: 7,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:completed",
+          payload: { result: "persist me" },
+        },
+        {
+          taskId: rootId,
+          sequence: 8,
+          timestamp: "2026-05-04T00:00:00.000Z",
+          type: "task:completed",
+          payload: { result: "done" },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n",
     );
 
     const replayed = await run(
       Effect.gen(function* () {
         const mill = yield* Mill;
-        const rootResult = yield* mill.result(ids.taskId);
-        const root = yield* mill.status(ids.taskId);
-        const child = yield* mill.status(ids.childId);
+        const rootResult = yield* mill.result(rootId);
+        const root = yield* mill.status(rootId);
+        const child = yield* mill.status(childId);
         return { rootResult, root, child };
       }),
     );

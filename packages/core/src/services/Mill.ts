@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Context, Data, Effect, Fiber, Layer, Option, Ref, Stream } from "effect";
 import type { TaskEvent } from "../schemas/task-event";
 import {
   TaskCancelledError,
@@ -26,7 +26,11 @@ export type Mill = {
   readonly result: (taskId: string) => Effect.Effect<TaskResult, MillError>;
   readonly watch: (
     taskId: string,
-    opts?: { shallow?: boolean },
+    opts?: {
+      readonly shallow?: boolean;
+      readonly include?: ReadonlyArray<TaskEvent["type"] | string>;
+      readonly exclude?: ReadonlyArray<TaskEvent["type"] | string>;
+    },
   ) => Stream.Stream<TaskEvent, MillError>;
   readonly send: (taskId: string, prompt: string) => Effect.Effect<TurnResult, MillError>;
   readonly complete: (taskId: string) => Effect.Effect<void, MillError>;
@@ -266,15 +270,68 @@ export const makeMill = Effect.gen(function* () {
 
   const watch = (
     taskId: string,
-    _opts?: { shallow?: boolean },
+    opts?: {
+      readonly shallow?: boolean;
+      readonly include?: ReadonlyArray<TaskEvent["type"] | string>;
+      readonly exclude?: ReadonlyArray<TaskEvent["type"] | string>;
+    },
   ): Stream.Stream<TaskEvent, MillError> =>
-    eventAppender
-      .watch(taskId)
-      .pipe(
-        Stream.mapError(
-          (error) => new MillError({ taskId, message: `Watch error: ${String(error)}` }),
-        ),
-      );
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const rootTaskId = yield* eventAppender
+          .resolveRootTaskId(taskId)
+          .pipe(
+            Effect.mapError(
+              (error) => new MillError({ taskId, message: `Watch error: ${String(error)}` }),
+            ),
+          );
+
+        if (rootTaskId === undefined) {
+          return Stream.fail(new MillError({ taskId, message: "Task not found" }));
+        }
+
+        let events = eventAppender
+          .watchFromFile(rootTaskId)
+          .pipe(
+            Stream.mapError(
+              (error) => new MillError({ taskId, message: `Watch error: ${String(error)}` }),
+            ),
+          );
+
+        if (opts?.shallow) {
+          events = events.pipe(Stream.filter((event) => event.taskId === taskId));
+        } else if (taskId !== rootTaskId) {
+          const descendantsRef = yield* Ref.make<Set<string>>(new Set([taskId]));
+          events = events.pipe(
+            Stream.filterEffect((event) =>
+              Ref.modify(descendantsRef, (descendants) => {
+                const next = new Set(descendants);
+                const includeEvent = next.has(event.taskId);
+
+                if (includeEvent && event.type === "task:child_spawned") {
+                  next.add(event.payload.childId);
+                }
+
+                return [includeEvent, next];
+              }),
+            ),
+          );
+        }
+
+        const include = opts?.include !== undefined ? new Set(opts.include) : undefined;
+        const exclude = opts?.exclude !== undefined ? new Set(opts.exclude) : undefined;
+
+        if (include !== undefined) {
+          events = events.pipe(Stream.filter((event) => include.has(event.type)));
+        }
+
+        if (exclude !== undefined) {
+          events = events.pipe(Stream.filter((event) => !exclude.has(event.type)));
+        }
+
+        return events;
+      }),
+    );
 
   const send = (taskId: string, prompt: string): Effect.Effect<TurnResult, MillError> =>
     Effect.gen(function* () {

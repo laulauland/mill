@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Exit, Fiber, Layer, Stream } from "effect";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { EventAppender, EventAppenderLive } from "./EventAppender";
 import { PathService, PathServiceLive } from "./PathService";
@@ -190,6 +190,90 @@ describe("EventAppender", () => {
       "task:turn_started",
       "task:turn_completed",
       "task:completed",
+    ]);
+  });
+
+  test("watchFromFile replays existing events and tails appended events", async () => {
+    const eventTypes = await run(
+      Effect.gen(function* () {
+        const ea = yield* EventAppender;
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "root1", { payload: { kind: "program" } }),
+        );
+        yield* ea.append("root1", makeEvent("task:started", "root1"));
+
+        const fiber = yield* ea
+          .watchFromFile("root1")
+          .pipe(Stream.take(3), Stream.runCollect, Effect.forkScoped);
+
+        yield* Effect.sleep("250 millis");
+        yield* ea.append(
+          "root1",
+          makeEvent("task:completed", "root1", { payload: { result: "done" } }),
+        );
+
+        const events = yield* Fiber.join(fiber);
+        return Array.from(events).map((event) => event.type);
+      }).pipe(Effect.scoped),
+    );
+
+    expect(eventTypes).toEqual(["task:created", "task:started", "task:completed"]);
+  });
+
+  test("watchFromFile continues after root terminal events", async () => {
+    const eventTypes = await run(
+      Effect.gen(function* () {
+        const ea = yield* EventAppender;
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "root1", { payload: { kind: "program" } }),
+        );
+        yield* ea.append("root1", makeEvent("task:started", "root1"));
+        yield* ea.append(
+          "root1",
+          makeEvent("task:child_spawned", "root1", {
+            payload: { childId: "child1", kind: "agent" },
+          }),
+        );
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "child1", { payload: { parentId: "root1", kind: "agent" } }),
+        );
+        yield* ea.append("root1", makeEvent("task:started", "child1"));
+
+        const fiber = yield* ea
+          .watchFromFile("root1")
+          .pipe(Stream.take(8), Stream.runCollect, Effect.forkScoped);
+
+        yield* Effect.sleep("250 millis");
+        yield* ea.append(
+          "root1",
+          makeEvent("task:completed", "root1", { payload: { result: "done" } }),
+        );
+        yield* ea.append(
+          "root1",
+          makeEvent("task:message_chunk", "child1", { payload: { text: "late child" } }),
+        );
+        yield* ea.append(
+          "root1",
+          makeEvent("task:completed", "child1", { payload: { result: "late child" } }),
+        );
+
+        const events = yield* Fiber.join(fiber);
+        return Array.from(events).map((event) => `${event.taskId}:${event.type}`);
+      }).pipe(Effect.scoped),
+    );
+
+    expect(eventTypes).toEqual([
+      "root1:task:created",
+      "root1:task:started",
+      "root1:task:child_spawned",
+      "child1:task:created",
+      "child1:task:started",
+      "root1:task:completed",
+      "child1:task:message_chunk",
+      "child1:task:completed",
     ]);
   });
 
