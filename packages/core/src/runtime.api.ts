@@ -1,228 +1,121 @@
-import { Data, Effect } from "effect";
-import {
-  cancelRun,
-  getRunStatus,
-  listRuns,
-  runProgramSyncEffect,
-  runWithBunServices,
-  runWorker,
-  submitRunEffect,
-  waitForRun,
-  watchRun,
-  type CancelRunInput,
-  type ProcessControl,
-  type LaunchWorkerInput,
-  type ListRunsInput,
-  type RunProgramSyncInput,
-  type RunWorkerInput,
-  type SubmitRunInput,
-  type WaitForRunInput,
-  type RunRecord,
-  type RunSyncOutput,
-  type WatchRunInput,
-} from "./run.api";
-import type { AgentRuntime } from "./types";
-
-class MissingLaunchWorkerError extends Data.TaggedError("MissingLaunchWorkerError")<{
-  readonly message: string;
-}> {}
-
-interface MillRuntimeBaseOptions {
-  readonly cwd?: string;
-  readonly homeDirectory?: string;
-  readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly runsDirectory?: string;
-  readonly maxRunDepth?: number;
-  readonly agentRuntimes: Readonly<Record<string, AgentRuntime>>;
-  readonly executablePath?: string;
-  readonly processControl?: ProcessControl;
-}
-
-export interface MillRuntimeOptions extends MillRuntimeBaseOptions {
-  readonly launchWorker?: (input: LaunchWorkerInput) => Promise<void>;
-}
-
-export interface MillRuntimeRunInput {
-  readonly programPath: string;
-  readonly sync?: boolean;
-  readonly metadata?: Readonly<Record<string, string>>;
-  readonly waitTimeoutSeconds?: number;
-}
-
-export interface MillRuntimeWorkerInput {
-  readonly runId: string;
-  readonly programPath: string;
-  readonly runDepth?: number;
-  readonly workerPid?: number;
-}
-
-export interface MillRuntimeWaitInput {
-  readonly timeoutSeconds: number;
-}
-
-export interface MillRuntimeWatchInput {
-  readonly channel?: WatchRunInput["channel"];
-  readonly source?: WatchRunInput["source"];
-  readonly taskId?: string;
-  readonly sinceTimeIso?: string;
-  readonly onEvent: (line: string) => void;
-}
-
-export interface MillRuntimeListInput {
-  readonly status?: ListRunsInput["status"];
-}
-
-export interface MillRuntimeRunActor {
-  readonly done: Promise<RunRecord | RunSyncOutput>;
-  readonly start: () => MillRuntimeRunActor;
-  readonly getSnapshot: () => RunRecord | undefined;
-}
-
-export interface MillRuntimeRunRef {
-  readonly id: string;
-  readonly getSnapshot: () => Promise<RunRecord>;
-  readonly wait: (input: MillRuntimeWaitInput) => Promise<RunRecord>;
-  readonly watch: (input: MillRuntimeWatchInput) => Promise<void>;
-  readonly cancel: (reason?: string) => Promise<{
-    readonly runId: string;
-    readonly status: RunRecord["status"];
-    readonly alreadyTerminal: boolean;
-  }>;
-}
+// @mill/core/runtime — Promise facade for non-Effect callers
+import { Effect, Layer } from "effect";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Mill, MillLive, MillError } from "./services/Mill";
+import { EntityRegistryLive } from "./services/EntityRegistry";
+import { EventAppenderLive } from "./services/EventAppender";
+import { PathServiceLive } from "./services/PathService";
+import { IdGeneratorLive } from "./services/IdGenerator";
+import { ProgramHostLive } from "./services/ProgramHost";
+import { AgentRuntimeStub } from "./services/AgentRuntime";
+import type { TaskOutput, TaskResult, TaskSnapshot } from "./schemas/task-state";
+export type {
+  TaskCancelledError,
+  TaskFailedError,
+  TaskOutput,
+  TaskResult,
+  TaskTerminalError,
+  TurnResult,
+} from "./schemas/task-state";
 
 export interface MillRuntime {
-  readonly run: (input: MillRuntimeRunInput) => MillRuntimeRunActor;
-  readonly worker: (input: MillRuntimeWorkerInput) => Promise<RunSyncOutput>;
-  readonly runRef: (runId: string) => MillRuntimeRunRef;
-  readonly watch: (input: MillRuntimeWatchInput) => Promise<void>;
-  readonly list: (input?: MillRuntimeListInput) => Promise<ReadonlyArray<RunRecord>>;
+  readonly submit: (programPath: string) => Promise<string>;
+  readonly status: (taskId: string) => Promise<TaskSnapshot>;
+  readonly wait: (taskId: string, timeout?: number) => Promise<TaskOutput>;
+  readonly result: (taskId: string) => Promise<TaskResult>;
+  readonly send: (taskId: string, prompt: string) => Promise<TurnResult>;
+  readonly complete: (taskId: string) => Promise<void>;
+  readonly cancel: (taskId: string, reason?: string) => Promise<void>;
+  readonly list: (opts?: { all?: boolean }) => Promise<ReadonlyArray<string>>;
 }
 
-const mergeRunInput = (
-  options: MillRuntimeOptions,
-  input: MillRuntimeRunInput,
-): SubmitRunInput & RunProgramSyncInput => ({
-  ...options,
-  programPath: input.programPath,
-  launchWorker: options.launchWorker as (input: LaunchWorkerInput) => Promise<void>,
-  metadata: input.metadata,
-  waitTimeoutSeconds: input.waitTimeoutSeconds,
-});
+export const createMillRuntime = (options: { tasksDirectory?: string } = {}): MillRuntime => {
+  const tasksDirectory = options.tasksDirectory ?? `${process.env.HOME ?? "/tmp"}/.mill/tasks`;
 
-const mergeRunRefInput = (
-  options: MillRuntimeOptions,
-  runId: string,
-): Omit<WaitForRunInput & CancelRunInput & WatchRunInput, "timeoutSeconds" | "onEvent"> => ({
-  ...options,
-  runId,
-});
+  const fsLayer = EventAppenderLive.pipe(
+    Layer.provide(PathServiceLive(tasksDirectory)),
+    Layer.provide(BunServices.layer),
+  );
 
-export const createMillRuntime = (options: MillRuntimeOptions): MillRuntime => {
-  const run = (input: MillRuntimeRunInput): MillRuntimeRunActor => {
-    let snapshot: RunRecord | undefined;
-    let started = false;
-    const runInput = mergeRunInput(options, input);
-    const deferred = Promise.withResolvers<RunRecord | RunSyncOutput>();
-    const done = deferred.promise;
+  const registryLayer = EntityRegistryLive.pipe(
+    Layer.provide(fsLayer),
+    Layer.provide(IdGeneratorLive),
+  );
 
-    const startRun = (): void => {
-      if (options.launchWorker === undefined) {
-        deferred.reject(
-          new MissingLaunchWorkerError({
-            message: "Mill runtime launchWorker is required for run().",
-          }),
-        );
-        return;
-      }
+  const millLayer = MillLive.pipe(
+    Layer.provide(registryLayer),
+    Layer.provide(
+      ProgramHostLive.pipe(
+        Layer.provide(registryLayer),
+        Layer.provide(fsLayer),
+        Layer.provide(AgentRuntimeStub),
+      ),
+    ),
+    Layer.provide(fsLayer),
+    Layer.provide(IdGeneratorLive),
+  );
 
-      if (input.sync === true) {
-        void runWithBunServices(
-          runProgramSyncEffect(runInput).pipe(
-            Effect.tap((output) =>
-              Effect.sync(() => {
-                snapshot = output.run;
-              }),
-            ),
-            Effect.match({
-              onFailure: (error) => deferred.reject(error),
-              onSuccess: (output) => deferred.resolve(output),
-            }),
-          ),
-        );
-        return;
-      }
-
-      void runWithBunServices(
-        submitRunEffect(runInput).pipe(
-          Effect.tap((output) =>
-            Effect.sync(() => {
-              snapshot = output;
-            }),
-          ),
-          Effect.match({
-            onFailure: (error) => deferred.reject(error),
-            onSuccess: (output) => deferred.resolve(output),
-          }),
-        ),
-      );
-    };
-
-    const actor: MillRuntimeRunActor = {
-      done,
-      start: () => {
-        if (!started) {
-          started = true;
-          void startRun();
-        }
-
-        return actor;
-      },
-      getSnapshot: () => snapshot,
-    };
-
-    return actor;
+  const run = <A, E>(effect: Effect.Effect<A, E, Mill>): Promise<A> => {
+    const program = Effect.provide(effect, millLayer);
+    return Effect.runPromise(program);
   };
 
-  const runRef = (runId: string): MillRuntimeRunRef => ({
-    id: runId,
-    getSnapshot: () => getRunStatus({ ...mergeRunRefInput(options, runId) }),
-    wait: (input) =>
-      waitForRun({
-        ...mergeRunRefInput(options, runId),
-        timeoutSeconds: input.timeoutSeconds,
-      }),
-    watch: (input) =>
-      watchRun({
-        ...mergeRunRefInput(options, runId),
-        channel: input.channel,
-        source: input.source,
-        taskId: input.taskId,
-        sinceTimeIso: input.sinceTimeIso,
-        onEvent: input.onEvent,
-      }),
-    cancel: (reason) => cancelRun({ ...mergeRunRefInput(options, runId), reason }),
-  });
-
   return {
-    run,
-    worker: (input) =>
-      runWorker({
-        ...options,
-        runId: input.runId,
-        programPath: input.programPath,
-        runDepth: input.runDepth,
-        workerPid: input.workerPid,
-      } satisfies RunWorkerInput),
-    runRef,
-    watch: (input) =>
-      watchRun({
-        ...options,
-        channel: input.channel,
-        source: input.source,
-        taskId: input.taskId,
-        sinceTimeIso: input.sinceTimeIso,
-        onEvent: input.onEvent,
-      }),
-    list: (input) => listRuns({ ...options, status: input?.status }),
+    submit: (programPath) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.submit(programPath);
+        }),
+      ),
+    status: (taskId) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.status(taskId);
+        }),
+      ),
+    wait: (taskId, timeout) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.wait(taskId, timeout);
+        }),
+      ),
+    result: (taskId) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.result(taskId);
+        }),
+      ),
+    send: (taskId, prompt) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.send(taskId, prompt);
+        }),
+      ),
+    complete: (taskId) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.complete(taskId);
+        }),
+      ),
+    cancel: (taskId, reason) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.cancel(taskId, reason);
+        }),
+      ),
+    list: (opts) =>
+      run(
+        Effect.gen(function* () {
+          const mill = yield* Mill;
+          return yield* mill.list(opts);
+        }),
+      ),
   };
 };
