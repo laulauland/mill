@@ -9,7 +9,11 @@ export class EntityRegistryError extends Data.TaggedError("EntityRegistryError")
 }> {}
 
 export interface EntityRegistry {
-  readonly getOrCreate: (taskId: string, rootTaskId: string, parentId?: string) => Effect.Effect<TaskEntity, never>;
+  readonly getOrCreate: (
+    taskId: string,
+    rootTaskId: string,
+    parentId?: string,
+  ) => Effect.Effect<TaskEntity, never>;
   readonly lookup: (taskId: string) => Effect.Effect<TaskEntity | undefined, never>;
   readonly register: (entity: TaskEntity) => Effect.Effect<void, never>;
   readonly remove: (taskId: string) => Effect.Effect<void, never>;
@@ -21,7 +25,11 @@ export const makeEntityRegistry = Effect.gen(function* () {
   const eventAppender = yield* EventAppender;
   const idGenerator = yield* IdGenerator;
 
-  const getOrCreate = (taskId: string, rootTaskId: string, parentId?: string): Effect.Effect<TaskEntity, never> =>
+  const getOrCreate = (
+    taskId: string,
+    rootTaskId: string,
+    parentId?: string,
+  ): Effect.Effect<TaskEntity, never> =>
     Effect.gen(function* () {
       const registry = yield* Ref.get(registryRef);
       const existing = registry.get(taskId);

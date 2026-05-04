@@ -21,7 +21,7 @@ Collapse `Run` and `Task` into a single **task** entity with a `kind` discrimina
 - Identifier: `taskId` everywhere. No `runId`.
 - Storage: `~/.mill/tasks/<taskId>/`. Only root tasks (`kind === program`) get a directory; the whole subtree's events live in one `events.ndjson`.
 - Schemas: `TaskRecord`, `TaskResult`, `TaskStatus`, no `Run*` types.
-- Top-level disambiguation in prose: "program task" (e.g., *"the program task completed; 3 child tasks remain pending"*).
+- Top-level disambiguation in prose: "program task" (e.g., _"the program task completed; 3 child tasks remain pending"_).
 - Internally, the field name `rootTaskId` is permitted in tree-walking code; it is the same value as the public `taskId` of the root task.
 
 ## Alternatives considered

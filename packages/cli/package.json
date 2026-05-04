@@ -2,11 +2,14 @@
   "name": "@mill/cli",
   "version": "0.1.7",
   "bin": {
-    "mill": "./src/mill.ts"
+    "mill": "./dist/mill.js"
   },
   "type": "module",
+  "main": "./dist/mill.js",
+  "module": "./dist/mill.js",
+  "types": "./dist/mill.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/mill.js"
   },
   "scripts": {
     "typecheck": "tsgo -p tsconfig.json --noEmit",

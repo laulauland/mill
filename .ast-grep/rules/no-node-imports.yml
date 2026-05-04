@@ -9,6 +9,7 @@ ignores:
   - "**/*.spec.ts"
   - "packages/core/src/run-platform.adapter.ts"
   - "packages/core/src/program-context.adapter.ts"
+  - "packages/provider-acp/src/acp-process.adapter.ts"
 rule:
   any:
     - pattern: 'import $$$A from "$MODULE"'

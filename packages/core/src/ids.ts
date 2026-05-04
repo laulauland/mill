@@ -7,5 +7,4 @@ export const generateTaskId = (): string => {
   return `task_${Date.now()}_${nextId}`;
 };
 
-export const generateTaskIdEffect = (): Effect.Effect<string> =>
-  Effect.sync(generateTaskId);
+export const generateTaskIdEffect = (): Effect.Effect<string> => Effect.sync(generateTaskId);

@@ -4,5 +4,6 @@ severity: error
 message: Dynamic import is disallowed in core runtime modules.
 ignores:
   - "packages/core/src/program-host.effect.ts"
+  - "packages/core/src/services/ProgramHost.ts"
 rule:
   pattern: "import($A)"

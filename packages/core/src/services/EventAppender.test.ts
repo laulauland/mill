@@ -6,10 +6,7 @@ import { PathService, PathServiceLive } from "./PathService";
 import type { TaskEvent } from "../schemas/task-event";
 
 const makeTestLayer = (dir: string) =>
-  EventAppenderLive.pipe(
-    Layer.provide(PathServiceLive(dir)),
-    Layer.provide(BunServices.layer),
-  );
+  EventAppenderLive.pipe(Layer.provide(PathServiceLive(dir)), Layer.provide(BunServices.layer));
 
 describe("EventAppender", () => {
   let tmpDir = "";
@@ -19,7 +16,9 @@ describe("EventAppender", () => {
   });
 
   afterEach(() => {
-    try { require("fs").rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    try {
+      require("fs").rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
   });
 
   const run = <E, A>(effect: Effect.Effect<A, E, EventAppender | PathService>) => {
@@ -28,7 +27,11 @@ describe("EventAppender", () => {
     return Effect.runPromise(program);
   };
 
-  const makeEvent = (type: TaskEvent["type"], taskId: string, overrides: Partial<TaskEvent> = {}): TaskEvent =>
+  const makeEvent = (
+    type: TaskEvent["type"],
+    taskId: string,
+    overrides: Partial<TaskEvent> = {},
+  ): TaskEvent =>
     ({
       taskId,
       sequence: 0,
@@ -39,11 +42,16 @@ describe("EventAppender", () => {
     }) as TaskEvent;
 
   test("append creates directory and events file", async () => {
-    const appender = await run(Effect.gen(function* () {
-      const ea = yield* EventAppender;
-      yield* ea.append("root1", makeEvent("task:created", "root1", { payload: { kind: "program" } }));
-      return ea;
-    }));
+    const appender = await run(
+      Effect.gen(function* () {
+        const ea = yield* EventAppender;
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "root1", { payload: { kind: "program" } }),
+        );
+        return ea;
+      }),
+    );
 
     const events = await run(appender.readEvents("root1"));
     expect(events.length).toBe(1);
@@ -51,12 +59,17 @@ describe("EventAppender", () => {
   });
 
   test("sequence numbers increment", async () => {
-    const appender = await run(Effect.gen(function* () {
-      const ea = yield* EventAppender;
-      yield* ea.append("root1", makeEvent("task:created", "root1", { payload: { kind: "program" } }));
-      yield* ea.append("root1", makeEvent("task:started", "root1"));
-      return ea;
-    }));
+    const appender = await run(
+      Effect.gen(function* () {
+        const ea = yield* EventAppender;
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "root1", { payload: { kind: "program" } }),
+        );
+        yield* ea.append("root1", makeEvent("task:started", "root1"));
+        return ea;
+      }),
+    );
 
     const events = await run(appender.readEvents("root1"));
     expect(events[0].sequence).toBe(1);
@@ -64,12 +77,17 @@ describe("EventAppender", () => {
   });
 
   test("lifecycle validation prevents starting an already started task", async () => {
-    const result = await run(Effect.gen(function* () {
-      const ea = yield* EventAppender;
-      yield* ea.append("root1", makeEvent("task:created", "root1", { payload: { kind: "program" } }));
-      yield* ea.append("root1", makeEvent("task:started", "root1"));
-      return yield* Effect.exit(ea.append("root1", makeEvent("task:started", "root1")));
-    }));
+    const result = await run(
+      Effect.gen(function* () {
+        const ea = yield* EventAppender;
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "root1", { payload: { kind: "program" } }),
+        );
+        yield* ea.append("root1", makeEvent("task:started", "root1"));
+        return yield* Effect.exit(ea.append("root1", makeEvent("task:started", "root1")));
+      }),
+    );
 
     expect(Exit.isFailure(result)).toBe(true);
   });
@@ -176,12 +194,22 @@ describe("EventAppender", () => {
   });
 
   test("child snapshot is written for non-root events", async () => {
-    await run(Effect.gen(function* () {
-      const ea = yield* EventAppender;
-      yield* ea.append("root1", makeEvent("task:created", "root1", { payload: { kind: "program" } }));
-      yield* ea.append("root1", makeEvent("task:child_spawned", "root1", { payload: { childId: "child1", kind: "agent" } }));
-      return ea;
-    }));
+    await run(
+      Effect.gen(function* () {
+        const ea = yield* EventAppender;
+        yield* ea.append(
+          "root1",
+          makeEvent("task:created", "root1", { payload: { kind: "program" } }),
+        );
+        yield* ea.append(
+          "root1",
+          makeEvent("task:child_spawned", "root1", {
+            payload: { childId: "child1", kind: "agent" },
+          }),
+        );
+        return ea;
+      }),
+    );
 
     const snapshotPath = `${tmpDir}/root1/tasks/child1.json`;
     const snapshot = require("fs").readFileSync(snapshotPath, "utf-8");

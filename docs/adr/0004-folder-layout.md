@@ -33,7 +33,7 @@ Adopt the folder-based layout. Retire `*.effect.ts` and `*.schema.ts` suffixes. 
 Layout:
 
 - Top level — `index.ts`, `*.api.ts` for public boundaries, pure-function modules (`task-reducer.ts`, `ids.ts`).
-- `schemas/` — *only* Schema definitions (`task-command.ts`, `task-event.ts`, `task-state.ts`, `supervision.ts`).
+- `schemas/` — _only_ Schema definitions (`task-command.ts`, `task-event.ts`, `task-state.ts`, `supervision.ts`).
 - `services/` — Effect Layers, PascalCase (`Mill.ts`, `TaskEntity.ts`, `EventAppender.ts`, etc.).
 
 `*.api.ts` survives because it marks the public surface of the package — orthogonal to the internal folder split.
@@ -44,7 +44,7 @@ Layout:
 
 Rejected because the rewrite is a full restart and we want the file structure to express the entity-vs-schema-vs-public-surface split visibly. The suffix convention added value when files were intermixed; with deliberate folder placement, it becomes redundant signal. PascalCase service files also match Effect ecosystem aesthetic (services-as-modules with default Layers).
 
-**(III) Hybrid — `services/task-entity.effect.ts`.** Folder *and* suffix. Rejected as repeat-yourself; folder placement already says "this is an Effect service."
+**(III) Hybrid — `services/task-entity.effect.ts`.** Folder _and_ suffix. Rejected as repeat-yourself; folder placement already says "this is an Effect service."
 
 ## Consequences
 

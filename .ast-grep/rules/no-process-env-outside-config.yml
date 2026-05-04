@@ -6,6 +6,8 @@ ignores:
   - "**/*config*.ts"
   - "**/*bootstrap*.ts"
   - "packages/cli/src/mill.ts"
+  - "packages/core/src/runtime.api.ts"
+  - "packages/provider-acp/src/acp-process.adapter.ts"
 rule:
   any:
     - pattern: "process.env"

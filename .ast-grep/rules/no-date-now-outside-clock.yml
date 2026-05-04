@@ -4,5 +4,7 @@ severity: error
 message: Use injected Clock service instead of Date.now in internal runtime.
 ignores:
   - "**/*clock*.ts"
+  - "packages/core/src/ids.ts"
+  - "packages/core/src/services/IdGenerator.ts"
 rule:
   pattern: "Date.now()"

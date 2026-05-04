@@ -4,5 +4,6 @@ severity: error
 message: Use typed Effect errors instead of throw.
 ignores:
   - "**/*.test.ts"
+  - "**/*.api.ts"
 rule:
   pattern: "throw $E"

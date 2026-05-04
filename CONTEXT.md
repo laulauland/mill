@@ -5,19 +5,24 @@ Canonical terms for code, docs, schemas, CLI, and on-disk surfaces. Internal cod
 ## Glossary
 
 ### Task
+
 Every unit of work in Mill is a task. There is no separate "run" entity. Tasks form a tree: a top-level task may spawn child tasks; child tasks may spawn their own. Each task has one terminal outcome.
 
 ### Task kind
+
 A discriminator on a task: `program` or `agent`.
+
 - **Program task** — a task whose body is a TypeScript program file. Always the root of a tree. Created by `mill run <program.ts>` or by submitting a program through the API.
 - **Agent task** — a task whose body is one delegated unit of agent work. Created from inside a program by calling `task({ agent })`; prompts are delivered with `send()`.
 
 Future kinds (`shell`, `http`, `workflow`, `composite`) follow the same model.
 
 ### taskId
+
 The single canonical identifier for any task — root or child. There is no `runId`. Surfaces that previously named a top-level identifier use `taskId` of the program task.
 
 ### Run (verb only)
+
 "Run" survives only as the CLI verb `mill run <program.ts>` ("execute this program"). It is not a noun, not a type, not a stored field. The thing `mill run` produces is a program task with a `taskId`.
 
 ### Task (the public type)
@@ -32,12 +37,15 @@ await review.done;
 ```
 
 ### TaskEntity (internal only)
+
 The runtime that owns a task's command queue, projected state, and event stream. Implementation detail. Lives in `services/`. Never appears in public API or in user-facing docs. Chosen for forward compatibility with `effect/unstable/cluster` `Entity`, which has the same shape (id-addressed, sequential command handlers, events as facts, state as projection).
 
 ### Actor model (positioning, not a type)
+
 Mill is positioned in conceptual docs as an actor-style supervised task runtime. The mechanics are actor-shaped: each task has its own command queue, state is private, parents supervise children, cancellation cascades down the tree. The word "actor" does not appear as a type name (no `TaskActor`); it appears in prose where it helps readers ground the mental model.
 
 ### Mill (the service)
+
 The top-level Effect service in `@mill/core` — the central abstraction of the package. Composes the entity registry, event appender, store, path service, and id generator into one facade exposing `submit`, `status`, `wait`, `watch`, `cancel`, `list`:
 
 ```ts
@@ -64,8 +72,8 @@ The word "operator" stays lowercase, prose-only, meaning "the human running `mil
 - **2026-05-04 — Snapshot keeps text/thought projections.** Even with chunks as events, the reducer folds chunks into `text` and `thought` strings on the snapshot. For agent tasks, `text` is per-turn: it clears on `task:turn_started` and accumulates chunks for the current turn; completed turns are preserved in `history`. Completed snapshots also expose `output` for the terminal success payload; failed/cancelled errors travel through `TaskResult`/terminal errors instead of snapshot fields. Subscribers consume the projection rather than implementing the fold. This is the textbook role of projection.
 - **2026-05-04 — Lifecycle status enum: 5 values.** `created | started | completed | failed | cancelled`. Steering substate moves out of `status` into dedicated fields (`pending`, `busy`). Separates lifecycle question ("where is this task?") from mailbox question ("is something buffered?"). Dropped from prior enum: `idle` (was created), `starting` (transient), `running` (was started), `waiting`, `queued`, `interrupting`.
 - **2026-05-04 — CLI surface adapts to task vocabulary.** All `<runId>` args become `<taskId>`. `mill run` creates a program task and prints `taskId`. `mill ls` defaults to root program tasks (`--all` for everything). `mill watch <taskId>` defaults to subtree (`--shallow` to scope). `mill cancel <taskId>` cascades. Drops `--channel events|io|all` (chunks are events; replaced by `--include`/`--exclude` for subsetting). Drops `--source agent|program` (filter by kind via `--kind` or walk subtree).
-- **2026-05-04 — Storage layout: flat per root.** `~/.mill/tasks/<taskId>/` exists only for root program tasks. Children's events live in the *same* `events.ndjson` as the root, keyed by `taskId` per event. Single log per tree means single-file tail for `mill watch`, single replay for recovery. `tasks/<childId>.json` subdir holds projected snapshots per child for quick lookup without scanning the full log.
+- **2026-05-04 — Storage layout: flat per root.** `~/.mill/tasks/<taskId>/` exists only for root program tasks. Children's events live in the _same_ `events.ndjson` as the root, keyed by `taskId` per event. Single log per tree means single-file tail for `mill watch`, single replay for recovery. `tasks/<childId>.json` subdir holds projected snapshots per child for quick lookup without scanning the full log.
 - **2026-05-04 — No OTP supervision names yet.** Default behavior (parent cancellation cascades, child failure doesn't fail parent unless awaited) is implicit; not named. If/when explicit policies arrive, they get plain-English names (`cascade_cancel`, `isolate_failures`), not OTP imports (`one_for_one`, `rest_for_one`).
 - **2026-05-04 — `AgentProvider` → `Agent`.** Public-facing type renamed. From a program author's view, `codex(...)` returns an agent, not a "provider." `AgentRegistry` (resolves agents to runtimes) and `AgentRuntime` (interface for implementations) remain internal.
 - **2026-05-04 — Top-level service is `Mill`, with Layer `Mill.Default`.** Brand and central abstraction share a name (Effect ecosystem convention: `Effect`, `Cluster`, `SqlClient`). Composes registry/store/path/id-gen; exposes `submit`/`status`/`wait`/`watch`/`cancel`/`list`. Effect v4 Layer convention (`Mill.Default`) over older `MillLive`. Earlier `Operator` proposal rejected — created a confusing 3-way overload with the package name and the human-CLI-user sense; brand-as-service collapses cleanly into one concept.
-- **2026-05-04 — Folder-based file layout, suffix conventions retired.** Rewrite-time switch (before/after, no hybrid). Top-level holds `index.ts`, `*.api.ts` for public boundaries, and pure-function modules (`task-reducer.ts`, `ids.ts`). `schemas/` holds *only* Schema definitions (`task-command.ts`, `task-event.ts`, `task-state.ts`, `supervision.ts`). `services/` holds modules with Effect Layers, PascalCase (`Mill.ts`, `TaskEntity.ts`, `EventAppender.ts`, …). `*.effect.ts` and `*.schema.ts` suffixes removed; `lint:boundary` and the toolchain reference doc need updating to match at rewrite time.
+- **2026-05-04 — Folder-based file layout, suffix conventions retired.** Rewrite-time switch (before/after, no hybrid). Top-level holds `index.ts`, `*.api.ts` for public boundaries, and pure-function modules (`task-reducer.ts`, `ids.ts`). `schemas/` holds _only_ Schema definitions (`task-command.ts`, `task-event.ts`, `task-state.ts`, `supervision.ts`). `services/` holds modules with Effect Layers, PascalCase (`Mill.ts`, `TaskEntity.ts`, `EventAppender.ts`, …). `*.effect.ts` and `*.schema.ts` suffixes removed; `lint:boundary` and the toolchain reference doc need updating to match at rewrite time.

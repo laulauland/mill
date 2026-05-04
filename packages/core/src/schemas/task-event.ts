@@ -11,18 +11,34 @@ export const TaskCreatedEvent = Schema.Struct({
   type: Schema.Literal("task:created"),
   payload: Schema.Struct({
     parentId: Schema.optional(Schema.String),
-    kind: Schema.Literal("program", "agent"),
+    kind: Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]),
     input: Schema.optional(Schema.String),
   }),
 });
-export type TaskCreatedEvent = Schema.Schema.Type<typeof TaskCreatedEvent>;
+export type TaskCreatedEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:created";
+  payload: {
+    parentId?: string;
+    kind: "program" | "agent";
+    input?: string;
+  };
+};
 
 export const TaskStartedEvent = Schema.Struct({
   ...EventMeta.fields,
   type: Schema.Literal("task:started"),
   payload: Schema.Struct({}),
 });
-export type TaskStartedEvent = Schema.Schema.Type<typeof TaskStartedEvent>;
+export type TaskStartedEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:started";
+  payload: {};
+};
 
 export const TaskTurnStartedEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -61,10 +77,19 @@ export const TaskChildSpawnedEvent = Schema.Struct({
   type: Schema.Literal("task:child_spawned"),
   payload: Schema.Struct({
     childId: Schema.String,
-    kind: Schema.Literal("program", "agent"),
+    kind: Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]),
   }),
 });
-export type TaskChildSpawnedEvent = Schema.Schema.Type<typeof TaskChildSpawnedEvent>;
+export type TaskChildSpawnedEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:child_spawned";
+  payload: {
+    childId: string;
+    kind: "program" | "agent";
+  };
+};
 
 export const TaskMessageChunkEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -73,7 +98,13 @@ export const TaskMessageChunkEvent = Schema.Struct({
     text: Schema.String,
   }),
 });
-export type TaskMessageChunkEvent = Schema.Schema.Type<typeof TaskMessageChunkEvent>;
+export type TaskMessageChunkEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:message_chunk";
+  payload: { text: string };
+};
 
 export const TaskThoughtChunkEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -82,17 +113,32 @@ export const TaskThoughtChunkEvent = Schema.Struct({
     text: Schema.String,
   }),
 });
-export type TaskThoughtChunkEvent = Schema.Schema.Type<typeof TaskThoughtChunkEvent>;
+export type TaskThoughtChunkEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:thought_chunk";
+  payload: { text: string };
+};
 
 export const TaskToolCalledEvent = Schema.Struct({
   ...EventMeta.fields,
   type: Schema.Literal("task:tool_called"),
   payload: Schema.Struct({
     toolName: Schema.String,
-    arguments: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+    arguments: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
 });
-export type TaskToolCalledEvent = Schema.Schema.Type<typeof TaskToolCalledEvent>;
+export type TaskToolCalledEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:tool_called";
+  payload: {
+    toolName: string;
+    arguments?: Record<string, unknown>;
+  };
+};
 
 export const TaskToolReturnedEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -102,7 +148,16 @@ export const TaskToolReturnedEvent = Schema.Struct({
     result: Schema.optional(Schema.String),
   }),
 });
-export type TaskToolReturnedEvent = Schema.Schema.Type<typeof TaskToolReturnedEvent>;
+export type TaskToolReturnedEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:tool_returned";
+  payload: {
+    toolName: string;
+    result?: string;
+  };
+};
 
 export const TaskCompletedEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -111,7 +166,13 @@ export const TaskCompletedEvent = Schema.Struct({
     result: Schema.optional(Schema.String),
   }),
 });
-export type TaskCompletedEvent = Schema.Schema.Type<typeof TaskCompletedEvent>;
+export type TaskCompletedEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:completed";
+  payload: { result?: string };
+};
 
 export const TaskFailedEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -120,7 +181,13 @@ export const TaskFailedEvent = Schema.Struct({
     error: Schema.String,
   }),
 });
-export type TaskFailedEvent = Schema.Schema.Type<typeof TaskFailedEvent>;
+export type TaskFailedEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:failed";
+  payload: { error: string };
+};
 
 export const TaskCancelledEvent = Schema.Struct({
   ...EventMeta.fields,
@@ -129,9 +196,15 @@ export const TaskCancelledEvent = Schema.Struct({
     reason: Schema.optional(Schema.String),
   }),
 });
-export type TaskCancelledEvent = Schema.Schema.Type<typeof TaskCancelledEvent>;
+export type TaskCancelledEvent = {
+  taskId: string;
+  sequence: number;
+  timestamp: string;
+  type: "task:cancelled";
+  payload: { reason?: string };
+};
 
-export const TaskEvent = Schema.Union(
+export const TaskEvent = Schema.Union([
   TaskCreatedEvent,
   TaskStartedEvent,
   TaskTurnStartedEvent,
@@ -144,5 +217,18 @@ export const TaskEvent = Schema.Union(
   TaskCompletedEvent,
   TaskFailedEvent,
   TaskCancelledEvent,
-);
-export type TaskEvent = Schema.Schema.Type<typeof TaskEvent>;
+]);
+
+export type TaskEvent =
+  | TaskCreatedEvent
+  | TaskStartedEvent
+  | TaskTurnStartedEvent
+  | TaskTurnCompletedEvent
+  | TaskChildSpawnedEvent
+  | TaskMessageChunkEvent
+  | TaskThoughtChunkEvent
+  | TaskToolCalledEvent
+  | TaskToolReturnedEvent
+  | TaskCompletedEvent
+  | TaskFailedEvent
+  | TaskCancelledEvent;

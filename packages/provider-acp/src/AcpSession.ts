@@ -7,18 +7,18 @@ export class AcpSessionError extends Data.TaggedError("AcpSessionError")<{
   readonly message: string;
 }> {}
 
-export interface AcpMessage {
+export type AcpMessage = {
   readonly type: "text" | "tool_call" | "tool_result" | "error";
   readonly content: string;
   readonly metadata?: Record<string, unknown>;
-}
+};
 
-export interface AcpSession {
+export type AcpSession = {
   readonly sessionId: string;
   readonly send: (message: string) => Effect.Effect<void, AcpSessionError>;
   readonly receive: Stream.Stream<AcpMessage, AcpSessionError>;
   readonly close: Effect.Effect<void, AcpSessionError>;
-}
+};
 
 export const makeAcpSession = ({
   sessionId,
@@ -48,9 +48,14 @@ export const makeAcpSession = ({
     );
 
     const send = (message: string): Effect.Effect<void, AcpSessionError> =>
-      Queue.offer(outboundQueue, message).pipe(
-        Effect.catch(() =>
-          Effect.fail(new AcpSessionError({ sessionId, message: "Send failed" })),
+      Stream.fromIterable([new TextEncoder().encode(`${message}\n`)]).pipe(
+        Stream.run(handle.stdin),
+        Effect.mapError(
+          (error: PlatformError.PlatformError) =>
+            new AcpSessionError({
+              sessionId,
+              message: `Send failed: ${error.message}`,
+            }),
         ),
       );
 

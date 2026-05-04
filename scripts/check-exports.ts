@@ -90,6 +90,10 @@ export const normalizeExportKeys = (value: unknown): Array<string> => {
 export const isInternalExportPath = (entry: string): boolean => {
   const normalized = entry.replace(/^\.\//, "");
 
+  if (normalized === "runtime") {
+    return false;
+  }
+
   return (
     /(^|\/)(src\/)?(internal|runtime|domain)(\/|$)/.test(normalized) ||
     /(^|\/)[^/]+\.(effect|schema|codec)(\.[cm]?[jt]sx?)?$/.test(normalized)

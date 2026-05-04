@@ -10,20 +10,20 @@ export class AcpProviderError extends Data.TaggedError("AcpProviderError")<{
   readonly message: string;
 }> {}
 
-export interface AcpProvider {
+export type AcpProvider = {
   readonly name: string;
   readonly createSession: (
     taskId: string,
   ) => Effect.Effect<AcpSession, AcpProviderError, ChildProcessSpawner | Scope>;
   readonly mapToTaskEvent: (message: unknown, taskId: string, sequence: number) => TaskEvent;
-}
+};
 
-export interface AcpProviderConfig {
+export type AcpProviderConfig = {
   readonly name: string;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env?: Readonly<Record<string, string>>;
-}
+};
 
 const now = (): string => new Date().toISOString();
 
@@ -52,7 +52,10 @@ export const makeAcpProvider = (config: AcpProviderConfig) =>
       );
 
     const mapToTaskEvent = (message: unknown, taskId: string, sequence: number): TaskEvent => {
-      const msg = typeof message === "string" ? { type: "text", content: message } : (message as { type?: string; content?: string });
+      const msg = Option.getOrElse(Schema.decodeUnknownOption(ProviderMessage)(message), () => ({
+        type: "text",
+        content: String(message),
+      }));
       const timestamp = now();
 
       switch (msg.type) {
@@ -101,4 +104,4 @@ export const makeAcpProvider = (config: AcpProviderConfig) =>
 export const AcpProvider = Context.Service<AcpProvider>("@mill/provider-acp/AcpProvider");
 
 export const AcpProviderLive = (config: AcpProviderConfig) =>
-  Layer.effect(AcpProvider, () => makeAcpProvider(config));
+  Layer.effect(AcpProvider, makeAcpProvider(config));

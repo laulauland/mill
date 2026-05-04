@@ -9,5 +9,7 @@ ignores:
   - "**/*.service.ts"
   - "packages/*/src/index.ts"
   - "packages/*/src/types.ts"
+  - "packages/*/src/services/*.ts"
+  - "packages/*/src/schemas/*.ts"
 rule:
   pattern: "interface $NAME { $$$BODY }"

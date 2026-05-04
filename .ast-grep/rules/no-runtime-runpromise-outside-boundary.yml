@@ -12,6 +12,7 @@ ignores:
   - "packages/core/src/index.ts"
   - "packages/core/src/program-context.adapter.ts"
   - "packages/core/src/test-runtime.ts"
+  - "packages/core/src/services/ProgramHost.ts"
   - "packages/provider-acp/src/test-runtime.ts"
 rule:
   any:
