@@ -5,6 +5,7 @@
 - `/CONTEXT.md` — canonical glossary and decisions log.
 - `docs/spec.md` — target shape of Mill (post-rewrite).
 - `docs/rewrite-plan.md` — implementation roadmap.
+- `docs/code-style.md` — coding style and platform API conventions.
 - `docs/adr/` — load-bearing decisions.
 
 The shipped v0 source under `packages/` is being replaced ground-up; the docs above describe the target, not the current code.
@@ -21,6 +22,10 @@ The shipped v0 source under `packages/` is being replaced ground-up; the docs ab
 - Effect services / Layers: `services/` folder, PascalCase modules.
 - Pure-function modules (reducers, id helpers): top level next to `index.ts`.
 - Suffixes `*.effect.ts` and `*.schema.ts` are retired (see `docs/adr/0004-folder-layout.md`).
+
+## Code style
+
+See `docs/code-style.md`. In short: prefer Effect platform services over direct platform APIs, and keep CLI entrypoints thin.
 
 ## Commits
 

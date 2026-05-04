@@ -1,10 +1,9 @@
 id: no-node-child-process
 language: TypeScript
 severity: error
-message: Use Effect platform Command/Process services or isolate process control in explicit final-boundary adapters.
+message: Use effect/unstable/process/ChildProcess with @effect/platform-bun services, or isolate process control in an explicit final-boundary adapter.
 ignores:
   - "**/*.test.ts"
-  - "packages/cli/src/mill.ts"
   - "packages/core/src/run-platform.adapter.ts"
 rule:
   any:
