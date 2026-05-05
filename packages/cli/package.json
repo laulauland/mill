@@ -1,6 +1,6 @@
 {
   "name": "@mill/cli",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "bin": {
     "mill": "./src/mill.ts"
   },
