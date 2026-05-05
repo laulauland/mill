@@ -245,6 +245,230 @@ describe("mill CLI", () => {
     expect(payload.watchCommand).toBe(`mill watch ${payload.taskId}`);
   });
 
+  test("run --foreground --json streams events without detached worker", async () => {
+    tmpDir = `/tmp/mill-cli-foreground-json-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(
+      programPath,
+      "export default function() { console.log('hello foreground'); return 'done'; }\n",
+    );
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "run",
+        programPath,
+        "--tasks-dir",
+        tasksDir,
+        "--foreground",
+        "--json",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    const events = stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)) as Array<{ taskId: string; type: string }>;
+    const taskId = events[0]?.taskId;
+    expect(taskId.startsWith("task_")).toBe(true);
+    expect(events.map((event) => event.type)).toContain("task:completed");
+    expect(stdout).toContain("hello foreground");
+    expect(existsSync(join(tasksDir, taskId, "worker.pid"))).toBe(false);
+    expect(existsSync(join(tasksDir, taskId, "logs", "worker.log"))).toBe(false);
+  });
+
+  test("run --foreground exits non-zero when the task fails", async () => {
+    tmpDir = `/tmp/mill-cli-foreground-failure-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(
+      programPath,
+      "export default function() { throw new Error('foreground boom'); }\n",
+    );
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "run",
+        programPath,
+        "--tasks-dir",
+        tasksDir,
+        "--foreground",
+        "--json",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toBe("");
+    const events = stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)) as Array<{ taskId: string; type: string }>;
+    const taskId = events[0]?.taskId;
+    expect(taskId.startsWith("task_")).toBe(true);
+    expect(events.map((event) => event.type)).toContain("task:failed");
+    expect(stdout).toContain("foreground boom");
+    expect(existsSync(join(tasksDir, taskId, "worker.pid"))).toBe(false);
+    expect(existsSync(join(tasksDir, taskId, "logs", "worker.log"))).toBe(false);
+  });
+
+  test("run --watch --json forks worker and streams events", async () => {
+    tmpDir = `/tmp/mill-cli-watch-run-json-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(
+      programPath,
+      "export default async function() { console.log('watching'); return 'done'; }\n",
+    );
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "run",
+        programPath,
+        "--tasks-dir",
+        tasksDir,
+        "--watch",
+        "--json",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    const events = stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)) as Array<{ taskId: string; type: string }>;
+    const taskId = events[0]?.taskId;
+    expect(taskId.startsWith("task_")).toBe(true);
+    expect(events.map((event) => event.type)).toContain("task:completed");
+    expect(stdout).toContain("watching");
+    expect(existsSync(join(tasksDir, taskId, "worker.pid"))).toBe(true);
+    expect(existsSync(join(tasksDir, taskId, "logs", "worker.log"))).toBe(true);
+  });
+
+  test("run --sync --watch uses the detached watch path", async () => {
+    tmpDir = `/tmp/mill-cli-sync-watch-run-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(
+      programPath,
+      "export default async function() { console.log('sync watch wins'); return 'done'; }\n",
+    );
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "run",
+        programPath,
+        "--tasks-dir",
+        tasksDir,
+        "--sync",
+        "--watch",
+        "--json",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    const events = stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)) as Array<{ taskId: string; type: string }>;
+    const taskId = events[0]?.taskId;
+    expect(taskId.startsWith("task_")).toBe(true);
+    expect(events.map((event) => event.type)).toContain("task:completed");
+    expect(stdout).toContain("sync watch wins");
+    expect(existsSync(join(tasksDir, taskId, "worker.pid"))).toBe(true);
+    expect(existsSync(join(tasksDir, taskId, "logs", "worker.log"))).toBe(true);
+  });
+
+  test("run rejects mutually exclusive foreground and watch flags", async () => {
+    tmpDir = `/tmp/mill-cli-exclusive-run-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(programPath, "export default function() { return 'done'; }\n");
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "run",
+        programPath,
+        "--tasks-dir",
+        tasksDir,
+        "--foreground",
+        "--watch",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("--foreground and --watch are mutually exclusive");
+  });
+
   test("run --sync --json reports terminal status without detached worker log", async () => {
     tmpDir = `/tmp/mill-cli-sync-json-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const tasksDir = join(tmpDir, "tasks");

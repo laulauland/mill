@@ -16,6 +16,10 @@ Usage:
                             Submit a program task
   mill run <program.ts> --sync [--json] [--quiet]
                             Run in-process until terminal
+  mill run <program.ts> --foreground [--json]
+                            Run in-process with live event output
+  mill run <program.ts> --watch [--json] [--raw] [--verbose] [--no-live]
+                            Fork worker and live-tail events
   mill status <taskId> [--json]
                             Show current task status
   mill watch <taskId> [--json] [--raw] [--verbose] [--no-live]
@@ -37,12 +41,15 @@ Options:
   --include <types>        Comma-separated event types to include
   --exclude <types>        Comma-separated event types to exclude
   --sync                   Run in-process until terminal
+  --foreground, -f         Run program in current process with live output (no fork)
+  --watch, -w              After fork, attach event stream (like mill watch)
   --status <status>        Filter ls by created, started, completed, failed, or cancelled
   -h, --help               Show this help message
 `;
 
 const booleanFlags = new Set([
   "all",
+  "foreground",
   "help",
   "json",
   "no-color",
@@ -52,6 +59,7 @@ const booleanFlags = new Set([
   "shallow",
   "sync",
   "verbose",
+  "watch",
 ]);
 
 const valueFlags = new Set(["exclude", "include", "status", "tasks-dir"]);
@@ -96,8 +104,12 @@ const parseArgs = (
     const arg = args[i];
     if (arg === "-h" || arg === "--help") {
       flags.help = true;
+    } else if (arg === "-f") {
+      flags.foreground = true;
     } else if (arg === "-v") {
       flags.verbose = true;
+    } else if (arg === "-w") {
+      flags.watch = true;
     } else if (arg.startsWith("--")) {
       const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
       if (booleanFlags.has(rawKey)) {
@@ -137,6 +149,61 @@ const taskPaths = (tasksDirectory: string, taskId: string) => ({
   workerLogPath: `${tasksDirectory}/${taskId}/logs/worker.log`,
 });
 
+type CliFlags = Record<string, string | boolean>;
+
+const flagList = (value: string | boolean | undefined): ReadonlyArray<string> | undefined =>
+  typeof value === "string" ? value.split(",").filter((type) => type.length > 0) : undefined;
+
+const renderEventStream = (
+  events: Stream.Stream<TaskEvent, unknown>,
+  options: { readonly taskId: string; readonly flags: CliFlags },
+): Effect.Effect<void, unknown> => {
+  const { taskId, flags } = options;
+  const raw = flags.json === true || flags.raw === true;
+  if (raw) {
+    return Stream.runForEach(events, (event) => printNdjson(event));
+  }
+  if (process.stdout.isTTY && flags["no-live"] !== true) {
+    return runLiveWatch(events, {
+      rootTaskId: taskId,
+      verbose: flags.verbose === true,
+      noColor: flags["no-color"] === true,
+    });
+  }
+  return runMilestoneWatch(events, {
+    rootTaskId: taskId,
+    verbose: flags.verbose === true,
+    noColor: flags["no-color"] === true,
+  });
+};
+
+const makeWatchStream = (
+  mill: Mill,
+  taskId: string,
+  flags: CliFlags,
+): Stream.Stream<TaskEvent, unknown> => {
+  const shallow = flags.shallow === true;
+  let events = mill
+    .watch(taskId, {
+      shallow,
+    })
+    .pipe(Stream.takeUntil(makeWatchSettledPredicate(taskId, shallow)));
+
+  const include = flagList(flags.include);
+  if (include !== undefined) {
+    const includeSet = new Set(include);
+    events = events.pipe(Stream.filter((event) => includeSet.has(event.type)));
+  }
+
+  const exclude = flagList(flags.exclude);
+  if (exclude !== undefined) {
+    const excludeSet = new Set(exclude);
+    events = events.pipe(Stream.filter((event) => !excludeSet.has(event.type)));
+  }
+
+  return events;
+};
+
 const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =>
   Effect.gen(function* () {
     const { command, positional, flags } = parseArgs(args);
@@ -164,6 +231,43 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
         if (!programPath) {
           yield* printError("Error: program path required");
           return 1;
+        }
+
+        if (flags.foreground === true && flags.watch === true) {
+          yield* printError("Error: --foreground and --watch are mutually exclusive");
+          return 1;
+        }
+
+        if (flags.foreground === true) {
+          return yield* runMill(
+            Effect.gen(function* () {
+              const mill = yield* Mill;
+              const taskId = yield* mill.submit(programPath);
+              yield* renderEventStream(makeWatchStream(mill, taskId, flags), { taskId, flags });
+              const inspection = yield* mill.inspect(taskId);
+              return inspection.status === "completed" ? 0 : 1;
+            }),
+          );
+        }
+
+        if (flags.watch === true) {
+          const taskId = yield* runMill(
+            Effect.gen(function* () {
+              const mill = yield* Mill;
+              return yield* mill.prepare(programPath);
+            }),
+          );
+          yield* Effect.provide(
+            Effect.scoped(launchDetachedWorker({ taskId, programPath, tasksDirectory })),
+            BunServices.layer,
+          );
+          yield* runMill(
+            Effect.gen(function* () {
+              const mill = yield* Mill;
+              yield* renderEventStream(makeWatchStream(mill, taskId, flags), { taskId, flags });
+            }),
+          );
+          return 0;
         }
 
         const runResult = yield* runMill(
@@ -244,44 +348,7 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
         yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            const include =
-              typeof flags.include === "string"
-                ? flags.include.split(",").filter((type) => type.length > 0)
-                : undefined;
-            const exclude =
-              typeof flags.exclude === "string"
-                ? flags.exclude.split(",").filter((type) => type.length > 0)
-                : undefined;
-            const shallow = flags.shallow === true;
-            let events = mill
-              .watch(taskId, {
-                shallow,
-              })
-              .pipe(Stream.takeUntil(makeWatchSettledPredicate(taskId, shallow)));
-            if (include !== undefined) {
-              const includeSet = new Set(include);
-              events = events.pipe(Stream.filter((event) => includeSet.has(event.type)));
-            }
-            if (exclude !== undefined) {
-              const excludeSet = new Set(exclude);
-              events = events.pipe(Stream.filter((event) => !excludeSet.has(event.type)));
-            }
-            const raw = json || flags.raw === true;
-            if (raw) {
-              yield* Stream.runForEach(events, (event) => printNdjson(event));
-            } else if (process.stdout.isTTY && flags["no-live"] !== true) {
-              yield* runLiveWatch(events, {
-                rootTaskId: taskId,
-                verbose: flags.verbose === true,
-                noColor: flags["no-color"] === true,
-              });
-            } else {
-              yield* runMilestoneWatch(events, {
-                rootTaskId: taskId,
-                verbose: flags.verbose === true,
-                noColor: flags["no-color"] === true,
-              });
-            }
+            yield* renderEventStream(makeWatchStream(mill, taskId, flags), { taskId, flags });
           }),
         );
         return 0;
