@@ -3,8 +3,10 @@ import type { TaskEvent } from "../schemas/task-event";
 import {
   TaskCancelledError,
   TaskFailedError,
+  type TaskInspection,
   type TaskResult,
   type TaskSnapshot,
+  type TaskSummary,
   type TurnResult,
 } from "../schemas/task-state";
 import { isTerminalStatus, reduceEvents } from "../task-reducer";
@@ -23,6 +25,7 @@ export type Mill = {
   readonly prepare: (programPath: string) => Effect.Effect<string, MillError>;
   readonly executePrepared: (taskId: string, programPath: string) => Effect.Effect<void, MillError>;
   readonly status: (taskId: string) => Effect.Effect<TaskSnapshot, MillError>;
+  readonly inspect: (taskId: string) => Effect.Effect<TaskInspection, MillError>;
   readonly result: (taskId: string) => Effect.Effect<TaskResult, MillError>;
   readonly watch: (
     taskId: string,
@@ -36,6 +39,9 @@ export type Mill = {
   readonly complete: (taskId: string) => Effect.Effect<void, MillError>;
   readonly cancel: (taskId: string, reason?: string) => Effect.Effect<void, MillError>;
   readonly list: (opts?: { all?: boolean }) => Effect.Effect<ReadonlyArray<string>, MillError>;
+  readonly listSummaries: (opts?: {
+    all?: boolean;
+  }) => Effect.Effect<ReadonlyArray<TaskSummary>, MillError>;
 };
 
 const now = (): string => new Date().toISOString();
@@ -79,6 +85,51 @@ const terminalResultFromEvents = (
   }
 
   return undefined;
+};
+
+const summaryFromEvents = (
+  rootTaskId: string,
+  taskId: string,
+  events: ReadonlyArray<TaskEvent>,
+): TaskSummary | undefined => {
+  const taskEvents = events.filter((event) => event.taskId === taskId);
+  const created = taskEvents.find((event) => event.type === "task:created");
+  if (created?.type !== "task:created") {
+    return undefined;
+  }
+
+  const snapshot = reduceEvents(taskId, taskEvents).snapshot;
+  const updatedAt = taskEvents.at(-1)?.timestamp ?? created.timestamp;
+  const children = taskEvents.filter((event) => event.type === "task:child_spawned").length;
+
+  return {
+    taskId,
+    rootTaskId,
+    status: snapshot.status,
+    kind: created.payload.kind,
+    input: created.payload.input,
+    createdAt: created.timestamp,
+    updatedAt,
+    children,
+  };
+};
+
+const inspectionFromEvents = (
+  rootTaskId: string,
+  taskId: string,
+  events: ReadonlyArray<TaskEvent>,
+): TaskInspection | undefined => {
+  const summary = summaryFromEvents(rootTaskId, taskId, events);
+  if (summary === undefined) {
+    return undefined;
+  }
+  const completed = events
+    .filter((event) => event.taskId === taskId && event.type === "task:completed")
+    .at(-1);
+  return {
+    ...summary,
+    result: completed?.type === "task:completed" ? completed.payload.result : undefined,
+  };
 };
 
 export const makeMill = Effect.gen(function* () {
@@ -227,6 +278,29 @@ export const makeMill = Effect.gen(function* () {
             taskId,
             message: `Failed to get status: ${String(error)}`,
           }),
+        ),
+      ),
+    );
+
+  const inspect = (taskId: string): Effect.Effect<TaskInspection, MillError> =>
+    Effect.gen(function* () {
+      const rootTaskId = yield* eventAppender.resolveRootTaskId(taskId);
+      if (rootTaskId === undefined) {
+        return yield* Effect.fail(new MillError({ taskId, message: "Task not found" }));
+      }
+
+      const events = yield* eventAppender.readEvents(rootTaskId);
+      const inspection = inspectionFromEvents(rootTaskId, taskId, events);
+      if (inspection === undefined) {
+        return yield* Effect.fail(new MillError({ taskId, message: "Task not found" }));
+      }
+      return inspection;
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.fail(
+          error instanceof MillError
+            ? error
+            : new MillError({ taskId, message: `Failed to inspect task: ${String(error)}` }),
         ),
       ),
     );
@@ -482,6 +556,47 @@ export const makeMill = Effect.gen(function* () {
       ),
     );
 
+  const listSummaries = (opts?: {
+    all?: boolean;
+  }): Effect.Effect<ReadonlyArray<TaskSummary>, MillError> =>
+    Effect.gen(function* () {
+      const rootTaskIds = yield* eventAppender.listRootTaskIds();
+      const summaries: TaskSummary[] = [];
+
+      for (const rootTaskId of rootTaskIds) {
+        const events = yield* eventAppender
+          .readEvents(rootTaskId)
+          .pipe(Effect.catch(() => Effect.succeed([])));
+        const taskIds = opts?.all
+          ? Array.from(
+              new Set([
+                ...events.map((event) => event.taskId),
+                ...events.flatMap((event) =>
+                  event.type === "task:child_spawned" ? [event.payload.childId] : [],
+                ),
+              ]),
+            )
+          : [rootTaskId];
+
+        for (const id of taskIds) {
+          const summary = summaryFromEvents(rootTaskId, id, events);
+          if (summary !== undefined) {
+            summaries.push(summary);
+          }
+        }
+      }
+
+      return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.fail(
+          new MillError({
+            message: `Failed to list task summaries: ${String(error)}`,
+          }),
+        ),
+      ),
+    );
+
   const list = (opts?: { all?: boolean }): Effect.Effect<ReadonlyArray<string>, MillError> =>
     Effect.gen(function* () {
       const liveIds = yield* registry.list();
@@ -529,12 +644,14 @@ export const makeMill = Effect.gen(function* () {
     prepare,
     executePrepared,
     status,
+    inspect,
     result,
     watch,
     send,
     complete,
     cancel,
     list,
+    listSummaries,
   } satisfies Mill;
 });
 

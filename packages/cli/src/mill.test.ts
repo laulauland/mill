@@ -33,7 +33,7 @@ describe("mill CLI", () => {
 
     const startedAt = performance.now();
     const run = Bun.spawn(
-      [process.execPath, "run", cliPath, "run", programPath, "--tasks-dir", tasksDir],
+      [process.execPath, "run", cliPath, "run", programPath, "--tasks-dir", tasksDir, "--quiet"],
       {
         stderr: "pipe",
         stdout: "pipe",
@@ -69,5 +69,116 @@ describe("mill CLI", () => {
     }
 
     throw new Error("Detached worker did not complete in time");
+  });
+
+  test("global boolean flags work before the command", async () => {
+    tmpDir = `/tmp/mill-cli-global-flag-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+
+    const run = Bun.spawn(
+      [process.execPath, "run", cliPath, "--json", "ls", "--tasks-dir", tasksDir],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({ tasks: [] });
+  });
+
+  test("run --json emits stable task metadata", async () => {
+    tmpDir = `/tmp/mill-cli-json-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(programPath, "export default function() { return 'ok'; }\n");
+
+    const run = Bun.spawn(
+      [process.execPath, "run", cliPath, "run", programPath, "--tasks-dir", tasksDir, "--json"],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    const payload = JSON.parse(stdout) as {
+      taskId: string;
+      program: string;
+      status: string;
+      eventsPath: string;
+      workerLogPath: string;
+      watchCommand: string;
+    };
+    expect(payload.taskId.startsWith("task_")).toBe(true);
+    expect(payload.program).toBe(programPath);
+    expect(payload.status).toBe("started");
+    expect(payload.eventsPath).toBe(join(tasksDir, payload.taskId, "events.ndjson"));
+    expect(payload.workerLogPath).toBe(join(tasksDir, payload.taskId, "logs", "worker.log"));
+    expect(payload.watchCommand).toBe(`mill watch ${payload.taskId}`);
+  });
+
+  test("run --sync --json reports terminal status without detached worker log", async () => {
+    tmpDir = `/tmp/mill-cli-sync-json-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    const programPath = join(tmpDir, "program.ts");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(programPath, "export default function() { return 'done'; }\n");
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "run",
+        programPath,
+        "--tasks-dir",
+        tasksDir,
+        "--sync",
+        "--json",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    const payload = JSON.parse(stdout) as {
+      taskId: string;
+      program: string;
+      status: string;
+      eventsPath: string;
+      workerLogPath?: string;
+      result?: string;
+      watchCommand: string;
+    };
+    expect(payload.taskId.startsWith("task_")).toBe(true);
+    expect(payload.program).toBe(programPath);
+    expect(payload.status).toBe("completed");
+    expect(payload.eventsPath).toBe(join(tasksDir, payload.taskId, "events.ndjson"));
+    expect(payload.workerLogPath).toBeUndefined();
+    expect(payload.result).toBe("done");
+    expect(existsSync(join(tasksDir, payload.taskId, "logs", "worker.log"))).toBe(false);
   });
 });

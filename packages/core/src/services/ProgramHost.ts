@@ -333,7 +333,7 @@ export const makeProgramHost = Effect.gen(function* () {
           const defaultExport = module.default;
           if (typeof defaultExport === "function") {
             const result = yield* Effect.tryPromise({
-              try: () => defaultExport(),
+              try: () => Promise.resolve(defaultExport()),
               catch: (error) =>
                 new ProgramHostError({
                   taskId,

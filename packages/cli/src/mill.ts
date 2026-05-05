@@ -5,26 +5,45 @@ import * as BunServices from "@effect/platform-bun/BunServices";
 import { Effect, Exit, Runtime, Stream } from "effect";
 import { Mill } from "@mill/core";
 import { launchDetachedWorker, makeMillLayer, stopDetachedWorker } from "./cli.platform";
+import {
+  formatRunStarted,
+  formatStatus,
+  formatTaskSummaryTable,
+  formatWatchEvent,
+} from "./cli.format";
+import { print, printError, printJson, printNdjson } from "./cli.output";
 
 const usage = `mill — supervised task runtime
 
 Usage:
-  mill run <program.ts>     Submit a program task; prints taskId
-  mill run <program.ts> --sync
+  mill run <program.ts> [--json] [--quiet]
+                            Submit a program task
+  mill run <program.ts> --sync [--json] [--quiet]
                             Run in-process until terminal
-  mill status <taskId>      Show current task snapshot
-  mill watch <taskId>       Stream events for a task
-  mill cancel <taskId>      Cancel a task (cascades to children)
-  mill ls [--all]           List root tasks; --all for everything
+  mill status <taskId> [--json]
+                            Show current task status
+  mill watch <taskId> [--json] [--raw]
+                            Stream events for a task
+  mill cancel <taskId> [--json]
+                            Cancel a task (cascades to children)
+  mill ls [--all] [--json] [--quiet]
+                            List root tasks; --all for everything
 
 Options:
   --tasks-dir <path>        Tasks directory (default: ~/.mill/tasks)
-  --shallow                 Scope watch to task only (no subtree)
-  --include <types>         Comma-separated event types to include
-  --exclude <types>         Comma-separated event types to exclude
-  --sync                    Run in-process until terminal
-  -h, --help                Show this help message
+  --json                   Stable machine-readable JSON output
+  --quiet                  Minimal shell-friendly output where useful
+  --raw                    For watch, preserve raw NDJSON event streaming
+  --shallow                Scope watch to task only (no subtree)
+  --include <types>        Comma-separated event types to include
+  --exclude <types>        Comma-separated event types to exclude
+  --sync                   Run in-process until terminal
+  -h, --help               Show this help message
 `;
+
+const booleanFlags = new Set(["all", "help", "json", "quiet", "raw", "shallow", "sync"]);
+
+const valueFlags = new Set(["exclude", "include", "tasks-dir"]);
 
 const parseArgs = (
   args: ReadonlyArray<string>,
@@ -37,13 +56,29 @@ const parseArgs = (
     if (arg === "-h" || arg === "--help") {
       flags.help = true;
     } else if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("-")) {
-        flags[key] = next;
-        i++;
+      const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
+      if (booleanFlags.has(rawKey)) {
+        flags[rawKey] = inlineValue === undefined ? true : inlineValue !== "false";
+      } else if (valueFlags.has(rawKey)) {
+        const next = args[i + 1];
+        if (inlineValue !== undefined) {
+          flags[rawKey] = inlineValue;
+        } else if (next !== undefined && !next.startsWith("-")) {
+          flags[rawKey] = next;
+          i++;
+        } else {
+          flags[rawKey] = "";
+        }
       } else {
-        flags[key] = true;
+        const next = args[i + 1];
+        if (inlineValue !== undefined) {
+          flags[rawKey] = inlineValue;
+        } else if (next !== undefined && !next.startsWith("-")) {
+          flags[rawKey] = next;
+          i++;
+        } else {
+          flags[rawKey] = true;
+        }
       }
     } else {
       positional.push(arg);
@@ -54,12 +89,19 @@ const parseArgs = (
   return { command, positional: positional.slice(1), flags };
 };
 
+const taskPaths = (tasksDirectory: string, taskId: string) => ({
+  eventsPath: `${tasksDirectory}/${taskId}/events.ndjson`,
+  workerLogPath: `${tasksDirectory}/${taskId}/logs/worker.log`,
+});
+
 const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =>
   Effect.gen(function* () {
     const { command, positional, flags } = parseArgs(args);
+    const json = flags.json === true;
+    const quiet = flags.quiet === true;
 
     if (flags.help || command === "") {
-      console.log(usage);
+      yield* print(usage);
       return 0;
     }
 
@@ -77,56 +119,83 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
       case "run": {
         const programPath = positional[0];
         if (!programPath) {
-          console.error("Error: program path required");
+          yield* printError("Error: program path required");
           return 1;
         }
-        if (flags.sync === true) {
-          const taskId = yield* runMill(
-            Effect.gen(function* () {
-              const mill = yield* Mill;
-              const taskId = yield* mill.submit(programPath);
-              yield* mill.result(taskId);
-              return taskId;
-            }),
-          );
-          console.log(taskId);
-          return 0;
-        }
 
-        const taskId = yield* runMill(
+        const runResult = yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            return yield* mill.prepare(programPath);
+            if (flags.sync === true) {
+              const taskId = yield* mill.submit(programPath);
+              yield* mill.result(taskId);
+              const inspection = yield* mill.inspect(taskId);
+              return { taskId, inspection };
+            }
+
+            const taskId = yield* mill.prepare(programPath);
+            return { taskId, inspection: undefined };
           }),
         );
-        yield* Effect.provide(
-          Effect.scoped(launchDetachedWorker({ taskId, programPath, tasksDirectory })),
-          BunServices.layer,
-        );
-        console.log(taskId);
+
+        const { taskId } = runResult;
+        if (flags.sync !== true) {
+          yield* Effect.provide(
+            Effect.scoped(launchDetachedWorker({ taskId, programPath, tasksDirectory })),
+            BunServices.layer,
+          );
+        }
+
+        const paths = taskPaths(tasksDirectory, taskId);
+        if (json) {
+          const basePayload = {
+            taskId,
+            program: programPath,
+            status: runResult.inspection?.status ?? "started",
+            eventsPath: paths.eventsPath,
+            watchCommand: `mill watch ${taskId}`,
+          };
+          yield* printJson(
+            runResult.inspection === undefined
+              ? { ...basePayload, workerLogPath: paths.workerLogPath }
+              : runResult.inspection.result === undefined
+                ? basePayload
+                : { ...basePayload, result: runResult.inspection.result },
+          );
+        } else if (quiet) {
+          yield* print(taskId);
+        } else if (runResult.inspection !== undefined) {
+          yield* print(formatStatus(runResult.inspection));
+        } else {
+          yield* print(formatRunStarted({ taskId, program: programPath, tasksDirectory }));
+        }
         return 0;
       }
 
       case "status": {
         const taskId = positional[0];
         if (!taskId) {
-          console.error("Error: taskId required");
+          yield* printError("Error: taskId required");
           return 1;
         }
-        const snapshot = yield* runMill(
+        const inspection = yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            return yield* mill.status(taskId);
+            return yield* mill.inspect(taskId);
           }),
         );
-        console.log(JSON.stringify(snapshot, null, 2));
+        if (json) {
+          yield* printJson(inspection);
+        } else {
+          yield* print(formatStatus(inspection));
+        }
         return 0;
       }
 
       case "watch": {
         const taskId = positional[0];
         if (!taskId) {
-          console.error("Error: taskId required");
+          yield* printError("Error: taskId required");
           return 1;
         }
         yield* runMill(
@@ -145,8 +214,9 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
               include,
               exclude,
             });
+            const raw = json || flags.raw === true;
             yield* Stream.runForEach(events, (event) =>
-              Effect.sync(() => console.log(JSON.stringify(event))),
+              raw ? printNdjson(event) : print(formatWatchEvent(event)),
             );
           }),
         );
@@ -156,7 +226,7 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
       case "cancel": {
         const taskId = positional[0];
         if (!taskId) {
-          console.error("Error: taskId required");
+          yield* printError("Error: taskId required");
           return 1;
         }
         yield* runMill(
@@ -169,32 +239,45 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
           Effect.scoped(stopDetachedWorker(tasksDirectory, taskId)),
           BunServices.layer,
         );
+        if (json) {
+          yield* printJson({ taskId, status: "cancelled" });
+        }
         return 0;
       }
 
       case "ls": {
-        const ids = yield* runMill(
+        const summaries = yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            return yield* mill.list({ all: flags.all === true });
+            return yield* mill.listSummaries({ all: flags.all === true });
           }),
         );
-        for (const id of ids) {
-          console.log(id);
+        if (json) {
+          yield* printJson({ tasks: summaries });
+        } else if (quiet) {
+          yield* print(summaries.map((summary) => summary.taskId).join("\n"));
+        } else {
+          yield* print(formatTaskSummaryTable(summaries));
         }
         return 0;
       }
 
       default: {
-        console.error(`Unknown command: ${command}`);
-        console.log(usage);
+        yield* printError(`Unknown command: ${command}`);
+        yield* print(usage);
         return 1;
       }
     }
   }).pipe(
     Effect.catch((error: unknown) =>
-      Effect.sync(() => {
-        console.error(String(error));
+      Effect.gen(function* () {
+        const message = String(error);
+        const { flags } = parseArgs(args);
+        if (flags.json === true) {
+          yield* printError(JSON.stringify({ error: message }));
+        } else {
+          yield* printError(message);
+        }
         return 1;
       }),
     ),

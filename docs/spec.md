@@ -187,14 +187,15 @@ The whole tree's events live in one `events.ndjson` keyed by `taskId` per event.
 ## CLI
 
 ```bash
-mill run <program.ts> [--json] [--sync]                # creates a program task; prints taskId
-mill status <taskId> [--json]                          # snapshot
+mill run <program.ts> [--json] [--quiet] [--sync]      # creates a program task
+mill status <taskId> [--json]                          # task inspection
 mill watch <taskId> [--shallow] [--include …] [--json] # event stream; subtree by default
-mill ls [--all] [--status <status>] [--json]           # root program tasks; --all for full tree
-mill cancel <taskId>                                    # cascades to subtree
+mill watch <taskId> --raw                              # raw NDJSON event stream
+mill ls [--all] [--status <status>] [--json] [--quiet] # root program tasks; --all for full tree
+mill cancel <taskId> [--json]                          # cascades to subtree
 ```
 
-`mill run` is async by default and prints a `taskId`. `--sync` runs in-process until terminal. `--json` writes machine-readable output to stdout; diagnostics to stderr.
+`mill run` is async by default. Human output is optimized for operators and may evolve. `--quiet` preserves minimal shell-friendly output where useful, such as printing only the `taskId` for `mill run`. `--sync` runs in-process until terminal. `--json` writes stable machine-readable output to stdout; diagnostics go to stderr. Streaming watch JSON is newline-delimited JSON (NDJSON).
 
 No config file. No provider-selection flags. Programs choose agents in code via `codex(model)`, `claude(model)`, `pi(model)`.
 

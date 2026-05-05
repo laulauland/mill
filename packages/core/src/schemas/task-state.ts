@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TaskStatus } from "./task-command";
+import { TaskKind, TaskStatus } from "./task-command";
 
 export type TaskTerminalErrorOptions = {
   readonly taskId: string;
@@ -117,4 +117,35 @@ export const TaskState = Schema.Struct({
 export type TaskState = {
   snapshot: TaskSnapshot;
   children: ReadonlyArray<string>;
+};
+
+export const TaskSummary = Schema.Struct({
+  taskId: Schema.String,
+  rootTaskId: Schema.String,
+  status: TaskStatus,
+  kind: TaskKind,
+  input: Schema.optional(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  children: Schema.Number,
+});
+
+export type TaskSummary = {
+  readonly taskId: string;
+  readonly rootTaskId: string;
+  readonly status: TaskStatus;
+  readonly kind: TaskKind;
+  readonly input?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly children: number;
+};
+
+export const TaskInspection = Schema.Struct({
+  ...TaskSummary.fields,
+  result: Schema.optional(Schema.String),
+});
+
+export type TaskInspection = TaskSummary & {
+  readonly result?: string;
 };
