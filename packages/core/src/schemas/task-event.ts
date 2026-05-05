@@ -78,6 +78,9 @@ export const TaskChildSpawnedEvent = Schema.Struct({
   payload: Schema.Struct({
     childId: Schema.String,
     kind: Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]),
+    label: Schema.optional(Schema.String),
+    provider: Schema.optional(Schema.String),
+    model: Schema.optional(Schema.String),
   }),
 });
 export type TaskChildSpawnedEvent = {
@@ -88,6 +91,9 @@ export type TaskChildSpawnedEvent = {
   payload: {
     childId: string;
     kind: "program" | "agent";
+    label?: string;
+    provider?: string;
+    model?: string;
   };
 };
 
@@ -125,6 +131,7 @@ export const TaskToolCalledEvent = Schema.Struct({
   ...EventMeta.fields,
   type: Schema.Literal("task:tool_called"),
   payload: Schema.Struct({
+    toolCallId: Schema.optional(Schema.String),
     toolName: Schema.String,
     arguments: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
@@ -135,6 +142,7 @@ export type TaskToolCalledEvent = {
   timestamp: string;
   type: "task:tool_called";
   payload: {
+    toolCallId?: string;
     toolName: string;
     arguments?: Record<string, unknown>;
   };
@@ -144,6 +152,7 @@ export const TaskToolReturnedEvent = Schema.Struct({
   ...EventMeta.fields,
   type: Schema.Literal("task:tool_returned"),
   payload: Schema.Struct({
+    toolCallId: Schema.optional(Schema.String),
     toolName: Schema.String,
     result: Schema.optional(Schema.String),
   }),
@@ -154,6 +163,7 @@ export type TaskToolReturnedEvent = {
   timestamp: string;
   type: "task:tool_returned";
   payload: {
+    toolCallId?: string;
     toolName: string;
     result?: string;
   };

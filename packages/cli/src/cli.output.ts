@@ -17,6 +17,17 @@ export const print = (text: string): Effect.Effect<void> =>
     ),
   );
 
+export const writeStdout = (text: string): Effect.Effect<void> =>
+  withOutputLayer(
+    Effect.flatMap(Effect.service(Terminal), (terminal) => terminal.display(text)).pipe(
+      Effect.catch(() =>
+        Effect.sync(() => {
+          process.stdout.write(text);
+        }),
+      ),
+    ),
+  );
+
 export const printJson = (value: unknown): Effect.Effect<void> =>
   print(JSON.stringify(value, null, 2));
 

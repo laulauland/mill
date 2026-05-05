@@ -3,15 +3,11 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Effect, Exit, Runtime, Stream } from "effect";
-import { Mill, TaskStatusValues, type TaskStatus } from "@mill/core";
+import { Mill, TaskStatusValues, type TaskEvent, type TaskStatus } from "@mill/core";
 import { launchDetachedWorker, makeMillLayer, stopDetachedWorker } from "./cli.platform";
-import {
-  formatRunStarted,
-  formatStatus,
-  formatTaskSummaryTable,
-  formatWatchEvent,
-} from "./cli.format";
+import { formatRunStarted, formatStatus, formatTaskSummaryTable } from "./cli.format";
 import { print, printError, printJson, printNdjson } from "./cli.output";
+import { runLiveWatch, runMilestoneWatch } from "./watch-live";
 
 const usage = `mill — supervised task runtime
 
@@ -22,7 +18,7 @@ Usage:
                             Run in-process until terminal
   mill status <taskId> [--json]
                             Show current task status
-  mill watch <taskId> [--json] [--raw]
+  mill watch <taskId> [--json] [--raw] [--verbose] [--no-live]
                             Stream events for a task
   mill cancel <taskId> [--json]
                             Cancel a task (cascades to children)
@@ -34,6 +30,9 @@ Options:
   --json                   Stable machine-readable JSON output
   --quiet                  Minimal shell-friendly output where useful
   --raw                    For watch, preserve raw NDJSON event streaming
+  --verbose, -v            For watch, show full ids, tool arguments/results, and correlation ids
+  --no-live                For watch, use sparse append-only human milestones instead of live TTY
+  --no-color               Disable colors in human watch output
   --shallow                Scope watch to task only (no subtree)
   --include <types>        Comma-separated event types to include
   --exclude <types>        Comma-separated event types to exclude
@@ -42,7 +41,18 @@ Options:
   -h, --help               Show this help message
 `;
 
-const booleanFlags = new Set(["all", "help", "json", "quiet", "raw", "shallow", "sync"]);
+const booleanFlags = new Set([
+  "all",
+  "help",
+  "json",
+  "no-color",
+  "no-live",
+  "quiet",
+  "raw",
+  "shallow",
+  "sync",
+  "verbose",
+]);
 
 const valueFlags = new Set(["exclude", "include", "status", "tasks-dir"]);
 
@@ -50,6 +60,31 @@ const allowedStatuses = new Set<string>(TaskStatusValues);
 const allowedStatusMessage = TaskStatusValues.join(", ");
 
 const isTaskStatus = (value: string): value is TaskStatus => allowedStatuses.has(value);
+
+const isTerminalEvent = (event: TaskEvent): boolean =>
+  event.type === "task:completed" ||
+  event.type === "task:failed" ||
+  event.type === "task:cancelled";
+
+const makeWatchSettledPredicate = (taskId: string, shallow: boolean) => {
+  let targetTerminal = false;
+  const openDescendants = new Set<string>();
+
+  return (event: TaskEvent): boolean => {
+    if (!shallow && event.type === "task:child_spawned") {
+      openDescendants.add(event.payload.childId);
+    }
+
+    if (isTerminalEvent(event)) {
+      if (event.taskId === taskId) {
+        targetTerminal = true;
+      }
+      openDescendants.delete(event.taskId);
+    }
+
+    return targetTerminal && openDescendants.size === 0;
+  };
+};
 
 const parseArgs = (
   args: ReadonlyArray<string>,
@@ -61,6 +96,8 @@ const parseArgs = (
     const arg = args[i];
     if (arg === "-h" || arg === "--help") {
       flags.help = true;
+    } else if (arg === "-v") {
+      flags.verbose = true;
     } else if (arg.startsWith("--")) {
       const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
       if (booleanFlags.has(rawKey)) {
@@ -215,15 +252,36 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
               typeof flags.exclude === "string"
                 ? flags.exclude.split(",").filter((type) => type.length > 0)
                 : undefined;
-            const events = mill.watch(taskId, {
-              shallow: flags.shallow === true,
-              include,
-              exclude,
-            });
+            const shallow = flags.shallow === true;
+            let events = mill
+              .watch(taskId, {
+                shallow,
+              })
+              .pipe(Stream.takeUntil(makeWatchSettledPredicate(taskId, shallow)));
+            if (include !== undefined) {
+              const includeSet = new Set(include);
+              events = events.pipe(Stream.filter((event) => includeSet.has(event.type)));
+            }
+            if (exclude !== undefined) {
+              const excludeSet = new Set(exclude);
+              events = events.pipe(Stream.filter((event) => !excludeSet.has(event.type)));
+            }
             const raw = json || flags.raw === true;
-            yield* Stream.runForEach(events, (event) =>
-              raw ? printNdjson(event) : print(formatWatchEvent(event)),
-            );
+            if (raw) {
+              yield* Stream.runForEach(events, (event) => printNdjson(event));
+            } else if (process.stdout.isTTY && flags["no-live"] !== true) {
+              yield* runLiveWatch(events, {
+                rootTaskId: taskId,
+                verbose: flags.verbose === true,
+                noColor: flags["no-color"] === true,
+              });
+            } else {
+              yield* runMilestoneWatch(events, {
+                rootTaskId: taskId,
+                verbose: flags.verbose === true,
+                noColor: flags["no-color"] === true,
+              });
+            }
           }),
         );
         return 0;

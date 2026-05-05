@@ -189,13 +189,14 @@ The whole tree's events live in one `events.ndjson` keyed by `taskId` per event.
 ```bash
 mill run <program.ts> [--json] [--quiet] [--sync]      # creates a program task
 mill status <taskId> [--json]                          # task inspection
-mill watch <taskId> [--shallow] [--include …] [--json] # event stream; subtree by default
-mill watch <taskId> --raw                              # raw NDJSON event stream
+mill watch <taskId> [--shallow] [--include …] [--json] # stable NDJSON event stream; subtree by default
+mill watch <taskId> --raw                              # raw diagnostic NDJSON event stream
+mill watch <taskId> [--verbose] [--no-live] [--no-color] # human stateful watch renderer
 mill ls [--all] [--status <status>] [--json] [--quiet] # root program tasks; --all for full tree
 mill cancel <taskId> [--json]                          # cascades to subtree
 ```
 
-`mill run` is async by default. Human output is optimized for operators and may evolve. `--quiet` preserves minimal shell-friendly output where useful, such as printing only the `taskId` for `mill run`. `--sync` runs in-process until terminal. `--json` writes stable machine-readable output to stdout; diagnostics go to stderr. Streaming watch JSON is newline-delimited JSON (NDJSON).
+`mill run` is async by default. Human output is optimized for operators and may evolve. `--quiet` preserves minimal shell-friendly output where useful, such as printing only the `taskId` for `mill run`. `--sync` runs in-process until terminal. `--json` writes stable machine-readable output to stdout; diagnostics go to stderr. Streaming watch JSON is newline-delimited JSON (NDJSON) and remains the boring append-only machine contract. `mill watch` in an interactive terminal reduces the event log into a live task tree; when stdout is not a TTY it emits sparse milestone summaries instead of per-event human spam. `--raw` preserves append-only raw event diagnostics, and `--verbose` shows full ids, tool arguments/results, and correlation ids.
 
 No config file. No provider-selection flags. Programs choose agents in code via `codex(model)`, `claude(model)`, `pi(model)`.
 

@@ -198,49 +198,60 @@ export const resolveModelOption = (
     };
   });
 
-const makeEvent = (taskId: string, event: AgentEvent): TaskEvent | undefined => {
-  switch (event.type) {
-    case "text-delta":
-      return {
-        taskId,
-        sequence: 0,
-        timestamp: now(),
-        type: "task:message_chunk",
-        payload: { text: event.text },
-      };
-    case "thinking-delta":
-      return {
-        taskId,
-        sequence: 0,
-        timestamp: now(),
-        type: "task:thought_chunk",
-        payload: { text: event.text },
-      };
-    case "tool-call":
-      return {
-        taskId,
-        sequence: 0,
-        timestamp: now(),
-        type: "task:tool_called",
-        payload: { toolName: event.tool, arguments: { input: event.input } },
-      };
-    case "tool-call-update":
-      if (event.output === undefined) {
-        return undefined;
+const makeEventMapper = (taskId: string): ((event: AgentEvent) => TaskEvent | undefined) => {
+  const toolNames = new Map<string, string>();
+
+  return (event) => {
+    switch (event.type) {
+      case "text-delta":
+        return {
+          taskId,
+          sequence: 0,
+          timestamp: now(),
+          type: "task:message_chunk",
+          payload: { text: event.text },
+        };
+      case "thinking-delta":
+        return {
+          taskId,
+          sequence: 0,
+          timestamp: now(),
+          type: "task:thought_chunk",
+          payload: { text: event.text },
+        };
+      case "tool-call": {
+        toolNames.set(event.toolCallId, event.tool);
+        return {
+          taskId,
+          sequence: 0,
+          timestamp: now(),
+          type: "task:tool_called",
+          payload: {
+            toolCallId: event.toolCallId,
+            toolName: event.tool,
+            arguments: { input: event.input },
+          },
+        };
       }
-      return {
-        taskId,
-        sequence: 0,
-        timestamp: now(),
-        type: "task:tool_returned",
-        payload: {
-          toolName: event.title ?? event.toolCallId,
-          result: typeof event.output === "string" ? event.output : JSON.stringify(event.output),
-        },
-      };
-    default:
-      return undefined;
-  }
+      case "tool-call-update":
+        if (event.output === undefined) {
+          return undefined;
+        }
+        return {
+          taskId,
+          sequence: 0,
+          timestamp: now(),
+          type: "task:tool_returned",
+          payload: {
+            toolCallId: event.toolCallId,
+            toolName: toolNames.get(event.toolCallId) ?? event.title ?? "tool",
+            result: typeof event.output === "string" ? event.output : JSON.stringify(event.output),
+          },
+        };
+      default:
+        return undefined;
+    }
+  };
 };
 
 const withTraceTail = (message: string, traceTail: string): string =>
@@ -355,9 +366,10 @@ const runAgentScoped = (
         });
 
         const agentStream = agent.prompt(sessionId, { prompt: turn.prompt });
+        const makeEvent = makeEventMapper(input.taskId);
 
         yield* Stream.fromAsyncIterable(agentStream, (error) => error).pipe(
-          Stream.map((event) => makeEvent(input.taskId, event)),
+          Stream.map((event) => makeEvent(event)),
           Stream.filter((event): event is TaskEvent => event !== undefined),
           Stream.runForEach((event) => emit(event).pipe(Effect.asVoid)),
         );

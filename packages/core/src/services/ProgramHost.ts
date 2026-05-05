@@ -96,7 +96,13 @@ export const makeProgramHost = Effect.gen(function* () {
               sequence: 0,
               timestamp: now(),
               type: "task:child_spawned",
-              payload: { childId, kind: "agent" },
+              payload: {
+                childId,
+                kind: "agent",
+                label: `${options.agent.provider} (${options.agent.model})`,
+                provider: options.agent.provider,
+                model: options.agent.model,
+              },
             };
             const persistedChildSpawned = yield* eventAppender.append(taskId, childSpawned);
             yield* parent.applyEvent(persistedChildSpawned);
