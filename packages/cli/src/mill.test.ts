@@ -5,6 +5,15 @@ import { join } from "node:path";
 const cliPath = join(import.meta.dir, "mill.ts");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const writeEvents = (tasksDir: string, taskId: string, events: ReadonlyArray<unknown>) => {
+  const taskDir = join(tasksDir, taskId);
+  mkdirSync(taskDir, { recursive: true });
+  writeFileSync(
+    taskDir + "/events.ndjson",
+    events.map((event) => JSON.stringify(event)).join("\n"),
+  );
+};
+
 describe("mill CLI", () => {
   let tmpDir = "";
 
@@ -69,6 +78,110 @@ describe("mill CLI", () => {
     }
 
     throw new Error("Detached worker did not complete in time");
+  });
+
+  test("ls filters by status", async () => {
+    tmpDir = `/tmp/mill-cli-ls-status-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    writeEvents(tasksDir, "task_started", [
+      {
+        taskId: "task_started",
+        sequence: 1,
+        timestamp: "2026-05-04T00:00:00.000Z",
+        type: "task:created",
+        payload: { kind: "program", input: "started.ts" },
+      },
+      {
+        taskId: "task_started",
+        sequence: 2,
+        timestamp: "2026-05-04T00:00:01.000Z",
+        type: "task:started",
+        payload: {},
+      },
+    ]);
+    writeEvents(tasksDir, "task_completed", [
+      {
+        taskId: "task_completed",
+        sequence: 1,
+        timestamp: "2026-05-04T00:00:02.000Z",
+        type: "task:created",
+        payload: { kind: "program", input: "completed.ts" },
+      },
+      {
+        taskId: "task_completed",
+        sequence: 2,
+        timestamp: "2026-05-04T00:00:03.000Z",
+        type: "task:started",
+        payload: {},
+      },
+      {
+        taskId: "task_completed",
+        sequence: 3,
+        timestamp: "2026-05-04T00:00:04.000Z",
+        type: "task:completed",
+        payload: { result: "ok" },
+      },
+    ]);
+
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        cliPath,
+        "ls",
+        "--tasks-dir",
+        tasksDir,
+        "--status",
+        "started",
+        "--json",
+      ],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({
+      tasks: [
+        expect.objectContaining({
+          taskId: "task_started",
+          status: "started",
+        }),
+      ],
+    });
+  });
+
+  test("ls rejects invalid status", async () => {
+    tmpDir = `/tmp/mill-cli-ls-invalid-status-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tasksDir = join(tmpDir, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+
+    const run = Bun.spawn(
+      [process.execPath, "run", cliPath, "ls", "--tasks-dir", tasksDir, "--status", "running"],
+      {
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+      run.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain(
+      'Invalid status "running". Allowed: created, started, completed, failed, cancelled',
+    );
   });
 
   test("global boolean flags work before the command", async () => {

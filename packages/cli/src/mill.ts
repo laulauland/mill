@@ -3,7 +3,7 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Effect, Exit, Runtime, Stream } from "effect";
-import { Mill } from "@mill/core";
+import { Mill, TaskStatusValues, type TaskStatus } from "@mill/core";
 import { launchDetachedWorker, makeMillLayer, stopDetachedWorker } from "./cli.platform";
 import {
   formatRunStarted,
@@ -26,7 +26,7 @@ Usage:
                             Stream events for a task
   mill cancel <taskId> [--json]
                             Cancel a task (cascades to children)
-  mill ls [--all] [--json] [--quiet]
+  mill ls [--all] [--status <status>] [--json] [--quiet]
                             List root tasks; --all for everything
 
 Options:
@@ -38,12 +38,18 @@ Options:
   --include <types>        Comma-separated event types to include
   --exclude <types>        Comma-separated event types to exclude
   --sync                   Run in-process until terminal
+  --status <status>        Filter ls by created, started, completed, failed, or cancelled
   -h, --help               Show this help message
 `;
 
 const booleanFlags = new Set(["all", "help", "json", "quiet", "raw", "shallow", "sync"]);
 
-const valueFlags = new Set(["exclude", "include", "tasks-dir"]);
+const valueFlags = new Set(["exclude", "include", "status", "tasks-dir"]);
+
+const allowedStatuses = new Set<string>(TaskStatusValues);
+const allowedStatusMessage = TaskStatusValues.join(", ");
+
+const isTaskStatus = (value: string): value is TaskStatus => allowedStatuses.has(value);
 
 const parseArgs = (
   args: ReadonlyArray<string>,
@@ -246,10 +252,21 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
       }
 
       case "ls": {
+        const statusFlag = flags.status;
+        if (
+          statusFlag !== undefined &&
+          (typeof statusFlag !== "string" || !isTaskStatus(statusFlag))
+        ) {
+          yield* printError(
+            `Invalid status "${String(statusFlag)}". Allowed: ${allowedStatusMessage}`,
+          );
+          return 1;
+        }
+        const status: TaskStatus | undefined = statusFlag === undefined ? undefined : statusFlag;
         const summaries = yield* runMill(
           Effect.gen(function* () {
             const mill = yield* Mill;
-            return yield* mill.listSummaries({ all: flags.all === true });
+            return yield* mill.listSummaries({ all: flags.all === true, status });
           }),
         );
         if (json) {

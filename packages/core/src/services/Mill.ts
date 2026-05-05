@@ -1,4 +1,5 @@
 import { Context, Data, Effect, Fiber, Layer, Option, Ref, Stream } from "effect";
+import type { TaskStatus } from "../schemas/task-command";
 import type { TaskEvent } from "../schemas/task-event";
 import {
   TaskCancelledError,
@@ -38,9 +39,13 @@ export type Mill = {
   readonly send: (taskId: string, prompt: string) => Effect.Effect<TurnResult, MillError>;
   readonly complete: (taskId: string) => Effect.Effect<void, MillError>;
   readonly cancel: (taskId: string, reason?: string) => Effect.Effect<void, MillError>;
-  readonly list: (opts?: { all?: boolean }) => Effect.Effect<ReadonlyArray<string>, MillError>;
+  readonly list: (opts?: {
+    all?: boolean;
+    status?: TaskStatus;
+  }) => Effect.Effect<ReadonlyArray<string>, MillError>;
   readonly listSummaries: (opts?: {
     all?: boolean;
+    status?: TaskStatus;
   }) => Effect.Effect<ReadonlyArray<TaskSummary>, MillError>;
 };
 
@@ -558,6 +563,7 @@ export const makeMill = Effect.gen(function* () {
 
   const listSummaries = (opts?: {
     all?: boolean;
+    status?: TaskStatus;
   }): Effect.Effect<ReadonlyArray<TaskSummary>, MillError> =>
     Effect.gen(function* () {
       const rootTaskIds = yield* eventAppender.listRootTaskIds();
@@ -580,7 +586,10 @@ export const makeMill = Effect.gen(function* () {
 
         for (const id of taskIds) {
           const summary = summaryFromEvents(rootTaskId, id, events);
-          if (summary !== undefined) {
+          if (
+            summary !== undefined &&
+            (opts?.status === undefined || summary.status === opts.status)
+          ) {
             summaries.push(summary);
           }
         }
@@ -597,8 +606,16 @@ export const makeMill = Effect.gen(function* () {
       ),
     );
 
-  const list = (opts?: { all?: boolean }): Effect.Effect<ReadonlyArray<string>, MillError> =>
+  const list = (opts?: {
+    all?: boolean;
+    status?: TaskStatus;
+  }): Effect.Effect<ReadonlyArray<string>, MillError> =>
     Effect.gen(function* () {
+      if (opts?.status !== undefined) {
+        const summaries = yield* listSummaries(opts);
+        return summaries.map((summary) => summary.taskId).sort();
+      }
+
       const liveIds = yield* registry.list();
       const diskRootIds = yield* eventAppender.listRootTaskIds();
       const ids = new Set<string>(diskRootIds);

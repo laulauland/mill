@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 export const TaskKind = Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]);
 export type TaskKind = "program" | "agent";
 
+export const TaskStatusValues = ["created", "started", "completed", "failed", "cancelled"] as const;
+
 export const TaskStatus = Schema.Union([
   Schema.Literal("created"),
   Schema.Literal("started"),
@@ -10,7 +12,7 @@ export const TaskStatus = Schema.Union([
   Schema.Literal("failed"),
   Schema.Literal("cancelled"),
 ]);
-export type TaskStatus = "created" | "started" | "completed" | "failed" | "cancelled";
+export type TaskStatus = (typeof TaskStatusValues)[number];
 
 export const CreateTask = Schema.Struct({
   _tag: Schema.Literal("CreateTask"),

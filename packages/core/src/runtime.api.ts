@@ -8,6 +8,7 @@ import { PathServiceLive } from "./services/PathService";
 import { IdGeneratorLive } from "./services/IdGenerator";
 import { ProgramHostLive } from "./services/ProgramHost";
 import { AgentRuntimeStub } from "./services/AgentRuntime";
+import type { TaskStatus } from "./schemas/task-command";
 import type { TaskResult, TaskSnapshot, TurnResult } from "./schemas/task-state";
 export type {
   TaskCancelledError,
@@ -25,7 +26,7 @@ export interface MillRuntime {
   readonly send: (taskId: string, prompt: string) => Promise<TurnResult>;
   readonly complete: (taskId: string) => Promise<void>;
   readonly cancel: (taskId: string, reason?: string) => Promise<void>;
-  readonly list: (opts?: { all?: boolean }) => Promise<ReadonlyArray<string>>;
+  readonly list: (opts?: { all?: boolean; status?: TaskStatus }) => Promise<ReadonlyArray<string>>;
 }
 
 export const createMillRuntime = (options: { tasksDirectory?: string } = {}): MillRuntime => {
