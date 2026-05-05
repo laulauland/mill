@@ -1,98 +1,103 @@
 # mill
 
-A TypeScript runtime for orchestrating agent tasks. A mill program creates task actors, starts them, observes snapshots, and lets the CLI persist the run so you can `status`, `wait`, `watch`, `cancel`, and `ls` it later.
+A supervised task runtime for orchestrating agent and shell work from TypeScript.
 
-## How it works
+> **Status:** Mill is being rewritten ground-up. This README describes the target shape from `docs/spec.md`. Some surfaces are still in flight — see `docs/rewrite-plan.md` for the roadmap.
 
-You talk to your main agent (in Pi, Claude Code, OpenCode, etc.). When work needs to be delegated, it writes a short mill program. You review that TypeScript before it runs. Each delegated unit is a task actor.
+## Why mill
+
+You can already farm work out to subagents with bash and `claude -p`. Mill is for when you want the orchestration plan to be a readable artifact you confirm before it runs, with structured events you can replay, and the same program portable across providers (Claude, Codex, pi, …).
+
+You talk to your main agent in Pi, Claude Code, OpenCode, etc. When work needs delegation, it writes a short TypeScript program. You review the program, then run it with `mill run`.
 
 ## Install
 
 ```bash
-brew install laulauland/tap/mill
+curl -fsSL https://raw.githubusercontent.com/laulauland/mill/main/scripts/install.sh | bash
 ```
 
-Or build from source (requires [Bun](https://bun.sh)):
+Installs the latest release binary into `$HOME/.local/bin/mill`. Override with `MILL_INSTALL_DIR=/usr/local/bin` or pin a version with `MILL_VERSION=v0.1.9`.
+
+Supported: macOS arm64 (Apple Silicon) and Linux x86_64. For other platforms, build from source.
+
+### From source
+
+Requires [Bun](https://bun.sh):
 
 ```bash
 git clone https://github.com/laulauland/mill.git && cd mill
 bun install
 VERSION=$(node -p 'require("./packages/cli/package.json").version')
-bun build --compile packages/cli/src/mill.ts --outfile mill --define "__MILL_VERSION__=\"$VERSION\""
+bun build --compile packages/cli/src/mill.ts \
+  --outfile mill --define "__MILL_VERSION__=\"$VERSION\""
 mv mill ~/.local/bin/  # or anywhere on your PATH
 ```
 
-Then run mill programs directly with the CLI.
+## Quick start
 
-## Quick example
+A program spawns tasks. Tasks are agent-backed or shell-backed; both use the same `Task` handle.
 
 ```ts
-import { claude, codex, task } from "@mill/core/program";
+import { codex, claude, shell, task } from "@mill/core/program";
 
-const analysis = task({
-  agent: codex("openai-codex/gpt-5.3-codex"),
-  role: "analyzer",
-  system: "Map key risks and unknowns.",
-  prompt: "Analyze the auth module and summarize weak points.",
-}).start();
+const branch = (
+  await shell({ command: "jj", args: ["log", "-r", "@", "--no-graph", "-T", "description"] }).run()
+).stdout.trim();
 
-const analysisResult = await analysis.done;
+const analysis = task({ agent: codex("openai-codex/gpt-5.3-codex") });
+await analysis.send(`Analyze the auth module on branch:\n${branch}`);
+analysis.complete();
+const findings = await analysis.done; // { kind: "agent", text: string }
 
-const plan = task({
-  agent: claude("anthropic/claude-opus-4-6"),
-  role: "planner",
-  system: "Turn findings into a concrete implementation plan.",
-  prompt: `Use this analysis to propose fixes:\n\n${analysisResult.text}`,
-}).start();
-
+const plan = task({ agent: claude("anthropic/claude-opus-4-6") });
+await plan.send(`Turn these findings into a plan:\n\n${findings.text}`);
+plan.complete();
 await plan.done;
 ```
 
+Run it:
+
 ```bash
-mill run review.ts                 # returns runId, executes in background
-mill watch --run abc123            # stream events live
-mill watch --run abc123 --channel io
-mill run review.ts --sync          # or block until done
+mill run review.ts                 # forks a worker, prints taskId
+mill run review.ts --watch         # same, but live-tail events in this terminal
+mill run review.ts --foreground    # run in this process, no fork
+mill run review.ts --sync          # block until terminal, no streaming
 ```
 
-## Task actors
+## The `Task` handle
 
-`task(...)` creates a task actor. It is synchronous and cheap. `.start()` begins execution and `.done` is the Promise boundary for the final `TaskResult`. `mill.task(...)` is also exported from `@mill/core/program` for object-style code, but normal examples use the direct helper.
+`task({ agent })` and `shell({ command })` return the same handle. The first `send()` (or `run()`) implicitly starts the task — there is no `start()`.
 
 ```ts
-import { codex, task } from "@mill/core/program";
+interface Task {
+  readonly id: TaskId;
+  readonly done: Promise<TaskOutput>;       // resolves on completed; rejects on failed/cancelled
+  send(message: string): Promise<TurnResult>;
+  complete(): void;                          // finish after current turn drains
+  cancel(reason?: string): void;
+  run(message?: string): Promise<TaskOutput>;// send + complete + done
+  result(): Promise<TaskResult>;             // tagged terminal result
+  snapshot(): Promise<TaskSnapshot>;
+  subscribe(): Stream<TaskEvent>;
+}
 
-const review = task({
-  agent: codex("openai-codex/gpt-5.3-codex"),
-  system: "You inspect code.",
-  prompt: "Review src/auth.",
-  steering: "queue",
-}).start();
-
-review.subscribe((snapshot) => {
-  // render snapshot.status / snapshot.text in your UI
-});
-
-await review.done;
+type TaskOutput =
+  | { kind: "agent"; text: string }
+  | { kind: "shell"; stdout: string; stderr: string; exitCode: number };
 ```
 
-Snapshots are the actor's current reduced state: status, accumulated text, queue, session pointer, result, or error. Events are the append-only history; snapshots are what is true now.
+Lifecycle status is one of `created | started | completed | failed | cancelled`.
 
-Steering is represented with task commands:
+Steering — call `send()` again while a turn is in flight to queue a follow-up; call `cancel()` to interrupt:
 
 ```ts
-task.send({
-  type: "message",
-  mode: "interrupt",
-  content: "Stop and focus only on token handling.",
-});
+review.send("Also inspect the tests directory.");  // queued
+review.cancel("operator changed direction");
 ```
 
-Current state: core task actors model `queue`, `interrupt`, and `reject` policies in snapshots. Built-in provider sessions support multi-turn and cancel behavior internally where the backend supports it, but fully durable end-to-end live steering remains incremental.
+## Agents
 
-## Agents and provider factories
-
-Tasks use an `agent` provider object. In mill programs, import the program API from `@mill/core/program`:
+Programs choose agents in code. No config file, no provider flags on the CLI.
 
 ```ts
 import { claude, codex, pi } from "@mill/core/program";
@@ -102,68 +107,78 @@ claude("anthropic/claude-opus-4-6");
 pi("your-pi-model-id");
 ```
 
-The provider selects the task agent backend and model. `role` is the human-readable task role, `system` describes how the agent should behave, and `prompt` describes the work. No config file is required for built-in providers.
+These return `Agent` descriptors. The CLI registers built-in ACP-backed runtimes for codex/claude/pi.
 
 ## CLI
 
 ```
-mill run <program.ts> [--sync] [--json]
-mill status <runId>                    show run state
-mill wait <runId> --timeout            block until complete/failed/cancelled
-mill watch [--run <runId>]             watch streams (default: events)
-  --channel events|io|all              choose stream channel
-  --source agent|program              io source filter (io/all only)
-  --task <taskId>                      io task filter (io/all only)
-mill cancel <runId>                    mark cancelled + kill worker process tree
-mill ls [--status <filter>]            list runs
+mill run <program.ts> [--sync | --foreground | --watch] [--json] [--quiet]
+mill status <taskId>                                   show current task snapshot
+mill watch <taskId> [--shallow] [--include …] [--exclude …]
+                    [--raw | --verbose | --no-live | --no-color]
+                                                       live event view (subtree by default)
+mill cancel <taskId>                                   cascade cancel to subtree
+mill ls [--all] [--status <status>] [--json] [--quiet] root program tasks; --all for full tree
 ```
 
-All commands accept `--json` for machine-readable output on stdout (diagnostics go to stderr).
+`mill run` is async by default: forks a detached worker and returns a `taskId`. `--sync` runs in-process to terminal. `--foreground` runs in-process with live event output. `--watch` forks the worker and immediately attaches the same renderer as `mill watch`; Ctrl-C detaches without killing the worker.
 
-`mill --help` and `mill <command> --help` include a **Providers** section for built-in ACP agent providers. Programs pass model strings explicitly with `codex(model)`, `claude(model)`, or `pi(model)`.
+`mill watch` reduces events into a live task tree on TTYs. Switch to append-only output with `--no-live`, or get raw NDJSON with `--raw` (or `--json`). `--include`/`--exclude` filter event types; `--shallow` scopes to the target task only.
+
+`--json` everywhere produces stable machine output on stdout (diagnostics on stderr).
+
+## Storage
+
+```text
+~/.mill/tasks/<taskId>/        # only root program tasks get a directory
+  task.json                    # program task record
+  events.ndjson                # full subtree event log, keyed by taskId per event
+  result.json                  # terminal result projection
+  program.ts                   # source of the program
+  worker.pid                   # detached worker pid
+  tasks/<childId>.json         # per-child snapshot projections
+  logs/{worker,cancel}.log
+```
+
+The whole subtree of a root task lives in one `events.ndjson`, so `mill watch` is a single-file tail and recovery is single-log replay. Override the root with `--tasks-dir <path>`.
 
 ## Use with Claude Code
 
-[Install mill](#install), then add the skill:
+Install mill, then add the skill:
 
 ```bash
 npx skills add laulauland/mill
 ```
 
-This teaches Claude Code how to write and run mill programs. When you ask it to farm out work to subagents, it will author a `.ts` program using task actors, show it to you for confirmation, and execute it via the CLI.
+This teaches Claude Code how to write and run mill programs. When you ask it to farm work out, it authors a `.ts` program using `task()` / `shell()`, shows it for confirmation, and runs it via the CLI.
 
 ## FAQ
 
-**Couldn't I just do this with bash and claude -p?**
-Yes — that's the point. The orchestrator can use any language to express a plan. TypeScript is optional; it's just easy to read and lets mill hook into task actors to offer structured output, event logs, and session replay.
+**Couldn't I do this with bash and `claude -p`?**
+Yes — that's the point. The orchestrator can express a plan in any language. TypeScript is optional; it's just easy to read, and lets mill hook into the task lifecycle for structured events, snapshots, and replay.
 
 **How is this different from Claude Code tasks?**
-Claude Code tasks are scoped to Claude Code. Mill programs are portable across providers — the same program can run Claude, Codex, or pi task agents. The program is also a readable artifact you confirm before execution, not an internal dispatch.
+Claude Code tasks are scoped to Claude Code. Mill programs are portable across providers — the same program runs Claude, Codex, or pi tasks. The program is also a readable artifact you confirm before execution, not an internal dispatch.
 
 **Do I have to write the programs myself?**
 No. The orchestrator writes them. You review and confirm.
 
-## Recursion guard
-
-- `maxRunDepth` (default `1`) limits nested `mill run` invocations by depth.
-- Mill tracks depth with `MILL_RUN_DEPTH` in worker/program child environments.
-- If a nested invocation exceeds `maxRunDepth`, `mill run` is rejected before submission.
-
-## Built-in agent providers
-
-Mill ships built-in ACP-backed Claude, Codex, and pi providers. The ACP implementation delegates protocol/session work to `spawn-agent`, which is an internal dependency, not a public mill API.
-
-| Package              | Purpose                                          |
-| -------------------- | ------------------------------------------------ |
-| `@mill/core`         | Engine, lifecycle, and task actor API            |
-| `@mill/cli`          | CLI commands and built-in agent providers        |
-| `@mill/provider-acp` | Internal ACP provider adapter around spawn-agent |
-
 ## Internals
 
-Built on Effect v4 / effect-smol. Public boundaries expose Promise ergonomics through actor `.done` and runtime facade methods. Engine, persistence, task actor internals, and schemas are Effect-first.
+Built on Effect v4. Public boundaries expose Promise ergonomics through the `Task` handle and the `Mill` service facade; the engine, persistence, and entity hosting are Effect-first. `TaskEntity` is shape-compatible with `effect/unstable/cluster` for future cluster hosting.
 
-Run storage: `~/.mill/runs/<runId>/` — metadata, NDJSON task-native event log, results, and task session pointers. New persisted orchestration events use `task:*` vocabulary.
+Authoritative references:
+
+- [`/CONTEXT.md`](./CONTEXT.md) — canonical glossary and decision log.
+- [`docs/spec.md`](./docs/spec.md) — target shape (model, API, events, storage, CLI, invariants).
+- [`docs/adr/`](./docs/adr/) — load-bearing decisions.
+- [`docs/rewrite-plan.md`](./docs/rewrite-plan.md) — implementation roadmap.
+
+| Package              | Purpose                                                  |
+| -------------------- | -------------------------------------------------------- |
+| `@mill/core`         | Engine, lifecycle, public `Task` and `Mill` API          |
+| `@mill/cli`          | CLI commands, built-in agent registrations, watch UI     |
+| `@mill/provider-acp` | _Internal_ ACP adapter (not a public mill API)           |
 
 ## Development
 
