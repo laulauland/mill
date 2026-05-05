@@ -10,6 +10,11 @@ ignores:
   - "packages/*/src/types.ts"
   - "packages/*/src/test-runtime.ts"
   - "packages/*/src/mill.ts"
+  # pi-tui is a special imperative TUI library: it owns its own render loop
+  # and uses requestRender + process.nextTick callbacks instead of Effect.
+  # watch-tui.ts is the thin adapter that bridges pi-tui into Effect, so a
+  # raw Promise wrap is the only honest shape at this boundary.
+  - "packages/cli/src/watch-tui.ts"
 rule:
   any:
     - pattern: "Promise<$T>"
