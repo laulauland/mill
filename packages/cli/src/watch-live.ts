@@ -1,8 +1,9 @@
 import { Effect, Stream } from "effect";
 import type { TaskEvent } from "@mill/core";
 import { initialWatchModel, reduceWatchEvent, type WatchModel } from "./watch-model";
-import { renderWatchMilestone, renderWatchModel } from "./watch-render";
-import { print, writeStdout } from "./cli.output";
+import { renderWatchMilestone } from "./watch-render";
+import { print } from "./cli.output";
+import { runTuiWatch } from "./watch-tui";
 
 export type WatchRuntimeOptions = {
   readonly rootTaskId: string;
@@ -10,12 +11,6 @@ export type WatchRuntimeOptions = {
   readonly noColor?: boolean;
   readonly noLive?: boolean;
 };
-
-const hideCursor = "\x1b[?25l";
-const showCursor = "\x1b[?25h";
-const clearBelow = "\x1b[J";
-
-const lineCount = (text: string): number => (text.length === 0 ? 0 : text.split("\n").length);
 
 const terminalSize = () => ({
   columns: process.stdout.columns ?? 100,
@@ -30,27 +25,7 @@ const renderOptions = (options: WatchRuntimeOptions) => ({
 export const runLiveWatch = (
   events: Stream.Stream<TaskEvent, unknown>,
   options: WatchRuntimeOptions,
-): Effect.Effect<void, unknown> =>
-  Effect.gen(function* () {
-    let model = initialWatchModel(options.rootTaskId);
-    let renderedLines = 0;
-    yield* writeStdout(hideCursor);
-    yield* Stream.runForEach(events, (event) =>
-      Effect.gen(function* () {
-        model = reduceWatchEvent(model, event);
-        const rendered = renderWatchModel(model, renderOptions(options));
-        const moveUp = renderedLines > 0 ? `\x1b[${renderedLines}A` : "";
-        yield* writeStdout(`${moveUp}${clearBelow}${rendered}\n`);
-        renderedLines = lineCount(rendered);
-      }),
-    ).pipe(
-      Effect.ensuring(
-        Effect.gen(function* () {
-          yield* writeStdout(showCursor);
-        }),
-      ),
-    );
-  });
+): Effect.Effect<void, unknown> => runTuiWatch(events, options);
 
 export const runMilestoneWatch = (
   events: Stream.Stream<TaskEvent, unknown>,
