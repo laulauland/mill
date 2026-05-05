@@ -8,6 +8,7 @@ import { PathService, PathServiceLive } from "./PathService";
 import { IdGenerator, IdGeneratorLive } from "./IdGenerator";
 import { ProgramHostLive } from "./ProgramHost";
 import { AgentRuntimeStub } from "./AgentRuntime";
+import { ShellRuntimeLive } from "./ShellRuntime";
 
 const makeTestLayer = (dir: string) => {
   const fsLayer = EventAppenderLive.pipe(
@@ -26,6 +27,7 @@ const makeTestLayer = (dir: string) => {
         Layer.provide(registryLayer),
         Layer.provide(fsLayer),
         Layer.provide(AgentRuntimeStub),
+        Layer.provide(ShellRuntimeLive.pipe(Layer.provide(BunServices.layer))),
       ),
     ),
     Layer.provide(Layer.mergeAll(fsLayer, IdGeneratorLive)),

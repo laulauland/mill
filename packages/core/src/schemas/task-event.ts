@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import { TaskKind } from "./task-command";
+import { TaskOutput, type TaskOutput as TaskOutputType } from "./task-state";
 
 const EventMeta = Schema.Struct({
   taskId: Schema.String,
@@ -11,7 +13,7 @@ export const TaskCreatedEvent = Schema.Struct({
   type: Schema.Literal("task:created"),
   payload: Schema.Struct({
     parentId: Schema.optional(Schema.String),
-    kind: Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]),
+    kind: TaskKind,
     input: Schema.optional(Schema.String),
   }),
 });
@@ -22,7 +24,7 @@ export type TaskCreatedEvent = {
   type: "task:created";
   payload: {
     parentId?: string;
-    kind: "program" | "agent";
+    kind: "program" | "agent" | "shell";
     input?: string;
   };
 };
@@ -77,10 +79,11 @@ export const TaskChildSpawnedEvent = Schema.Struct({
   type: Schema.Literal("task:child_spawned"),
   payload: Schema.Struct({
     childId: Schema.String,
-    kind: Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]),
+    kind: TaskKind,
     label: Schema.optional(Schema.String),
     provider: Schema.optional(Schema.String),
     model: Schema.optional(Schema.String),
+    command: Schema.optional(Schema.String),
   }),
 });
 export type TaskChildSpawnedEvent = {
@@ -90,10 +93,11 @@ export type TaskChildSpawnedEvent = {
   type: "task:child_spawned";
   payload: {
     childId: string;
-    kind: "program" | "agent";
+    kind: "program" | "agent" | "shell";
     label?: string;
     provider?: string;
     model?: string;
+    command?: string;
   };
 };
 
@@ -174,6 +178,7 @@ export const TaskCompletedEvent = Schema.Struct({
   type: Schema.Literal("task:completed"),
   payload: Schema.Struct({
     result: Schema.optional(Schema.String),
+    output: Schema.optional(TaskOutput),
   }),
 });
 export type TaskCompletedEvent = {
@@ -181,7 +186,7 @@ export type TaskCompletedEvent = {
   sequence: number;
   timestamp: string;
   type: "task:completed";
-  payload: { result?: string };
+  payload: { result?: string; output?: TaskOutputType };
 };
 
 export const TaskFailedEvent = Schema.Struct({

@@ -1,4 +1,4 @@
-import type { TaskEvent, TaskStatus } from "@mill/core";
+import type { TaskEvent, TaskKind, TaskStatus } from "@mill/core";
 
 export type WatchToolCall = {
   readonly toolCallId?: string;
@@ -12,7 +12,7 @@ export type WatchToolCall = {
 export type WatchChild = {
   readonly taskId: string;
   readonly parentId?: string;
-  readonly kind: "program" | "agent";
+  readonly kind: TaskKind;
   readonly label?: string;
   readonly provider?: string;
   readonly model?: string;
@@ -54,7 +54,7 @@ const defaultChild = (
   taskId: string,
   options: {
     readonly parentId?: string;
-    readonly kind?: "program" | "agent";
+    readonly kind?: TaskKind;
     readonly label?: string;
     readonly provider?: string;
     readonly model?: string;

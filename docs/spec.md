@@ -9,7 +9,7 @@ Mill is an Effect-native, supervised task runtime. Operators run TypeScript prog
 Every unit of work is a **task**. A task has:
 
 - An id (`taskId`).
-- A kind: `program` or `agent` (future kinds: `shell`, `http`, `workflow`, `composite`).
+- A kind: `program`, `agent`, or `shell` (future kinds: `http`, `workflow`, `composite`).
 - A parent id (absent for root tasks).
 - Lifecycle status: `created | started | completed | failed | cancelled`.
 - A mailbox for incoming messages.
@@ -22,7 +22,7 @@ A program task is the root of a tree. An agent task is a leaf or internal node. 
 Programs author against `@mill/core/program`:
 
 ```ts
-import { task, codex } from "@mill/core/program";
+import { task, shell, codex } from "@mill/core/program";
 
 const review = task({
   agent: codex("openai-codex/gpt-5.3-codex"),
@@ -31,9 +31,16 @@ const review = task({
 const turn = await review.send("Review src/auth.");
 review.complete();
 await review.done;
+
+const desc = (
+  await shell({
+    command: "jj",
+    args: ["log", "-r", "@", "--no-graph", "-T", "description"],
+  }).run()
+).stdout.trim();
 ```
 
-`task(...)` creates a task; the first `send()` transitions it from `created` to `started`. Returned value type is `Task` — the public handle. Calling `task(...)` outside a hosted program raises a tagged context error.
+`task(...)` creates an agent task; the first `send()` transitions it from `created` to `started`. `shell(...)` creates a shell task that starts immediately and completes when the command exits. Both return the same `Task` public handle. Calling either function outside a hosted program raises a tagged context error.
 
 Effect-native callers use the top-level service:
 
@@ -65,12 +72,14 @@ interface Task {
   send(message: string): Promise<TurnResult>;
   complete(): void;
   cancel(reason?: string): void;
-  run(message: string): Promise<TaskOutput>;
+  run(message?: string): Promise<TaskOutput>;
   subscribe(): Stream<TaskEvent>;
 }
 
 type TurnResult = { text: string; sequence: number };
-type TaskOutput = { kind: "agent"; text: string };
+type TaskOutput =
+  | { kind: "agent"; text: string }
+  | { kind: "shell"; stdout: string; stderr: string; exitCode: number };
 
 type TaskResult =
   | { status: "completed"; output: TaskOutput }
@@ -149,7 +158,7 @@ task:cancelled
 Rules:
 
 - Commands are requests. Events are durable facts. State is a projection.
-- Streaming chunks are first-class events. The reducer folds them into `snapshot.text` / `snapshot.thought`. The event log is the single source of truth.
+- Streaming chunks are first-class events. The reducer folds them into `snapshot.text` / `snapshot.thought`. For agent tasks these mean assistant text / reasoning; for shell tasks they mean stdout / stderr. The event log is the single source of truth.
 - The child's existence appears in the parent's log via `task:child_spawned`. The child's own log starts with `task:created`.
 
 ## Supervision
@@ -246,6 +255,7 @@ packages/core/src/
     EventAppender.ts
     TaskStore.ts
     ProgramHost.ts
+    ShellRuntime.ts
     AgentRegistry.ts
     PathService.ts
     IdGenerator.ts

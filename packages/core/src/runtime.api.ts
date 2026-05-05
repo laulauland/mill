@@ -8,6 +8,7 @@ import { PathServiceLive } from "./services/PathService";
 import { IdGeneratorLive } from "./services/IdGenerator";
 import { ProgramHostLive } from "./services/ProgramHost";
 import { AgentRuntimeStub } from "./services/AgentRuntime";
+import { ShellRuntimeLive } from "./services/ShellRuntime";
 import type { TaskStatus } from "./schemas/task-command";
 import type { TaskResult, TaskSnapshot, TurnResult } from "./schemas/task-state";
 export type {
@@ -49,6 +50,7 @@ export const createMillRuntime = (options: { tasksDirectory?: string } = {}): Mi
         Layer.provide(registryLayer),
         Layer.provide(fsLayer),
         Layer.provide(AgentRuntimeStub),
+        Layer.provide(ShellRuntimeLive.pipe(Layer.provide(BunServices.layer))),
       ),
     ),
     Layer.provide(fsLayer),

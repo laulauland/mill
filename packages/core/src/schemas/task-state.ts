@@ -45,15 +45,30 @@ export type TurnResult = {
   readonly sequence: number;
 };
 
-export const TaskOutput = Schema.Struct({
-  kind: Schema.Literal("agent"),
-  text: Schema.String,
-});
+export const TaskOutput = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("agent"),
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("shell"),
+    stdout: Schema.String,
+    stderr: Schema.String,
+    exitCode: Schema.Number,
+  }),
+]);
 
-export type TaskOutput = {
-  readonly kind: "agent";
-  readonly text: string;
-};
+export type TaskOutput =
+  | {
+      readonly kind: "agent";
+      readonly text: string;
+    }
+  | {
+      readonly kind: "shell";
+      readonly stdout: string;
+      readonly stderr: string;
+      readonly exitCode: number;
+    };
 
 export const TaskResult = Schema.Union([
   Schema.Struct({

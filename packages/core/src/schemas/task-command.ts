@@ -1,7 +1,11 @@
 import * as Schema from "effect/Schema";
 
-export const TaskKind = Schema.Union([Schema.Literal("program"), Schema.Literal("agent")]);
-export type TaskKind = "program" | "agent";
+export const TaskKind = Schema.Union([
+  Schema.Literal("program"),
+  Schema.Literal("agent"),
+  Schema.Literal("shell"),
+]);
+export type TaskKind = "program" | "agent" | "shell";
 
 export const TaskStatusValues = ["created", "started", "completed", "failed", "cancelled"] as const;
 

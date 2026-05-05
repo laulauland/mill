@@ -35,7 +35,7 @@ export type TaskEntity = {
   readonly cancel: (reason?: string) => Effect.Effect<void, TaskEntityError>;
   readonly applyEvent: (event: TaskEvent) => Effect.Effect<void, TaskEntityError>;
   readonly spawnChild: (
-    kind: "program" | "agent",
+    kind: "program" | "agent" | "shell",
     input?: string,
   ) => Effect.Effect<string, TaskEntityError>;
 };
@@ -91,10 +91,13 @@ export const makeTaskEntity = ({
         if (event.type === "task:completed") {
           isTerminal = true;
           yield* Deferred.succeed(completionDeferred, undefined);
-          yield* Deferred.succeed(terminalDeferred, {
-            kind: "agent" as const,
-            text: event.payload.result ?? "",
-          });
+          yield* Deferred.succeed(
+            terminalDeferred,
+            event.payload.output ?? {
+              kind: "agent" as const,
+              text: event.payload.result ?? "",
+            },
+          );
         }
 
         if (event.type === "task:failed") {
@@ -281,7 +284,7 @@ export const makeTaskEntity = ({
     );
 
     const spawnChild = (
-      kind: "program" | "agent",
+      kind: "program" | "agent" | "shell",
       _input?: string,
     ): Effect.Effect<string, TaskEntityError> =>
       Effect.gen(function* () {

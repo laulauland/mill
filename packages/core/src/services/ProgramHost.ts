@@ -5,9 +5,10 @@ import { EventAppender } from "./EventAppender";
 import { EntityRegistry } from "./EntityRegistry";
 import type { TaskEvent } from "../schemas/task-event";
 import { enterProgramContext, makeTaskHandle } from "../program.api";
-import type { TaskOptions } from "../program.api";
+import type { SpawnInput } from "../program.api";
 import { AgentRuntime } from "./AgentRuntime";
-import type { TaskSnapshot, TurnResult } from "../schemas/task-state";
+import { ShellRuntime } from "./ShellRuntime";
+import type { TaskOutput, TaskSnapshot, TurnResult } from "../schemas/task-state";
 import { isTerminalStatus } from "../task-reducer";
 
 export class ProgramHostError extends Data.TaggedError("ProgramHostError")<{
@@ -28,6 +29,7 @@ export const makeProgramHost = Effect.gen(function* () {
   const eventAppender = yield* EventAppender;
   const registry = yield* EntityRegistry;
   const agentRuntime = yield* AgentRuntime;
+  const shellRuntime = yield* ShellRuntime;
 
   const runProgram = (
     programPath: string,
@@ -78,7 +80,7 @@ export const makeProgramHost = Effect.gen(function* () {
         globalThis.console.error = originalError;
       });
 
-      const spawnChild = (options: TaskOptions) => {
+      const spawnChild = (input: SpawnInput) => {
         nextChild += 1;
         const childId = `${taskId}:child:${nextChild}`;
 
@@ -98,10 +100,14 @@ export const makeProgramHost = Effect.gen(function* () {
               type: "task:child_spawned",
               payload: {
                 childId,
-                kind: "agent",
-                label: `${options.agent.provider} (${options.agent.model})`,
-                provider: options.agent.provider,
-                model: options.agent.model,
+                kind: input.kind,
+                label:
+                  input.kind === "agent"
+                    ? `${input.agent.provider} (${input.agent.model})`
+                    : input.options.command,
+                provider: input.kind === "agent" ? input.agent.provider : undefined,
+                model: input.kind === "agent" ? input.agent.model : undefined,
+                command: input.kind === "shell" ? input.options.command : undefined,
               },
             };
             const persistedChildSpawned = yield* eventAppender.append(taskId, childSpawned);
@@ -115,7 +121,7 @@ export const makeProgramHost = Effect.gen(function* () {
               type: "task:created",
               payload: {
                 parentId: taskId,
-                kind: "agent",
+                kind: input.kind,
               },
             };
             const persistedCreated = yield* eventAppender.append(taskId, created);
@@ -135,15 +141,36 @@ export const makeProgramHost = Effect.gen(function* () {
 
         const runChild = Effect.gen(function* () {
           const child = yield* childOrFail;
-          yield* agentRuntime.runAgent(
-            {
+          let output: TaskOutput | undefined;
+
+          if (input.kind === "agent") {
+            yield* agentRuntime.runAgent(
+              {
+                taskId: childId,
+                agent: input.agent,
+                userInbox: child.userInbox,
+                completionSignal: child.completionSignal,
+              },
+              (event) => appendAndApply(event).pipe(Effect.asVoid),
+            );
+
+            const snapshot = yield* child.snapshot;
+            output = { kind: "agent", text: snapshot.text };
+          } else {
+            const started: TaskEvent = {
               taskId: childId,
-              agent: options.agent,
-              userInbox: child.userInbox,
-              completionSignal: child.completionSignal,
-            },
-            (event) => appendAndApply(event).pipe(Effect.asVoid),
-          );
+              sequence: 0,
+              timestamp: now(),
+              type: "task:started",
+              payload: {},
+            };
+            const persistedStarted = yield* eventAppender.append(taskId, started);
+            yield* child.applyEvent(persistedStarted);
+            output = yield* shellRuntime.runShell(
+              { taskId: childId, options: input.options },
+              (event) => appendAndApply(event).pipe(Effect.asVoid),
+            );
+          }
 
           const snapshot = yield* child.snapshot;
           if (!isTerminalStatus(snapshot.status)) {
@@ -152,7 +179,10 @@ export const makeProgramHost = Effect.gen(function* () {
               sequence: 0,
               timestamp: now(),
               type: "task:completed",
-              payload: { result: snapshot.text },
+              payload:
+                output.kind === "agent"
+                  ? { result: output.text, output }
+                  : { result: output.stdout, output },
             };
             const persistedCompleted = yield* eventAppender.append(taskId, completed);
             yield* child.applyEvent(persistedCompleted);
@@ -179,19 +209,21 @@ export const makeProgramHost = Effect.gen(function* () {
 
         const childFiber = Effect.runFork(runChild);
         let handleOperationTail: Promise<unknown> = Promise.resolve();
-        const enqueueHandleOperation = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
-          const run = handleOperationTail.then(() => Effect.runPromise(effect));
-          handleOperationTail = run.catch(() => undefined);
-          return run;
+        const enqueueHandleOperation = async <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
+          const previousOperation = handleOperationTail;
+          const run = (async () => {
+            await previousOperation;
+            return await Effect.runPromise(effect);
+          })();
+          handleOperationTail = (async () => {
+            await Promise.allSettled([run]);
+          })();
+          return await run;
         };
 
         Effect.runFork(
           eventAppender.watch(taskId).pipe(
-            Stream.filter(
-              (event) =>
-                event.taskId === childId &&
-                (event.type === "task:cancelled" || event.type === "task:failed"),
-            ),
+            Stream.filter((event) => event.taskId === childId && event.type === "task:cancelled"),
             Stream.runHead,
             Effect.flatMap(() => Fiber.interrupt(childFiber)),
             Effect.catch(() => Effect.void),
@@ -264,6 +296,10 @@ export const makeProgramHost = Effect.gen(function* () {
           subscribe: () =>
             eventAppender.watch(taskId).pipe(Stream.filter((event) => event.taskId === childId)),
           send: (message) => {
+            if (input.kind === "shell") {
+              return Promise.resolve({ text: "", sequence: 0 });
+            }
+
             const queued = enqueueHandleOperation(
               Effect.gen(function* () {
                 const child = yield* childOrFail;
@@ -292,9 +328,13 @@ export const makeProgramHost = Effect.gen(function* () {
                 ),
               ),
             );
-            return queued.then((fiber) => Effect.runPromise(Fiber.join(fiber)));
+            return (async () => Effect.runPromise(Fiber.join(await queued)))();
           },
           complete: () => {
+            if (input.kind === "shell") {
+              return;
+            }
+
             void enqueueHandleOperation(
               childOrFail.pipe(
                 Effect.flatMap((child) => child.send({ _tag: "CompleteTask", taskId: childId })),

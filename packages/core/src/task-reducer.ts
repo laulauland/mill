@@ -124,7 +124,7 @@ export const reduceEvent = (state: ReducerState, event: TaskEvent): ReducerState
         snapshot: updateSnapshot(state.snapshot, {
           status: "completed",
           busy: false,
-          output: {
+          output: event.payload.output ?? {
             kind: "agent",
             text: event.payload.result ?? "",
           },

@@ -10,6 +10,7 @@ import {
   MillLive,
   PathServiceLive,
   ProgramHostLive,
+  ShellRuntimeLive,
 } from "@mill/core";
 import { ProcessLive, SpawnAgentRuntimeLive } from "@mill/provider-acp";
 
@@ -104,6 +105,7 @@ export const makeMillLayer = (tasksDirectory: string) => {
         Layer.provide(
           SpawnAgentRuntimeLive.pipe(Layer.provide(BunServices.layer), Layer.provide(ProcessLive)),
         ),
+        Layer.provide(ShellRuntimeLive.pipe(Layer.provide(BunServices.layer))),
       ),
     ),
     Layer.provide(fsLayer),

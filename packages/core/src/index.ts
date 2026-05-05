@@ -28,11 +28,21 @@ export {
   makeStubAgentRuntime,
 } from "./services/AgentRuntime";
 export type { AgentRuntimeInput, AgentRuntimeEmit } from "./services/AgentRuntime";
+export { ShellRuntime, ShellRuntimeError, ShellRuntimeLive } from "./services/ShellRuntime";
+export type { ShellRuntimeEmit, ShellRuntimeInput } from "./services/ShellRuntime";
 export { PathService, PathServiceLive } from "./services/PathService";
 export { IdGenerator, IdGeneratorLive } from "./services/IdGenerator";
 
 // Public APIs
-export { task, codex, claude, pi, ProgramContextError } from "./program.api";
-export type { Agent, ProgramContext, TaskHandle, TaskOptions } from "./program.api";
+export { task, shell, codex, claude, pi, ProgramContextError } from "./program.api";
+export type {
+  Agent,
+  ProgramContext,
+  ShellOptions,
+  ShellOutput,
+  SpawnInput,
+  TaskHandle,
+  TaskOptions,
+} from "./program.api";
 export { createMillRuntime } from "./runtime.api";
 export type { MillRuntime } from "./runtime.api";

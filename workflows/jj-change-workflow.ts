@@ -1,5 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { claude, codex, pi, task } from "@mill/core/program";
+import { claude, codex, pi, shell, task } from "@mill/core/program";
 
 const MAX_ITERATIONS = 3;
 
@@ -15,17 +14,19 @@ Constraints:
 - Agent runtime model selection must be explicit and fail-fast: resolve the requested model against ACP configOptions, call agent.setConfigOption(sessionId, modelConfigId, resolvedValue) before prompting, and do not rely on spawn-agent's prompt(modelPreference) path because it swallows invalid model-selection failures.
 `;
 
-const readCurrentRevisionDescription = (): string => {
-  const proc = spawnSync("jj", ["log", "-r", "@", "--no-graph", "--template", "description"], {
+const readCurrentRevisionDescription = async (): Promise<string> => {
+  const output = await shell({
+    command: "jj",
+    args: ["log", "-r", "@", "--no-graph", "--template", "description"],
     cwd: "/Users/laurynas-fp/Code/laulauland/mill",
-    encoding: "utf8",
-  });
+    failOnNonZeroExit: true,
+  }).run();
 
-  if (proc.status !== 0) {
-    throw new Error(`Failed to read current jj revision description: ${proc.stderr.trim()}`);
+  if (output.kind !== "shell") {
+    throw new Error("Expected shell output while reading the current jj revision description.");
   }
 
-  const description = proc.stdout.trim();
+  const description = output.stdout.trim();
   if (description.length === 0) {
     throw new Error("Current jj revision has no description to use as the change request.");
   }
@@ -137,7 +138,7 @@ Verdict format:
 const isApproved = (reviewOutput: string): boolean => /^\s*APPROVED\s*$/m.test(reviewOutput);
 
 export default async function runJjChangeWorkflow(): Promise<string> {
-  const changeRequest = readCurrentRevisionDescription();
+  const changeRequest = await readCurrentRevisionDescription();
 
   const plan = await runResearcher(buildResearcherPrompt(changeRequest));
 

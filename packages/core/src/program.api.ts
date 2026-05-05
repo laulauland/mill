@@ -10,6 +10,7 @@ export type {
   TaskTerminalError,
   TurnResult,
 } from "./schemas/task-state";
+export type ShellOutput = Extract<TaskOutput, { readonly kind: "shell" }>;
 
 export interface Agent {
   readonly provider: string;
@@ -20,6 +21,19 @@ export interface TaskOptions {
   readonly agent: Agent;
 }
 
+export interface ShellOptions {
+  readonly command: string;
+  readonly args?: ReadonlyArray<string>;
+  readonly cwd?: string;
+  readonly env?: Record<string, string>;
+  readonly stdin?: string;
+  readonly failOnNonZeroExit?: boolean;
+}
+
+export type SpawnInput =
+  | { readonly kind: "agent"; readonly agent: Agent }
+  | { readonly kind: "shell"; readonly options: ShellOptions };
+
 export interface TaskHandle {
   readonly id: string;
   readonly done: Promise<TaskOutput>;
@@ -29,12 +43,12 @@ export interface TaskHandle {
   send(message: string): Promise<TurnResult>;
   complete(): void;
   cancel(reason?: string): void;
-  run(message: string): Promise<TaskOutput>;
+  run(message?: string): Promise<TaskOutput>;
 }
 
 export interface ProgramContext {
   readonly taskId: string;
-  readonly spawnChild: (options: TaskOptions) => TaskHandle;
+  readonly spawnChild: (input: SpawnInput) => TaskHandle;
 }
 
 export class ProgramContextError extends Error {
@@ -106,8 +120,10 @@ export const makeTaskHandle = (id: string, operations: TaskHandleOperations = {}
   cancel(reason?: string) {
     operations.cancel?.(reason);
   },
-  async run(message: string) {
-    await this.send(message);
+  async run(message?: string) {
+    if (message !== undefined) {
+      await this.send(message);
+    }
     this.complete();
     return await this.done;
   },
@@ -118,7 +134,15 @@ export const task = (options: TaskOptions): TaskHandle => {
     return notInProgramContext();
   }
 
-  return currentContext.spawnChild(options);
+  return currentContext.spawnChild({ kind: "agent", agent: options.agent });
+};
+
+export const shell = (options: ShellOptions): TaskHandle => {
+  if (currentContext === undefined) {
+    return notInProgramContext();
+  }
+
+  return currentContext.spawnChild({ kind: "shell", options });
 };
 
 export const codex = (model: string): Agent => ({ provider: "codex", model });
