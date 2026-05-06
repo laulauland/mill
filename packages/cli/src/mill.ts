@@ -8,6 +8,7 @@ import { launchDetachedWorker, makeMillLayer, stopDetachedWorker } from "./cli.p
 import { formatRunStarted, formatStatus, formatTaskSummaryTable } from "./cli.format";
 import { print, printError, printJson, printNdjson } from "./cli.output";
 import { runLiveWatch, runMilestoneWatch } from "./watch-live";
+import { workerMainEffect } from "./cli.worker";
 
 const usage = `mill — supervised task runtime
 
@@ -209,6 +210,10 @@ const mainEffect = (args: ReadonlyArray<string>): Effect.Effect<number, never> =
     const { command, positional, flags } = parseArgs(args);
     const json = flags.json === true;
     const quiet = flags.quiet === true;
+
+    if (command === "__worker") {
+      return yield* workerMainEffect(positional);
+    }
 
     if (flags.help || command === "") {
       yield* print(usage);

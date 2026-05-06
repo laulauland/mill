@@ -1,0 +1,16 @@
+{
+  "name": "@mill/sandbox-e2b",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@mill/sandbox-core": "workspace:*",
+    "effect": "4.0.0-beta.59"
+  }
+}

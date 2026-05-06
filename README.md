@@ -71,12 +71,12 @@ mill run review.ts --sync          # block until terminal, no streaming
 ```ts
 interface Task {
   readonly id: TaskId;
-  readonly done: Promise<TaskOutput>;       // resolves on completed; rejects on failed/cancelled
+  readonly done: Promise<TaskOutput>; // resolves on completed; rejects on failed/cancelled
   send(message: string): Promise<TurnResult>;
-  complete(): void;                          // finish after current turn drains
+  complete(): void; // finish after current turn drains
   cancel(reason?: string): void;
-  run(message?: string): Promise<TaskOutput>;// send + complete + done
-  result(): Promise<TaskResult>;             // tagged terminal result
+  run(message?: string): Promise<TaskOutput>; // send + complete + done
+  result(): Promise<TaskResult>; // tagged terminal result
   snapshot(): Promise<TaskSnapshot>;
   subscribe(): Stream<TaskEvent>;
 }
@@ -91,7 +91,7 @@ Lifecycle status is one of `created | started | completed | failed | cancelled`.
 Steering — call `send()` again while a turn is in flight to queue a follow-up; call `cancel()` to interrupt:
 
 ```ts
-review.send("Also inspect the tests directory.");  // queued
+review.send("Also inspect the tests directory."); // queued
 review.cancel("operator changed direction");
 ```
 
@@ -174,11 +174,11 @@ Authoritative references:
 - [`docs/adr/`](./docs/adr/) — load-bearing decisions.
 - [`docs/rewrite-plan.md`](./docs/rewrite-plan.md) — implementation roadmap.
 
-| Package              | Purpose                                                  |
-| -------------------- | -------------------------------------------------------- |
-| `@mill/core`         | Engine, lifecycle, public `Task` and `Mill` API          |
-| `@mill/cli`          | CLI commands, built-in agent registrations, watch UI     |
-| `@mill/provider-acp` | _Internal_ ACP adapter (not a public mill API)           |
+| Package              | Purpose                                              |
+| -------------------- | ---------------------------------------------------- |
+| `@mill/core`         | Engine, lifecycle, public `Task` and `Mill` API      |
+| `@mill/cli`          | CLI commands, built-in agent registrations, watch UI |
+| `@mill/provider-acp` | _Internal_ ACP adapter (not a public mill API)       |
 
 ## Development
 

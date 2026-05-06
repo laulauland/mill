@@ -14,8 +14,6 @@ import {
 } from "@mill/core";
 import { ProcessLive, SpawnAgentRuntimeLive } from "@mill/provider-acp";
 
-const workerScriptUrl = new URL("./cli.worker.ts", import.meta.url);
-
 export const launchDetachedWorker = ({
   taskId,
   programPath,
@@ -29,7 +27,6 @@ export const launchDetachedWorker = ({
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const workerScriptPath = yield* path.fromFileUrl(workerScriptUrl);
       const taskDirectory = path.join(tasksDirectory, taskId);
       const logDirectory = path.join(taskDirectory, "logs");
       const workerLogPath = path.join(logDirectory, "worker.log");
@@ -38,28 +35,30 @@ export const launchDetachedWorker = ({
 
       yield* fs.writeFileString(workerLogPath, "", { flag: "a" });
 
-      const worker = yield* ChildProcess.make(
-        "sh",
-        [
-          "-c",
-          'exec "$BUN_BIN" run "$WORKER_SCRIPT" "$TASK_ID" "$PROGRAM_PATH" "$TASKS_DIR" >> "$WORKER_LOG" 2>&1',
-        ],
-        {
-          detached: true,
-          stdin: "ignore",
-          stdout: "ignore",
-          stderr: "ignore",
-          extendEnv: true,
-          env: {
-            BUN_BIN: process.execPath,
-            WORKER_SCRIPT: workerScriptPath,
-            TASK_ID: taskId,
-            PROGRAM_PATH: programPath,
-            TASKS_DIR: tasksDirectory,
-            WORKER_LOG: workerLogPath,
-          },
+      const cliScriptPath = process.argv[1];
+      const workerCommand = [
+        'if [ -n "${MILL_CLI_SCRIPT:-}" ] && [ -f "$MILL_CLI_SCRIPT" ]; then',
+        '  exec "$MILL_EXEC_PATH" run "$MILL_CLI_SCRIPT" __worker "$TASK_ID" "$PROGRAM_PATH" "$TASKS_DIR" >> "$WORKER_LOG" 2>&1',
+        "else",
+        '  exec "$MILL_EXEC_PATH" __worker "$TASK_ID" "$PROGRAM_PATH" "$TASKS_DIR" >> "$WORKER_LOG" 2>&1',
+        "fi",
+      ].join("\n");
+
+      const worker = yield* ChildProcess.make("sh", ["-c", workerCommand], {
+        detached: true,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        extendEnv: true,
+        env: {
+          MILL_EXEC_PATH: process.execPath,
+          MILL_CLI_SCRIPT: cliScriptPath,
+          TASK_ID: taskId,
+          PROGRAM_PATH: programPath,
+          TASKS_DIR: tasksDirectory,
+          WORKER_LOG: workerLogPath,
         },
-      );
+      });
       yield* worker.unref;
       yield* fs.writeFileString(path.join(taskDirectory, "worker.pid"), `${worker.pid}\n`);
 

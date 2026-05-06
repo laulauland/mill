@@ -12,6 +12,11 @@
         "@ast-grep/cli": "^0.39.6",
         "@mill/core": "workspace:*",
         "@mill/provider-acp": "workspace:*",
+        "@mill/sandbox-core": "workspace:*",
+        "@mill/sandbox-docker": "workspace:*",
+        "@mill/sandbox-e2b": "workspace:*",
+        "@mill/sandbox-exe-dev": "workspace:*",
+        "@mill/sandbox-vercel": "workspace:*",
         "@types/node": "^25.6.0",
         "@typescript/native-preview": "latest",
         "oxfmt": "^0.26.0",
@@ -20,7 +25,7 @@
     },
     "packages/cli": {
       "name": "@mill/cli",
-      "version": "0.1.7",
+      "version": "0.2.0",
       "bin": {
         "mill": "./src/mill.ts",
       },
@@ -39,6 +44,46 @@
       "dependencies": {
         "@mill/core": "workspace:*",
         "spawn-agent": "0.0.1",
+      },
+    },
+    "packages/sandbox-core": {
+      "name": "@mill/sandbox-core",
+      "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.0.0-beta.59",
+      },
+    },
+    "packages/sandbox-docker": {
+      "name": "@mill/sandbox-docker",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-bun": "4.0.0-beta.59",
+        "@mill/sandbox-core": "workspace:*",
+        "effect": "4.0.0-beta.59",
+      },
+    },
+    "packages/sandbox-e2b": {
+      "name": "@mill/sandbox-e2b",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mill/sandbox-core": "workspace:*",
+        "effect": "4.0.0-beta.59",
+      },
+    },
+    "packages/sandbox-exe-dev": {
+      "name": "@mill/sandbox-exe-dev",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mill/sandbox-core": "workspace:*",
+        "effect": "4.0.0-beta.59",
+      },
+    },
+    "packages/sandbox-vercel": {
+      "name": "@mill/sandbox-vercel",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mill/sandbox-core": "workspace:*",
+        "effect": "4.0.0-beta.59",
       },
     },
   },
@@ -117,6 +162,16 @@
     "@mill/core": ["@mill/core@workspace:packages/core"],
 
     "@mill/provider-acp": ["@mill/provider-acp@workspace:packages/provider-acp"],
+
+    "@mill/sandbox-core": ["@mill/sandbox-core@workspace:packages/sandbox-core"],
+
+    "@mill/sandbox-docker": ["@mill/sandbox-docker@workspace:packages/sandbox-docker"],
+
+    "@mill/sandbox-e2b": ["@mill/sandbox-e2b@workspace:packages/sandbox-e2b"],
+
+    "@mill/sandbox-exe-dev": ["@mill/sandbox-exe-dev@workspace:packages/sandbox-exe-dev"],
+
+    "@mill/sandbox-vercel": ["@mill/sandbox-vercel@workspace:packages/sandbox-vercel"],
 
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-QZHtlVgbAdy2zAqNA9Gu1UpIuI8Xvsd1v8ic6B2pZmeFnFcMWiPLfWXh7TVw4eGEZ/C9TH281KwhVoeQUKbyjw=="],
 

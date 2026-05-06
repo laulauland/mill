@@ -2,6 +2,11 @@
   "extends": "./tsconfig.base.json",
   "files": [],
   "references": [
+    { "path": "./packages/sandbox-core" },
+    { "path": "./packages/sandbox-docker" },
+    { "path": "./packages/sandbox-vercel" },
+    { "path": "./packages/sandbox-exe-dev" },
+    { "path": "./packages/sandbox-e2b" },
     { "path": "./packages/core" },
     { "path": "./packages/cli" },
     { "path": "./packages/provider-acp" }
