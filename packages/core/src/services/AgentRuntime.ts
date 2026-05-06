@@ -1,4 +1,5 @@
 import { Context, Data, Effect, Layer, Queue } from "effect";
+import type { SandboxFactory } from "@mill/sandbox-core";
 import type { Agent } from "../program.api";
 import type { TaskEvent } from "../schemas/task-event";
 
@@ -16,6 +17,7 @@ export type TurnPrompt = {
 export type AgentRuntimeInput = {
   readonly taskId: string;
   readonly agent: Agent;
+  readonly sandbox?: SandboxFactory;
   readonly userInbox: Queue.Queue<TurnPrompt>;
   readonly completionSignal: Effect.Effect<void>;
 };

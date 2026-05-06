@@ -148,6 +148,7 @@ export const makeProgramHost = Effect.gen(function* () {
               {
                 taskId: childId,
                 agent: input.agent,
+                sandbox: input.sandbox,
                 userInbox: child.userInbox,
                 completionSignal: child.completionSignal,
               },

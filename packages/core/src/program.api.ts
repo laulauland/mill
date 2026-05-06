@@ -1,5 +1,6 @@
 // @mill/core/program — Program authoring API
 import { Stream } from "effect";
+import type { SandboxFactory } from "@mill/sandbox-core";
 import type { TaskEvent } from "./schemas/task-event";
 import type { TaskOutput, TaskResult, TaskSnapshot, TurnResult } from "./schemas/task-state";
 export type {
@@ -19,6 +20,7 @@ export interface Agent {
 
 export interface TaskOptions {
   readonly agent: Agent;
+  readonly sandbox?: SandboxFactory;
 }
 
 export interface ShellOptions {
@@ -31,7 +33,7 @@ export interface ShellOptions {
 }
 
 export type SpawnInput =
-  | { readonly kind: "agent"; readonly agent: Agent }
+  | { readonly kind: "agent"; readonly agent: Agent; readonly sandbox?: SandboxFactory }
   | { readonly kind: "shell"; readonly options: ShellOptions };
 
 export interface TaskHandle {
@@ -134,7 +136,11 @@ export const task = (options: TaskOptions): TaskHandle => {
     return notInProgramContext();
   }
 
-  return currentContext.spawnChild({ kind: "agent", agent: options.agent });
+  return currentContext.spawnChild({
+    kind: "agent",
+    agent: options.agent,
+    sandbox: options.sandbox,
+  });
 };
 
 export const shell = (options: ShellOptions): TaskHandle => {

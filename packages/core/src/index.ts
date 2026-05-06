@@ -1,5 +1,7 @@
 // @mill/core — Effect-native supervised task runtime
 
+export type { SandboxFactory } from "@mill/sandbox-core";
+
 // Schemas
 export * from "./schemas/task-command";
 export * from "./schemas/task-event";
